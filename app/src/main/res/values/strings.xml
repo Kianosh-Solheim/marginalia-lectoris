@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Marginalia Lectoris</string>
+    <string name="widget_pinned_books_desc">Pin your favorite books to your Android home screen or reading tablet. Resize freely and tap any book cover to jump straight back to the page where you last left off.</string>
+    <string name="widget_continue_reading_desc">Resume your most recent unfinished book or article at the exact citable paragraph, stable location, or EPUB CFI. Adapts across 5 phone and reading tablet size tiers.</string>
+</resources>

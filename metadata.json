@@ -1,0 +1,6 @@
+{
+  "name": "Marginalia Lectoris",
+  "description": "Clean e-reader for EPUB and PDF files with PKM note-taking, highlighting, and Obsidian-compatible Markdown & MOC exports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

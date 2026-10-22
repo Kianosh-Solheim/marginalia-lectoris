@@ -1,0 +1,558 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/continue_widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_continue_widget"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <!-- Header Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingBottom="4dp">
+
+        <TextView
+            android:id="@+id/continue_header_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:fontFamily="monospace"
+            android:letterSpacing="0.06"
+            android:text="CONTINUE READING"
+            android:textColor="#111111"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/continue_filter_chip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_continue_tag_outline"
+            android:fontFamily="monospace"
+            android:paddingStart="6dp"
+            android:paddingTop="1.5dp"
+            android:paddingEnd="6dp"
+            android:paddingBottom="1.5dp"
+            android:text="FILTER: ALL"
+            android:textColor="#111111"
+            android:textSize="8.5sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Editorial Rule -->
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="1.5dp"
+        android:background="#111111"
+        android:contentDescription="@null" />
+
+    <!-- Empty State -->
+    <LinearLayout
+        android:id="@+id/continue_empty_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="10dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/continue_empty_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="serif"
+            android:text="Nothing in progress yet"
+            android:textColor="#111111"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/continue_empty_action"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/bg_continue_tag_outline"
+            android:fontFamily="monospace"
+            android:paddingStart="10dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="4dp"
+            android:text="OPEN LIBRARY →"
+            android:textColor="#111111"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Main Content Container -->
+    <LinearLayout
+        android:id="@+id/continue_primary_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="6dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:id="@+id/continue_featured_row"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1.25"
+            android:orientation="vertical">
+
+            <!-- Featured Item 1 -->
+            <LinearLayout
+                android:id="@+id/continue_primary_card"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_continue_tag_outline"
+                android:orientation="vertical"
+                android:padding="6dp">
+
+                <!-- Top Row: Cover towards top + Title, Author, Excerpt beside it -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:baselineAligned="false"
+                    android:gravity="top"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/continue_primary_cover"
+                        android:layout_width="wrap_content"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="top"
+                        android:layout_marginBottom="2dp"
+                        android:adjustViewBounds="true"
+                        android:background="@drawable/bg_continue_inner_box"
+                        android:contentDescription="Primary Cover"
+                        android:maxWidth="68dp"
+                        android:padding="1dp"
+                        android:scaleType="fitCenter" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:gravity="top"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/continue_primary_title"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:ellipsize="end"
+                            android:fontFamily="serif"
+                            android:maxLines="2"
+                            android:text="Featured Item 1"
+                            android:textColor="#111111"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/continue_primary_author"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="1dp"
+                            android:ellipsize="end"
+                            android:fontFamily="serif"
+                            android:maxLines="1"
+                            android:singleLine="true"
+                            android:text="Author Name"
+                            android:textColor="#333333"
+                            android:textSize="9.5sp"
+                            android:textStyle="italic" />
+
+                        <TextView
+                            android:id="@+id/continue_primary_snippet"
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_marginTop="2dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:fontFamily="serif"
+                            android:lineSpacingMultiplier="1.08"
+                            android:maxLines="2"
+                            android:text="…Reading position excerpt…"
+                            android:textColor="#27272A"
+                            android:textSize="9sp" />
+
+                        <!-- Hidden compat views -->
+                        <TextView
+                            android:id="@+id/continue_primary_badge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_continue_tag_outline"
+                            android:textColor="#111111"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/continue_primary_locus"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/continue_primary_cta"
+                            android:layout_width="wrap_content"
+                            android:layout_height="40dp"
+                            android:visibility="gone" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Bottom Row: Progress bar anchored at bottom of card -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/continue_primary_progress_img"
+                        android:layout_width="0dp"
+                        android:layout_height="6dp"
+                        android:layout_weight="1"
+                        android:contentDescription="@null"
+                        android:scaleType="fitXY" />
+
+                    <TextView
+                        android:id="@+id/continue_primary_percent"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="monospace"
+                        android:text="46%"
+                        android:textColor="#111111"
+                        android:textSize="8.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/continue_primary_time_left"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:ellipsize="end"
+                        android:fontFamily="monospace"
+                        android:maxLines="1"
+                        android:singleLine="true"
+                        android:text="42 min left"
+                        android:textColor="#222222"
+                        android:textSize="8.5sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <ImageView
+                android:id="@+id/continue_secondary_divider"
+                android:layout_width="match_parent"
+                android:layout_height="4dp"
+                android:contentDescription="@null"
+                android:visibility="gone" />
+
+            <!-- Featured Item 2 (reflowed vertically if space/data available) -->
+            <LinearLayout
+                android:id="@+id/continue_secondary_card"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_continue_tag_outline"
+                android:orientation="vertical"
+                android:padding="6dp"
+                android:visibility="gone">
+
+                <!-- Top Row: Cover towards top + Title, Author, Excerpt beside it -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:baselineAligned="false"
+                    android:gravity="top"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/continue_secondary_cover"
+                        android:layout_width="wrap_content"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="top"
+                        android:layout_marginBottom="2dp"
+                        android:adjustViewBounds="true"
+                        android:background="@drawable/bg_continue_inner_box"
+                        android:contentDescription="Secondary Cover"
+                        android:maxWidth="68dp"
+                        android:padding="1dp"
+                        android:scaleType="fitCenter" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:gravity="top"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/continue_secondary_title"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:ellipsize="end"
+                            android:fontFamily="serif"
+                            android:maxLines="2"
+                            android:text="Featured Item 2"
+                            android:textColor="#111111"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/continue_secondary_author"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="1dp"
+                            android:ellipsize="end"
+                            android:fontFamily="serif"
+                            android:maxLines="1"
+                            android:singleLine="true"
+                            android:text="Author Name"
+                            android:textColor="#333333"
+                            android:textSize="9.5sp"
+                            android:textStyle="italic" />
+
+                        <TextView
+                            android:id="@+id/continue_secondary_snippet"
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_marginTop="2dp"
+                            android:layout_weight="1"
+                            android:ellipsize="end"
+                            android:fontFamily="serif"
+                            android:lineSpacingMultiplier="1.08"
+                            android:maxLines="2"
+                            android:text="…Reading position excerpt…"
+                            android:textColor="#27272A"
+                            android:textSize="9sp" />
+
+                        <TextView
+                            android:id="@+id/continue_secondary_badge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_continue_tag_outline"
+                            android:textColor="#111111"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/continue_secondary_locus"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/continue_secondary_cta"
+                            android:layout_width="wrap_content"
+                            android:layout_height="40dp"
+                            android:visibility="gone" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Bottom Row: Progress bar anchored at bottom of card -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/continue_secondary_progress_img"
+                        android:layout_width="0dp"
+                        android:layout_height="6dp"
+                        android:layout_weight="1"
+                        android:contentDescription="@null"
+                        android:scaleType="fitXY" />
+
+                    <TextView
+                        android:id="@+id/continue_secondary_percent"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="monospace"
+                        android:text="54%"
+                        android:textColor="#111111"
+                        android:textSize="8.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/continue_secondary_time_left"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:ellipsize="end"
+                        android:fontFamily="monospace"
+                        android:maxLines="1"
+                        android:singleLine="true"
+                        android:text="8 min left"
+                        android:textColor="#222222"
+                        android:textSize="8.5sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Row 1: RECENT BOOKS (Left-aligned cover shelf) -->
+        <LinearLayout
+            android:id="@+id/continue_shelf_books_section"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="6dp"
+            android:layout_weight="0.9"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/continue_shelf_books_header"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="monospace"
+                    android:letterSpacing="0.06"
+                    android:text="RECENT BOOKS"
+                    android:textColor="#111111"
+                    android:textSize="8.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/continue_shelf_books_prev"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_continue_tag_outline"
+                    android:fontFamily="monospace"
+                    android:paddingStart="5dp"
+                    android:paddingTop="1dp"
+                    android:paddingEnd="5dp"
+                    android:paddingBottom="1dp"
+                    android:text="‹"
+                    android:textColor="#111111"
+                    android:textSize="9.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/continue_shelf_books_next"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_continue_tag_outline"
+                    android:fontFamily="monospace"
+                    android:paddingStart="5dp"
+                    android:paddingTop="1dp"
+                    android:paddingEnd="5dp"
+                    android:paddingBottom="1dp"
+                    android:text="›"
+                    android:textColor="#111111"
+                    android:textSize="9.5sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/continue_shelf_books_container"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="3dp"
+                android:layout_weight="1"
+                android:gravity="start|center_vertical"
+                android:orientation="horizontal" />
+        </LinearLayout>
+
+        <!-- Row 2: RECENT ARTICLES (Left-aligned cover/thumbnail shelf) -->
+        <LinearLayout
+            android:id="@+id/continue_shelf_articles_section"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="6dp"
+            android:layout_weight="0.9"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/continue_shelf_articles_header"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="monospace"
+                    android:letterSpacing="0.06"
+                    android:text="RECENT ARTICLES"
+                    android:textColor="#111111"
+                    android:textSize="8.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/continue_shelf_articles_prev"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_continue_tag_outline"
+                    android:fontFamily="monospace"
+                    android:paddingStart="5dp"
+                    android:paddingTop="1dp"
+                    android:paddingEnd="5dp"
+                    android:paddingBottom="1dp"
+                    android:text="‹"
+                    android:textColor="#111111"
+                    android:textSize="9.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/continue_shelf_articles_next"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_continue_tag_outline"
+                    android:fontFamily="monospace"
+                    android:paddingStart="5dp"
+                    android:paddingTop="1dp"
+                    android:paddingEnd="5dp"
+                    android:paddingBottom="1dp"
+                    android:text="›"
+                    android:textColor="#111111"
+                    android:textSize="9.5sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/continue_shelf_articles_container"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="3dp"
+                android:layout_weight="1"
+                android:gravity="start|center_vertical"
+                android:orientation="horizontal" />
+        </LinearLayout>
+
+        <!-- Hidden legacy recents strip -->
+        <LinearLayout
+            android:id="@+id/continue_recents_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:visibility="gone">
+            <TextView android:id="@+id/continue_recent_1" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            <TextView android:id="@+id/continue_recent_2" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

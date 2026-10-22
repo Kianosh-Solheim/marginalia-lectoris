@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_book_item_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_horizontal"
+    android:orientation="vertical"
+    android:padding="3dp">
+
+    <!-- Book Cover Container preserving native cover aspect ratio -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_widget_book_card">
+
+        <ImageView
+            android:id="@+id/widget_book_cover_image"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:adjustViewBounds="true"
+            android:contentDescription="Book Cover"
+            android:maxHeight="200dp"
+            android:scaleType="fitCenter" />
+
+        <!-- Page badge at bottom right of cover -->
+        <TextView
+            android:id="@+id/widget_book_page_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="4dp"
+            android:background="@drawable/bg_widget_pill_button"
+            android:paddingLeft="6dp"
+            android:paddingTop="2dp"
+            android:paddingRight="6dp"
+            android:paddingBottom="2dp"
+            android:text="p. 1/10"
+            android:textColor="#FFFFFFFF"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <!-- Book Title -->
+    <TextView
+        android:id="@+id/widget_book_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:gravity="center_horizontal"
+        android:maxLines="1"
+        android:text="Book Title"
+        android:textColor="#FF18181B"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <!-- Reading Progress Bar -->
+    <ProgressBar
+        android:id="@+id/widget_book_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:layout_marginTop="2dp"
+        android:max="100"
+        android:progress="25" />
+
+</LinearLayout>
