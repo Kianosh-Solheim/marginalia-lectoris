@@ -46,11 +46,17 @@ jobs:
           echo "name=1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Restore the release key
+        id: key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          test -n "$KEYSTORE_BASE64" || { echo "::error::The KEYSTORE_BASE64 secret is missing"; exit 1; }
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::No KEYSTORE_BASE64 secret yet: building an unsigned test APK, no release."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build the release APK
         env:
@@ -62,11 +68,20 @@ jobs:
         run: gradle --no-configuration-cache :app:assembleRelease
 
       - name: Name the APK
+        if: steps.key.outputs.signed == 'true'
         run: |
           apk=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
           cp "$apk" "MarginaliaLectoris-${{ steps.ver.outputs.name }}.apk"
 
+      - name: Keep the unsigned test APK
+        if: steps.key.outputs.signed != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-test-apk
+          path: app/build/outputs/apk/release/*.apk
+
       - name: Publish the release
+        if: steps.key.outputs.signed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
