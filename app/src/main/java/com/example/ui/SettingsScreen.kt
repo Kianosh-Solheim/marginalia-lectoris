@@ -219,6 +219,8 @@ fun SettingsScreen(
 
             BackupSettingsSection()
 
+            FolderSyncSettingsSection()
+
             WebServerSettingsSection()
 
             EinkSettingsSection()

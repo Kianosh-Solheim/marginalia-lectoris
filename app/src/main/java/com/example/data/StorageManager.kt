@@ -236,7 +236,8 @@ object StorageManager {
             val cleanName = sanitizeName(mocTitle)
             val filename = if (cleanName.endsWith(".md", ignoreCase = true)) cleanName else "$cleanName.md"
             val file = File(folder, filename)
-            file.writeText(markdownContent, Charsets.UTF_8)
+            // Keeps a "# My Notes" section written by hand at the end of the overview.
+            com.example.reader.FolderSync.writeKeepingUserSection(file, markdownContent)
             file
         } catch (e: Exception) {
             e.printStackTrace()

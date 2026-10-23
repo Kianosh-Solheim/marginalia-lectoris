@@ -53,6 +53,8 @@ object BibStore {
     /** Records computed on the fly (chapters of edited volumes); never written to disk. */
     private val transient = HashMap<Long, BibRecord>()
     @Volatile private var loaded = false
+    /** Bumped on every saved change (the folder sync listens to it). */
+    val version = kotlinx.coroutines.flow.MutableStateFlow(0)
 
     fun init(context: Context) {
         if (appContext == null) appContext = context.applicationContext
@@ -97,6 +99,7 @@ object BibStore {
         val tmp = File(f.parentFile, f.name + ".tmp")
         tmp.writeText(root.toString(2))
         if (!tmp.renameTo(f)) { f.writeText(root.toString(2)); tmp.delete() }
+        version.value = version.value + 1
     }
 
     fun set(documentId: Long, field: BibField, value: String) = put(documentId, get(documentId).with(field, value))

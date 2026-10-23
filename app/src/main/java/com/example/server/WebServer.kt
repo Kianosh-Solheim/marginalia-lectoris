@@ -224,6 +224,7 @@ class WebServerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        com.example.reader.FolderSync.start(applicationContext)
         if (intent?.action == ACTION_STOP) {
             shutdown()
             return START_NOT_STICKY

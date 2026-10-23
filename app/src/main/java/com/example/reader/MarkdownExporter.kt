@@ -575,6 +575,7 @@ object MarkdownExporter {
         val sb = StringBuilder()
         sb.appendLine("---")
         sb.appendLine("title: $cleanNoteTitle")
+        sb.appendLine("${FolderSync.NOTE_KEY}: ${highlight.id}")
         sb.appendLine("From Book: \"[[$exportedSourceFilename]]\"")
         if (authorsYaml.isNotBlank()) {
             sb.appendLine(authorsYaml)
@@ -693,11 +694,16 @@ object MarkdownExporter {
         sb.appendLine("From: \"[[$exportedSourceFilename]]\"")
         sb.appendLine("Photo: \"[[$exportedCoverFilename]]\"")
         val bib = BibStore.get(document.id)
+        // Everything below can be edited here; the app reads the changes back (see FolderSync).
+        sb.appendLine("book-title: \"${document.title.replace("\"", "'")}\"")
+        sb.appendLine("category: ${if (document.category.equals("ARTICLE", true)) "article" else "book"}")
+        if (bib.entryType.isNotBlank()) sb.appendLine("entry-type: ${bib.entryType}")
         sb.appendLine("citekey: ${Citations.citeKey(document, bib)}")
-        listOf(BibField.YEAR, BibField.DOI, BibField.ISBN, BibField.PUBLISHER, BibField.JOURNAL).forEach { f ->
-            val v = if (f == BibField.YEAR) Citations.year(document, bib).takeIf { it != "n.d." }.orEmpty() else bib[f]
-            if (v.isNotBlank()) sb.appendLine("${f.bibtexKey}: \"${v.replace("\"", "'")}\"")
+        BibField.entries.filter { it.bibtexKey.isNotBlank() && it != BibField.TITLE }.forEach { f ->
+            val v = FolderSync.OverviewFields.frontMatterValue(f, document, bib)
+            if (v.isNotBlank()) sb.appendLine("${f.bibtexKey}: \"$v\"")
         }
+        sb.appendLine("${FolderSync.DOC_KEY}: ${document.id}")
         sb.appendLine("---")
         sb.appendLine()
         sb.appendLine("# Reference")

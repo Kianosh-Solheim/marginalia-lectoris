@@ -56,12 +56,19 @@ class MainActivity : FragmentActivity() {
     private val _incomingSharedText = MutableStateFlow<String?>(null)
     val incomingSharedText = _incomingSharedText.asStateFlow()
 
+    override fun onResume() {
+        super.onResume()
+        com.example.reader.FolderSync.scanSoon()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         com.example.reader.BibStore.init(applicationContext)
         com.example.reader.EditedVolumes.init(applicationContext)
         com.example.reader.FolderBooks.init(applicationContext)
         com.example.server.WebServer.loadPrefs(applicationContext)
+        // Book folders ↔ app: the Markdown, RIS and BibTeX files in each folder are kept in step.
+        com.example.reader.FolderSync.start(applicationContext)
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         if (savedInstanceState == null) {
             handleIncomingIntent(intent)

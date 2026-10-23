@@ -183,6 +183,11 @@ class LibraryOps(context: Context) {
                     }
                 }
                 // Delete the old folder so scanAndSyncLibrary never sees an orphan folder
+                // Notes, overview, citation records and anything else in the folder move along too.
+                oldFolder.listFiles()?.forEach { f ->
+                    val t = File(newFolder, f.name)
+                    if (!t.exists()) runCatching { if (f.isDirectory) f.copyRecursively(t) else f.copyTo(t) }
+                }
                 oldFolder.deleteRecursively()
             } catch (_: Throwable) {}
         }
