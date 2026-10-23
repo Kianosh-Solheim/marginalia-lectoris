@@ -1297,7 +1297,6 @@ private fun InteractiveNotesMocPreviewDialogBody(
                                         val highlightLink = MarkdownExporter.formatSourceHighlightWikiLink(
                                             highlight = highlight,
                                             document = document,
-                                            displayText = "Link to highlight",
                                             wikiLinkStyle = settings.wikiLinkStyle
                                         )
                                         val bulletLine = buildString {

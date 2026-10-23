@@ -397,10 +397,11 @@ object MarkdownExporter {
     fun formatSourceHighlightWikiLink(
         highlight: HighlightEntity,
         document: DocumentEntity,
-        displayText: String = "Link to highlight",
+        displayText: String? = null,
         wikiLinkStyle: Boolean = true
     ): String {
         val sourceFilename = formatExportedSourceFilename(document)
+        val shownText = displayText ?: "$sourceFilename, ${formatHighlightLinkLocator(highlight, document)}".trimEnd(',', ' ')
         val fileType = document.fileType.uppercase(Locale.ROOT)
         val isPdf = fileType == "PDF" || sourceFilename.endsWith(".PDF", ignoreCase = true)
         val isHtml = fileType == "HTML" || fileType == "HTM" || fileType == "XHTML" ||
@@ -413,7 +414,9 @@ object MarkdownExporter {
                     primaryPdfPage = highlight.pageNumber,
                     rawPrintedPageLabel = highlight.printedPageLabel
                 )
-                "#page=${pdfRangeStr.substringBefore("–").substringBefore("-").ifBlank { highlight.pageNumber.toString() }}"
+                val sel = PdfSelections.get(highlight, document)
+                "#page=${pdfRangeStr.substringBefore("–").substringBefore("-").ifBlank { highlight.pageNumber.toString() }}" +
+                    (if (!sel.isNullOrBlank()) "&selection=$sel" else "")
             }
             isHtml -> {
                 val snippet = highlight.highlightedText.trim().take(64).replace(" ", "%20")
@@ -428,10 +431,38 @@ object MarkdownExporter {
         }
         val target = "$sourceFilename$anchorFragment"
         return if (wikiLinkStyle) {
-            "[[$target|$displayText]]"
+            "[[$target|$shownText]]"
         } else {
-            "[$displayText]($target)"
+            "[$shownText]($target)"
         }
+    }
+
+    private fun cleanPageLabel(raw: String): String = raw.trim()
+        .removePrefix("pp.").removePrefix("p.").removePrefix("page equivalent").trim()
+        .removePrefix("pp.").removePrefix("p.").trim()
+
+    private fun pageWord(label: String, one: String, many: String) =
+        if (label.contains("–") || label.contains("-")) "$many $label" else "$one $label"
+
+    /**
+     * The place a highlight link points to, in words: the printed page when the source has one,
+     * otherwise the PDF page (or the EPUB / HTML / TXT location).
+     * - `printed page 6`, `printed pages 6–7`, `PDF page 9`, `EPUB loc. 238`
+     */
+    fun formatHighlightLinkLocator(highlight: HighlightEntity, document: DocumentEntity): String {
+        val fileType = document.fileType.uppercase(Locale.ROOT)
+        if (fileType == "PDF" || document.filePath.endsWith(".pdf", ignoreCase = true)) {
+            val (pdfRange, printed) = PdfToEbookParser.parseStoredPageLabels(highlight.pageNumber, highlight.printedPageLabel)
+            val p = cleanPageLabel(printed)
+            if (p.isNotEmpty()) return pageWord(p, "printed page", "printed pages")
+            val r = pdfRange.ifBlank { highlight.pageNumber.toString() }
+            return pageWord(r, "PDF page", "PDF pages")
+        }
+        if (fileType == "HTML" || fileType == "HTM" || fileType == "XHTML") return if (highlight.pageNumber > 0) "HTML loc. ${highlight.pageNumber}" else ""
+        if (fileType == "TXT") return if (highlight.pageNumber > 0) "TXT loc. ${highlight.pageNumber}" else ""
+        val p = cleanPageLabel(highlight.pageEquivalent)
+        if (p.isNotEmpty()) return pageWord(p, "printed page", "printed pages")
+        return formatLocusText(highlight, document).substringAfterLast(", ").takeIf { it.startsWith("EPUB") } ?: ""
     }
 
     /**
@@ -463,7 +494,6 @@ object MarkdownExporter {
         val highlightLink = formatSourceHighlightWikiLink(
             highlight = highlight,
             document = document,
-            displayText = "Link to highlight",
             wikiLinkStyle = settings.wikiLinkStyle
         )
 
@@ -750,7 +780,6 @@ object MarkdownExporter {
                     val highlightLink = formatSourceHighlightWikiLink(
                         highlight = h,
                         document = document,
-                        displayText = "Link to highlight",
                         wikiLinkStyle = settings.wikiLinkStyle
                     )
                     val locusSegment = if (locus.isNotBlank()) " - $locus" else ""

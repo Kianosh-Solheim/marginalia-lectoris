@@ -114,12 +114,13 @@ object FolderSync {
         synchronized(this) { if (started) return; started = true }
         app = context.applicationContext
         BibStore.init(app)
+        PdfSelections.init(app)
         scope.launch {
             lock.withLock { loadState() }
             val db = AppDatabase.getInstance(app)
             // App → files: any change to a book, its notes or its bibliographic record.
             launch {
-                combine(db.documentDao().getAllDocuments(), db.highlightDao().getAllHighlights(), BibStore.version) { d, h, _ -> d to h }
+                combine(db.documentDao().getAllDocuments(), db.highlightDao().getAllHighlights(), BibStore.version, PdfSelections.version) { d, h, _, _ -> d to h }
                     .debounce(1200)
                     .collect { (docs, hls) -> runCatching { lock.withLock { syncAll(docs, hls, onlyChangedFiles = false) } }.onFailure { Log.w(TAG, "Sync failed", it) } }
             }
@@ -165,6 +166,7 @@ object FolderSync {
             val dir = folderOf(d) ?: continue
             val notes = byDoc[d.id].orEmpty().sortedBy { it.pageNumber }
             val st = state.getOrPut(d.id) { DocState() }
+            PdfSelections.request(app, d, notes)
             val sig = signature(d, notes, settings)
             // Page turns change the database often; files are only looked at when something that
             // goes into them changed, or on a folder scan.
@@ -198,7 +200,9 @@ object FolderSync {
             .append(d.category).append('|').append(d.filePath).append('|').append(d.coverUri).append('|')
         sb.append(rec.entryType).append(rec.fields.toSortedMap().toString()).append('|')
         notes.forEach { h -> sb.append(h.id).append(h.title).append(h.highlightedText).append(h.userNotes).append(h.tags).append(h.pageNumber)
-            .append(h.printedPageLabel).append(h.chapterTitle).append(h.paragraphCitation).append(h.epubCfi).append(';') }
+            .append(h.printedPageLabel).append(h.chapterTitle).append(h.paragraphCitation).append(h.epubCfi)
+            .append(PdfSelections.get(h, d).orEmpty()).append(';') }
+        sb.append("links2|")
         sb.append(s.defaultTags).append(s.mocTitleFormat).append(s.wikiLinkStyle).append(s.customFrontmatterYaml).append(Citations.defaultStyle().name)
         return sha(sb.toString())
     }
