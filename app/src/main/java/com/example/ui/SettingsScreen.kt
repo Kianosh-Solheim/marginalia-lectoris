@@ -1247,6 +1247,8 @@ fun SettingsScreen(
                 }
             }
 
+            UninstallSettingsSection()
+
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
