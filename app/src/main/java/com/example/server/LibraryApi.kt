@@ -34,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap
 class LibraryApi(private val context: Context, private val pinMatches: (String) -> Boolean) {
     private val ops = LibraryOps(context)
     private val db = AppDatabase.getInstance(context)
+    private val settingsApi = SettingsApi(context)
     private val failures = ConcurrentHashMap<String, Pair<Int, Long>>()
     private val seen = ConcurrentHashMap<String, Long>()
     private val renderers = LinkedHashMap<Long, PdfDocumentRenderer>()
@@ -99,6 +100,10 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 return HttpResponse.json(JSONObject().put("documents", JSONArray(t.documents)).put("notes", JSONArray(t.notes)).toString())
             }
             s == listOf("upload") && m == "POST" -> return upload(req)
+            s == listOf("settings") && m == "GET" -> return HttpResponse.json(settingsApi.get().toString()).header("Cache-Control", "no-store")
+            s == listOf("settings") && (m == "PUT" || m == "PATCH") -> return HttpResponse.json(settingsApi.put(JSONObject(req.bodyText())).toString())
+            s == listOf("settings", "ai-key") && m == "POST" -> return HttpResponse.json(settingsApi.setKey(JSONObject(req.bodyText())).toString())
+            s == listOf("settings", "check-folders") && m == "POST" -> return HttpResponse.json(settingsApi.checkFolders().toString())
             s == listOf("reader-settings") && m == "GET" -> return HttpResponse.json(readerSettingsJson().toString()).header("Cache-Control", "no-store")
             s == listOf("reader-settings") && (m == "PUT" || m == "PATCH") -> {
                 saveReaderSettings(JSONObject(req.bodyText()))

@@ -377,3 +377,37 @@ input.tagtype { flex: 1 1 140px; min-width: 120px; border: 0 !important; padding
 
 .vswitch .vi svg, .vchip .vi svg { display: block; }
 .vchip { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- settings */
+.settings { max-width: 1080px; }
+.set-head h1 { font-family: var(--serif); font-size: 28px; margin: 6px 0 2px; }
+.set-head p { margin: 0 0 18px; }
+.set-layout { display: grid; grid-template-columns: 190px 1fr; gap: 28px; align-items: start; }
+.set-nav { position: sticky; top: 86px; display: flex; flex-direction: column; border: 1px solid var(--ink); }
+.set-nav a { padding: 8px 12px; color: var(--ink); text-decoration: none; font-family: var(--mono); font-size: 12px; font-weight: 700; border-bottom: 1px solid var(--rule); }
+.set-nav a:last-child { border-bottom: 0; }
+.set-nav a:hover { background: var(--wash); }
+.set-body { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.set-group { border: 1.5px solid var(--ink); padding: 4px 18px 10px; scroll-margin-top: 86px; }
+.set-group h2 { font-family: var(--serif); font-size: 20px; margin: 12px 0 6px; }
+.set-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 1.4fr); gap: 16px; padding: 11px 0; border-top: 1px solid var(--rule); align-items: center; }
+.set-row.wide { grid-template-columns: 1fr; gap: 6px; }
+.set-label > div:first-child { font-weight: 600; }
+.set-help { font-size: 12px; margin-top: 2px; }
+.set-control select { max-width: 280px; }
+.set-num { width: 96px !important; }
+.set-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-family: var(--mono); font-size: 12px; font-weight: 700; }
+.set-switch input { width: 18px; height: 18px; accent-color: #000; }
+.set-keys { border-top: 1px solid var(--rule); padding: 11px 0; display: flex; flex-direction: column; gap: 8px; }
+.set-key { display: grid; grid-template-columns: 200px 1fr auto auto; gap: 8px; align-items: center; }
+.set-key-name { font-weight: 600; font-size: 14px; }
+.set-key-state { font-size: 11px; color: var(--soft); font-weight: 400; white-space: pre; }
+.set-key-state.ok { color: var(--ink); }
+@media (max-width: 760px) {
+  .set-layout { grid-template-columns: 1fr; }
+  .set-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .set-nav a { border-bottom: 0; border-right: 1px solid var(--rule); }
+  .set-row { grid-template-columns: 1fr; gap: 6px; }
+  .set-key { grid-template-columns: 1fr auto auto; }
+  .set-key-name { grid-column: 1 / -1; }
+}

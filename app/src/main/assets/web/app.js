@@ -168,6 +168,7 @@ function route() {
   if (parts[0] === 'book' && parts[1]) return showBook(+parts[1]);
   if (parts[0] === 'read' && parts[1]) return openReader(+parts[1], params);
   if (parts[0] === 'notes') { state.tab = 'notes'; return showNotes(); }
+  if (parts[0] === 'settings') { state.tab = 'settings'; return showSettings(); }
   state.tab = ['books', 'articles'].includes(parts[0]) ? parts[0] : 'all';
   return showLibrary();
 }
@@ -202,7 +203,7 @@ function showLogin() {
 // ------------------------------------------------------------------ header
 
 function header() {
-  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes']];
+  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['settings', 'Settings', '#/settings']];
   const search = h('input', { type: 'search', class: 'search', placeholder: 'Search title, author, tag…', value: state.query });
   search.addEventListener('input', () => {
     state.query = search.value;
@@ -220,6 +221,112 @@ function header() {
     file,
     h('button', { class: 'btn quiet', title: 'Sign this browser out', onclick: async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); } }, 'Sign out')
   ));
+}
+
+// ------------------------------------------------------------------ settings
+
+async function showSettings() {
+  const app = clear(document.getElementById('app'));
+  app.appendChild(header());
+  const main = h('main', { class: 'settings' }, h('div', { class: 'loading', style: { position: 'static', height: '200px' } }, h('div', { class: 'spin' })));
+  app.appendChild(main);
+  let data;
+  try { data = await api('settings'); } catch (e) { fail(e); return; }
+  renderSettings(main, data);
+}
+
+function settingsSlug(name) { return 'set-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-'); }
+
+function renderSettings(main, data) {
+  const y = window.scrollY;
+  clear(main);
+  const save = async patch => {
+    try { const d = await api('settings', { method: 'PUT', json: patch }); toast('Saved on the tablet', 1400); return d; }
+    catch (e) { fail(e); return null; }
+  };
+  const nav = h('nav', { class: 'set-nav' }, data.groups.map(g =>
+    h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById(settingsSlug(g.name)).scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, g.name)),
+    h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-storage').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Storage & backup'));
+  const body = h('div', { class: 'set-body' });
+  data.groups.forEach(g => {
+    const sec = h('section', { class: 'set-group', id: settingsSlug(g.name) }, h('h2', null, g.name));
+    if (g.name === 'AI') sec.appendChild(aiKeys(data, main));
+    g.fields.forEach(f => sec.appendChild(settingRow(f, data, main, save)));
+    body.appendChild(sec);
+  });
+  body.appendChild(storageSection(data.info));
+  main.append(h('div', { class: 'set-head' }, h('h1', null, 'Settings'),
+    h('p', { class: 'muted' }, 'The same settings as on the tablet. Changes are saved there straight away.')),
+    h('div', { class: 'set-layout' }, nav, body));
+  window.scrollTo(0, y);
+}
+
+function settingRow(f, data, main, save) {
+  const after = d => { if (d) { data.groups = d.groups; data.keys = d.keys; } };
+  let control;
+  if (f.type === 'bool') {
+    const cb = h('input', { type: 'checkbox' }); cb.checked = !!f.value;
+    cb.addEventListener('change', async () => { const d = await save({ [f.key]: cb.checked }); if (d) renderSettings(main, d); });
+    control = h('label', { class: 'set-switch' }, cb, h('span', null, f.value ? 'On' : 'Off'));
+    cb.addEventListener('change', () => { control.querySelector('span').textContent = cb.checked ? 'On' : 'Off'; });
+  } else if (f.type === 'choice') {
+    control = f.options.length <= 4
+      ? h('div', { class: 'row' }, f.options.map(o => h('button', {
+          class: 'chip' + (String(f.value) === o.value ? ' on' : ''),
+          onclick: async () => { const d = await save({ [f.key]: o.value }); if (d) renderSettings(main, d); }
+        }, o.label)))
+      : (() => {
+          const sel = h('select', null, f.options.map(o => { const op = h('option', { value: o.value }, o.label); if (String(f.value) === o.value) op.selected = true; return op; }));
+          sel.addEventListener('change', async () => { const d = await save({ [f.key]: sel.value }); if (d) renderSettings(main, d); });
+          return sel;
+        })();
+  } else if (f.type === 'number') {
+    const inp = h('input', { type: 'number', min: f.min, max: f.max, step: f.step, value: f.value, class: 'set-num' });
+    inp.addEventListener('change', async () => { const d = await save({ [f.key]: Number(inp.value) }); after(d); if (d) { const nf = d.groups.flatMap(g => g.fields).find(x => x.key === f.key); if (nf) inp.value = nf.value; } });
+    control = h('div', { class: 'row' }, inp, h('span', { class: 'muted mono', style: { fontSize: '11px' } }, `${f.min}–${f.max}`));
+  } else {
+    const inp = f.type === 'longtext' ? h('textarea', { rows: 3 }) : h('input', { type: 'text' });
+    inp.value = f.value == null ? '' : f.value;
+    let last = inp.value;
+    inp.addEventListener('change', async () => { if (inp.value === last) return; const d = await save({ [f.key]: inp.value }); if (d) { last = inp.value; after(d); } });
+    control = inp;
+  }
+  return h('div', { class: 'set-row' + (f.type === 'longtext' ? ' wide' : '') },
+    h('div', { class: 'set-label' }, h('div', null, f.label), f.help ? h('div', { class: 'muted set-help' }, f.help) : null),
+    h('div', { class: 'set-control' }, control));
+}
+
+function aiKeys(data, main) {
+  const box = h('div', { class: 'set-keys' },
+    h('div', { class: 'set-label' }, h('div', null, 'API keys'),
+      h('div', { class: 'muted set-help' }, 'Stored encrypted on the tablet and never included in backups. Only the last four characters are shown here.')));
+  data.keys.forEach(k => {
+    const inp = h('input', { type: 'password', placeholder: k.saved ? 'Paste a new key to replace it' : 'Paste key', autocomplete: 'off', spellcheck: 'false' });
+    const send = async key => {
+      try { const d = await api('settings/ai-key', { method: 'POST', json: { provider: k.provider, key } }); toast(key ? 'Key saved on the tablet' : 'Key removed', 1600); renderSettings(main, d); }
+      catch (e) { fail(e); }
+    };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter' && inp.value.trim()) send(inp.value.trim()); });
+    box.appendChild(h('div', { class: 'set-key' },
+      h('div', { class: 'set-key-name' }, k.label,
+        h('div', { class: 'mono set-key-state' + (k.saved ? ' ok' : '') }, k.saved ? `Saved  ••••${k.last4 || ''}` : 'No key')),
+      inp,
+      h('button', { class: 'btn fill', onclick: () => { if (inp.value.trim()) send(inp.value.trim()); else toast('Paste a key first'); } }, 'Save'),
+      k.saved ? h('button', { class: 'btn', onclick: () => confirmBox('Remove this key?', `The ${k.label} key is deleted from the tablet. AI features using ${k.label} stop working until you add a key again.`, 'Remove', () => send('')) }, 'Remove') : null));
+  });
+  return box;
+}
+
+function storageSection(info) {
+  const when = ms => ms ? new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Never';
+  return h('section', { class: 'set-group', id: 'set-storage' }, h('h2', null, 'Storage & backup'),
+    h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('div', null, 'Library folder'), h('div', { class: 'muted set-help' }, 'Change it on the tablet, where the folder can be checked.')),
+      h('div', { class: 'set-control mono', style: { fontSize: '12px', wordBreak: 'break-all' } }, info.libraryFolder || '—')),
+    h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('div', null, 'Book folders last checked'), h('div', { class: 'muted set-help' }, 'Edits made to the notes and .ris/.bib files outside the app are read in.')),
+      h('div', { class: 'set-control row' }, h('span', { class: 'mono', style: { fontSize: '12px' } }, when(info.lastFolderCheck)),
+        h('button', { class: 'btn', onclick: async () => { try { await api('settings/check-folders', { method: 'POST' }); toast('Checking the folders…'); setTimeout(showSettings, 2500); } catch (e) { fail(e); } } }, 'Check now'))),
+    h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('div', null, 'Backup'), h('div', { class: 'muted set-help' }, 'Backups are set up on the tablet, which chooses where they are saved.')),
+      h('div', { class: 'set-control mono', style: { fontSize: '12px' } }, `Last backup: ${when(info.lastBackup)} · Automatic: ${info.autoBackup ? 'on' : 'off'}`)));
 }
 
 // ------------------------------------------------------------------ library
