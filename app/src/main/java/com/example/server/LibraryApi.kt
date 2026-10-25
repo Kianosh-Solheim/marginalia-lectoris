@@ -385,6 +385,11 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         val o = docJson(d, hls.size)
         o.put("highlightList", JSONArray().apply { hls.forEach { put(hlJson(it)) } })
         o.put("bib", bibJson(d))
+        runCatching {
+            o.put("citekey", Citations.citeKey(d, BibStore.get(d.id)))
+            o.put("sourceFile", com.example.reader.MarkdownExporter.formatExportedSourceFilename(d))
+            o.put("overviewLink", "[[" + com.example.reader.MarkdownExporter.getMocTitle(d.title, ops.repository.getSettings()) + "]]")
+        }
         if (FolderBooks.isFolder(d)) {
             val all = db.highlightDao().getAllHighlights().first()
             val counts = all.groupingBy { it.documentId }.eachCount()
@@ -644,6 +649,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             .put("fields", fields)
             .put("tags", JSONArray(com.example.reader.TagSplitter.split(text)))
             .put("bookTags", doc.tags)
+            .put("bookAuthor", doc.author)
+            .put("bookAbstract", doc.summary)
             .put("chapter", if (c == null) JSONObject.NULL else JSONObject()
                 .put("title", c.title).put("label", c.label).put("authors", c.authors).put("abstract", c.abstract).put("tags", c.tags)
                 .put("authorsAdd", c.authorSource == "user" && c.authors.isNotBlank()))
@@ -662,6 +669,15 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         val page = setAsPage(doc, b)
         val chapterTitle = b.optString("chapter")
         val msg = when {
+            target == "chapter:new" -> EditedVolumes.startChapterAt(context, doc, page, value)
+            target == "author" -> {
+                db.documentDao().updateAuthor(doc.id, value.replace(Regex("\\s+"), " "))
+                if (doc.category.equals("ARTICLE", true)) "Author saved" else "Author of the book saved"
+            }
+            target == "abstract" -> {
+                db.documentDao().updateSummary(doc.id, value.replace(Regex("\\s+"), " ").removePrefix("Abstract").trimStart(':', '.', ' ', '—', '–'))
+                "Abstract saved"
+            }
             target.startsWith("chapter:") -> EditedVolumes.setChapterField(context, doc, page, chapterTitle, target.removePrefix("chapter:"), value)
             target == "tags" -> {
                 val chosen = com.example.reader.TagSplitter.split(value)

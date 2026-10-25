@@ -223,6 +223,319 @@ function header() {
   ));
 }
 
+// ------------------------------------------------------------------ right-click menus
+
+let cmRoot = null;
+function closeCtxMenu() { const r = cmRoot; cmRoot = null; if (r) r.remove(); }
+['mousedown', 'wheel', 'blur', 'resize', 'hashchange'].forEach(ev => window.addEventListener(ev, e => {
+  if (!cmRoot) return;
+  if (ev === 'blur' && e.target !== window) return;
+  if ((ev === 'mousedown' || ev === 'wheel') && cmRoot.contains(e.target)) return;
+  closeCtxMenu();
+}, true));
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && cmRoot) { e.stopPropagation(); closeCtxMenu(); } }, true);
+
+/** Shows a menu at (x, y). Items: { label, hint, fn, sub (array or async function), color, danger, disabled } or '-'. */
+function openCtxMenu(x, y, items) {
+  closeCtxMenu();
+  cmRoot = h('div', { class: 'cm-root', oncontextmenu: e => e.preventDefault() });
+  document.body.append(cmRoot);
+  const first = cmMenu(items, 0);
+  cmRoot.append(first);
+  cmPlace(first, x, y, null);
+}
+
+function cmPlace(m, x, y, fromRect) {
+  const vw = window.innerWidth, vh = window.innerHeight, r = m.getBoundingClientRect();
+  let left = x, top = y;
+  if (fromRect) { left = fromRect.right - 2; top = fromRect.top - 4; if (left + r.width > vw - 4) left = Math.max(4, fromRect.left - r.width + 2); }
+  else if (left + r.width > vw - 4) left = Math.max(4, vw - r.width - 4);
+  if (top + r.height > vh - 4) top = Math.max(4, vh - r.height - 4);
+  m.style.left = left + 'px'; m.style.top = top + 'px';
+}
+
+function cmMenu(items, level) {
+  const m = h('div', { class: 'cm', 'data-level': level, role: 'menu' });
+  const closeDeeper = () => [...cmRoot.querySelectorAll('.cm')].forEach(x => { if (+x.dataset.level > level) x.remove(); });
+  const list = (items || []).filter(Boolean);
+  if (!list.filter(x => x !== '-').length) list.splice(0, list.length, { label: 'Nothing here', disabled: true });
+  list.forEach(it => {
+    if (it === '-') { m.append(h('div', { class: 'cm-sep' })); return; }
+    const b = h('button', { class: 'cm-item' + (it.danger ? ' danger' : '') + (it.sub ? ' has-sub' : ''), disabled: !!it.disabled, role: 'menuitem' },
+      it.color ? h('i', { class: 'cm-sw', style: { background: it.color } }) : null,
+      h('span', { class: 'cm-l' }, it.label),
+      it.hint ? h('span', { class: 'cm-h' }, it.hint) : null,
+      it.sub ? h('span', { class: 'cm-arrow' }, '▸') : null);
+    let timer = 0;
+    const openSub = async () => {
+      closeDeeper();
+      [...m.querySelectorAll('.cm-item.open')].forEach(x => x.classList.remove('open'));
+      b.classList.add('open');
+      const sm = cmMenu(Array.isArray(it.sub) ? it.sub : [{ label: 'Loading…', disabled: true }], level + 1);
+      cmRoot.append(sm); cmPlace(sm, 0, 0, b.getBoundingClientRect());
+      if (typeof it.sub === 'function') {
+        let list;
+        try { list = await it.sub(); } catch (e) { list = [{ label: e.message || String(e), disabled: true }]; }
+        if (!sm.isConnected) return;
+        const fresh = cmMenu(list && list.length ? list : [{ label: 'Nothing here', disabled: true }], level + 1);
+        sm.replaceWith(fresh); cmPlace(fresh, 0, 0, b.getBoundingClientRect());
+      }
+    };
+    if (it.sub) {
+      b.addEventListener('mouseenter', () => { clearTimeout(timer); timer = setTimeout(openSub, 120); });
+      b.addEventListener('mouseleave', () => clearTimeout(timer));
+      b.addEventListener('click', e => { e.stopPropagation(); openSub(); });
+    } else {
+      b.addEventListener('mouseenter', () => { closeDeeper(); [...m.querySelectorAll('.cm-item.open')].forEach(x => x.classList.remove('open')); });
+      b.addEventListener('click', () => { closeCtxMenu(); if (it.fn) it.fn(); });
+    }
+    m.append(b);
+  });
+  return m;
+}
+
+function onContext(el, build) {
+  el.addEventListener('contextmenu', e => {
+    const items = build(e);
+    if (!items) return;
+    e.preventDefault(); e.stopPropagation();
+    openCtxMenu(e.clientX, e.clientY, items);
+  });
+}
+
+/** In-text citation in the default style, with a page or location when known. */
+function inTextFor(d, page) {
+  const bib = (d && d.bib) || {};
+  const st = (bib.styles || []).find(s => s.id === bib.defaultStyle) || (bib.styles || [])[0];
+  let it = plainRef(st ? st.inText : '');
+  if (!it || !page) return it;
+  const p = String(page);
+  const bare = p.replace(/^pp?\.\s*/, '');
+  const id = st.id;
+  const add = id === 'APA7' || id === 'HARVARD' ? (/[–-]/.test(bare) ? 'pp. ' : 'p. ') + bare : bare;
+  if (id === 'CHICAGO_NOTES') return it.replace(/\.$/, '') + ', ' + add + '.';
+  return /\)$/.test(it) ? it.replace(/\)$/, (id === 'MLA9' ? ' ' : ', ') + add + ')') : it + ', ' + add;
+}
+
+async function fullDoc(d) { return d.bib && d.highlightList ? d : api(`doc/${d.id}`); }
+
+async function copyFromFile(path, what) {
+  try {
+    const r = await fetch('/api/' + path, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('Error ' + r.status);
+    copyText(await r.text(), what);
+  } catch (e) { fail(e); }
+}
+
+// ----- library cards
+
+function docMenu(d, onChanged) {
+  const reload = onChanged || (() => route());
+  const exportsFor = () => {
+    const list = d.folder
+      ? [['All chapters (.zip)', () => download(`doc/${d.id}/export/folder`, 'Exporting every chapter…')], ['BibTeX (.bib)', () => download(`doc/${d.id}/export/bib`, 'Preparing…')]]
+      : EXPORTS.map(([k, label]) => [label, () => download(`doc/${d.id}/export/${k}`, 'Preparing ' + label.toLowerCase() + '…')]);
+    const items = list.map(([label, fn]) => ({ label, fn }));
+    if (!d.folder) items.push('-', { label: 'The book file', fn: () => download(`doc/${d.id}/file?download=1`, 'Downloading the book…') });
+    if (isPdf(d)) items.push('-',
+      { label: 'Clean text (.txt)', fn: () => download(`doc/${d.id}/export/clean-text`, 'Reading every page on the tablet…') },
+      { label: 'Searchable PDF', fn: () => download(`doc/${d.id}/export/searchable-pdf`, 'Making a searchable PDF on the tablet…') });
+    return items;
+  };
+  const copies = async () => {
+    const f = await fullDoc(d);
+    const bib = f.bib || {};
+    const st = (bib.styles || []).find(s => s.id === bib.defaultStyle) || (bib.styles || [])[0] || {};
+    return [
+      st.inText ? { label: 'In-text citation', hint: plainRef(st.inText).slice(0, 34), fn: () => copyText(plainRef(st.inText), 'Citation copied') } : null,
+      st.reference ? { label: 'Reference', hint: st.label, fn: () => copyText(plainRef(st.reference), 'Reference copied') } : null,
+      f.citekey ? { label: 'Citation key', hint: f.citekey, fn: () => copyText(f.citekey, 'Citation key copied') } : null,
+      f.overviewLink ? { label: 'Obsidian link', hint: f.overviewLink.slice(0, 34), fn: () => copyText(f.overviewLink, 'Link copied') } : null,
+      '-',
+      bib.bibtex ? { label: 'BibTeX', fn: () => copyText(bib.bibtex, 'BibTeX copied') } : null,
+      bib.ris ? { label: 'RIS', fn: () => copyText(bib.ris, 'RIS copied') } : null,
+      { label: 'Title', fn: () => copyText(f.title, 'Title copied') }
+    ];
+  };
+  const withFull = fn => async () => { try { fn(await fullDoc(d)); } catch (e) { fail(e); } };
+  const other = d.category === 'ARTICLE' ? ['BOOK', 'Books'] : ['ARTICLE', 'Articles'];
+  return [
+    canRead(d) ? { label: d.progress > 0 ? 'Continue reading' : 'Read', fn: () => { location.hash = `#/read/${d.id}`; } } : null,
+    { label: d.folder ? 'Open the folder book' : 'Open details', fn: () => { location.hash = `#/book/${d.id}`; } },
+    '-',
+    { label: 'Export', sub: exportsFor() },
+    { label: 'Copy', sub: copies },
+    '-',
+    { label: 'Edit details…', fn: withFull(f => editAll(f)) },
+    d.folder ? null : { label: 'Look up details…', hint: 'DOI · ISBN · title', fn: withFull(f => editAll(f, 'lookup')) },
+    d.folder ? null : { label: 'Change cover…', fn: () => changeCover(d) },
+    { label: 'Tags…', fn: () => editTags(d, reload) },
+    { label: `Move to ${other[1]}`, fn: async () => {
+      try { await api(`doc/${d.id}`, { method: 'PATCH', json: { category: other[0] } }); toast(`Moved to ${other[1]}`); reload(); } catch (e) { fail(e); }
+    } },
+    d.folder ? null : { label: d.inFolder ? 'Move to another folder book…' : 'Add to a folder book…', fn: () => addToFolderBook(d) },
+    { label: d.pinned ? 'Unpin from widget' : 'Pin to widget', fn: async () => {
+      try { const r = await api(`doc/${d.id}/pin`, { method: 'POST', json: { pinned: !d.pinned } }); d.pinned = r.pinned; toast(r.pinned ? 'Pinned to the widget' : 'Unpinned from the widget'); reload(); } catch (e) { fail(e); }
+    } },
+    '-',
+    { label: 'Delete…', danger: true, fn: () => confirmBox(d.folder ? 'Delete this folder book?' : 'Delete this book?',
+      d.folder ? `“${d.title}” is removed. Its chapters go back on the shelf.` : `“${d.title}” and its ${d.highlights || 0} notes will be removed from the tablet.`, 'Delete', async () => {
+        try { await api(`doc/${d.id}`, { method: 'DELETE' }); toast('Deleted'); if (location.hash.startsWith('#/book/')) location.hash = '#/'; else reload(); } catch (e) { fail(e); }
+      }) }
+  ];
+}
+
+function editTags(d, onSaved) {
+  modal((box, close) => {
+    const g = tagInput(d.tags || '', false);
+    const save = async () => {
+      try { await api(`doc/${d.id}`, { method: 'PATCH', json: { tags: g.value } }); tagCache = null; close(); toast('Tags saved'); onSaved && onSaved(); } catch (e) { fail(e); }
+    };
+    box.append(h('h2', null, 'Tags'), h('div', { class: 'muted', style: { marginBottom: '8px' } }, d.title),
+      h('div', { class: 'tagwrap' }, g._widget),
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
+  });
+}
+
+// ----- notes
+
+function noteMenu(n, d, onChanged, openIt) {
+  const recolor = c => async () => {
+    try { const r = await api(`highlight/${n.id}`, { method: 'PATCH', json: { colorHex: c } }); Object.assign(n, r); toast('Colour changed'); onChanged && onChanged(); } catch (e) { fail(e); }
+  };
+  return [
+    openIt ? { label: 'Show in book', fn: openIt } : null,
+    { label: 'Edit…', fn: () => editNote(n, onChanged) },
+    { label: 'Change colour', sub: COLORS.map(([name, hex]) => ({ label: name, color: hex, hint: (n.colorHex || '').toUpperCase() === hex ? '✓' : '', fn: recolor(hex) })) },
+    '-',
+    { label: 'Copy quote', fn: () => copyText(n.highlightedText, 'Quote copied') },
+    { label: 'Copy as Markdown', fn: () => copyFromFile(`doc/${n.documentId}/export/note?id=${n.id}`, 'Note copied as Markdown') },
+    { label: 'Copy Obsidian link', hint: `[[${(n.title || '').slice(0, 24)}…]]`, fn: () => copyText(`[[${n.title}]]`, 'Link copied') },
+    { label: 'Download .md', fn: () => download(`doc/${n.documentId}/export/note?id=${n.id}`, 'Preparing the note…') },
+    '-',
+    { label: 'Delete…', danger: true, fn: () => confirmBox('Delete this note?', n.title, 'Delete', async () => {
+      try { await api(`highlight/${n.id}`, { method: 'DELETE' }); toast('Note deleted'); onChanged && onChanged(); } catch (e) { fail(e); }
+    }) }
+  ];
+}
+
+// ----- reader
+
+/** "Set as ▸" grouped: this chapter, people, title, identifiers, publication, journal, tags. */
+function setAsSub(ctx, sel, onDone) {
+  return async () => {
+    const pv = await api(`doc/${ctx.d.id}/set-as/preview`, { method: 'POST', json: Object.assign({ text: sel.text }, sel.loc || {}) });
+    const f = Object.fromEntries((pv.fields || []).map(x => [x.key, x]));
+    const g = pv.guess || {}, ch = pv.chapter;
+    const short = v => v ? (v.length > 30 ? v.slice(0, 30) + '…' : v) : '';
+    const pick = (target, label, value, current, opts = {}) => () => setAsConfirm(ctx, sel, pv, Object.assign({ target, label, value, current }, opts), onDone);
+    const field = (k, opts) => f[k] ? { label: f[k].label, hint: short(f[k].value) || '—', fn: pick(k, f[k].label, f[k].value, f[k].current, opts) } : null;
+    const groups = [];
+    if (pv.isBook) groups.push({ label: 'This chapter', hint: ch ? short(ch.title) : '', sub: [
+      { label: 'Chapter title', hint: short(g.title), fn: pick('chapter:title', 'Chapter title', g.title, ch && ch.title) },
+      { label: 'Chapter author', hint: short(g.author), fn: pick('chapter:author', 'Chapter author(s)', g.author, ch && ch.authors, { adds: ch && ch.authorsAdd }) },
+      { label: 'Chapter abstract', fn: pick('chapter:abstract', 'Chapter abstract', g.abstract, ch && ch.abstract, { long: true }) },
+      { label: 'Chapter tags', hint: short((pv.tags || []).join(', ')), fn: pick('chapter:tags', 'Chapter tags', (pv.tags || []).join(', '), ch && ch.tags, { tags: true }) }] });
+    groups.push({ label: 'People', sub: [
+      { label: pv.isBook ? 'Author of the book' : 'Author', hint: short(g.author), fn: pick('author', pv.isBook ? 'Author of the book' : 'Author', g.author, pv.bookAuthor) },
+      f.EDITOR ? { label: pv.isBook ? 'Book editor' : 'Editor', hint: short(f.EDITOR.value), fn: pick('EDITOR', pv.isBook ? 'Book editor(s)' : 'Editor(s)', f.EDITOR.value, f.EDITOR.current, { adds: true }) } : null,
+      field('TRANSLATOR')] });
+    groups.push({ label: 'Title', sub: [field('TITLE', { long: true }), field('SUBTITLE')] });
+    groups.push({ label: 'Identifiers', sub: ['DOI', 'ISBN', 'ISSN', 'URL'].map(k => field(k)) });
+    groups.push({ label: 'Publication', sub: ['YEAR', 'PUBLISHER', 'PLACE', 'EDITION', 'SERIES', 'LANGUAGE'].map(k => field(k)) });
+    groups.push({ label: pv.isBook ? 'Container' : 'Journal', sub: (pv.isBook ? ['BOOKTITLE', 'VOLUME', 'PAGES'] : ['JOURNAL', 'VOLUME', 'ISSUE', 'PAGES']).map(k => field(k)) });
+    groups.push('-',
+      { label: pv.isBook ? 'Abstract of the book' : 'Abstract', fn: pick('abstract', 'Abstract', g.abstract, pv.bookAbstract, { long: true }) },
+      { label: 'Tags', hint: short((pv.tags || []).join(', ')), fn: pick('tags', 'Tags of the book', (pv.tags || []).join(', '), pv.bookTags, { tags: true }) });
+    return groups;
+  };
+}
+
+function selectionMenu(ctx, sel, onDone) {
+  const q = sel.text.trim();
+  const word = q.split(/\s+/).length <= 3;
+  const enc = encodeURIComponent(q.slice(0, 300));
+  const web = url => () => window.open(url, '_blank', 'noopener');
+  return [
+    { label: 'Highlight', sub: COLORS.map(([name, hex]) => ({ label: name, color: hex, fn: async () => {
+      localSet('ml.color', hex);
+      try { await sel.save({ colorHex: hex }); toast('Highlighted'); onDone(); } catch (e) { fail(e); }
+    } })) },
+    { label: 'Add note…', fn: () => noteDialog(ctx, sel, localGet('ml.color', '#FFEB3B'), onDone) },
+    '-',
+    { label: 'Copy', fn: () => copyText(sel.text, 'Copied') },
+    { label: 'Copy with citation', hint: inTextFor(ctx.d, sel.pageRef).slice(0, 30), fn: () => {
+      const it = inTextFor(ctx.d, sel.pageRef);
+      copyText(it ? `“${q}” ${it}` : `“${q}”`, 'Quote and citation copied');
+    } },
+    '-',
+    { label: 'Set as', sub: setAsSub(ctx, sel, onDone) },
+    { label: 'Look up', sub: [
+      word ? { label: 'Dictionary', hint: q.slice(0, 20), fn: web(`https://www.google.com/search?q=define+${enc}`) } : null,
+      { label: 'Wikipedia', fn: web(`https://en.wikipedia.org/w/index.php?search=${enc}`) },
+      { label: 'Google Scholar', fn: web(`https://scholar.google.com/scholar?q=${enc}`) },
+      { label: 'Web search', fn: web(`https://www.google.com/search?q=${enc}`) },
+      { label: 'Translate', fn: web(`https://translate.google.com/?sl=auto&tl=en&text=${enc}`) }] }
+  ];
+}
+
+function pageMenu(ctx) {
+  const ro = readerOpen;
+  const p = ctx.place ? ctx.place() : {};
+  const pdf = ro && ro.kind === 'pdf';
+  const items = [];
+  if (pdf && p.page) {
+    const name = ctx.d.sourceFile || ctx.d.fileName || 'book.pdf';
+    const where = p.label ? `printed page ${p.label}` : `PDF page ${p.page}`;
+    items.push({ label: 'Copy Obsidian link to this page', hint: where, fn: () => copyText(`[[${name}#page=${p.page}|${name}, ${where}]]`, 'Link copied') });
+  }
+  items.push({ label: 'Copy web link to this place', fn: () => copyText(location.origin + '/' + (pdf ? `#/read/${ctx.d.id}?page=${p.page}` : `#/read/${ctx.d.id}?pos=${p.pos || 1}`), 'Link copied') });
+  items.push({ label: pdf ? 'Go to page…' : 'Go to position…', fn: () => goToDialog(ctx, pdf) });
+  items.push('-');
+  items.push({ label: 'Start a chapter here…', hint: p.chapter ? 'now: ' + p.chapter.slice(0, 22) : '', fn: () => startChapterDialog(ctx, p) });
+  if (pdf) items.push({ label: 'Text & OCR for this page…', fn: () => { const b = document.querySelector('.rbar button[title^="Text & OCR"]'); if (b) setTimeout(() => b.click(), 0); else toast('Text tools are not available for this PDF.'); } });
+  items.push('-');
+  if (!pdf) items.push({ label: 'View', sub: RS_VIEWS.map(([id, label, , patch]) => ({ label, hint: rsView() === id ? '✓' : '', fn: () => setReaderSettings(patch) })) });
+  items.push({ label: 'Reader settings', fn: () => { const b = document.querySelector('.rbar button[title^="Reading settings"]'); if (b) setTimeout(() => b.click(), 0); } });
+  items.push({ label: 'Contents', fn: () => { const b = [...document.querySelectorAll('.rbar button')].find(x => x.textContent === 'Contents'); if (b) b.click(); } });
+  return items;
+}
+
+function goToDialog(ctx, pdf) {
+  modal((box, close) => {
+    const inp = h('input', { type: 'number', min: 1, max: ctx.pageCount || '', placeholder: pdf ? 'PDF page' : 'Position' });
+    const go = () => { const n = +inp.value; if (!n) return; close(); if (ctx.goToPage) ctx.goToPage(n); };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    box.append(h('h2', null, pdf ? 'Go to page' : 'Go to position'),
+      h('label', { class: 'fields' }, h('span', { class: 'label' }, pdf ? `PDF page (1–${ctx.pageCount || '?'})` : `Position (1–${ctx.pageCount || '?'})`), inp),
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: go }, 'Go')));
+  });
+}
+
+function startChapterDialog(ctx, p) {
+  modal((box, close) => {
+    const inp = h('input', { placeholder: 'e.g. 3 The Rule of Law' });
+    const save = async () => {
+      const value = inp.value.trim(); if (!value) { inp.focus(); return; }
+      try {
+        const r = await api(`doc/${ctx.d.id}/set-as`, { method: 'POST', json: Object.assign({ target: 'chapter:new', value, text: value }, p.loc || {}) });
+        close(); toast(r.message || 'Saved');
+      } catch (e) { fail(e); }
+    };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') save(); });
+    box.append(h('h2', null, 'Start a chapter here'),
+      h('p', { class: 'muted', style: { marginTop: 0 } }, `The chapter begins ${p.page ? 'on PDF page ' + p.page : 'at this position'}. It is cited as a book section, with its own author and abstract.`),
+      h('label', { class: 'fields' }, h('span', { class: 'label' }, 'Chapter title (a number in front is kept as its label)'), inp),
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
+  });
+}
+
+/** Right-click inside the book: the selection's menu when the click is on selected text, otherwise the page's. */
+function readerContext(ctx, e, inSelection) {
+  if (inSelection && ctx.sel) return selectionMenu(ctx, ctx.sel, ctx.selDone);
+  return pageMenu(ctx);
+}
+
 // ------------------------------------------------------------------ settings
 
 async function showSettings() {
@@ -646,6 +959,7 @@ function renderShelf() {
         h('div', { class: 'mono', style: { fontSize: '12px' } }, `${pct(d.progress)}%`),
         h('div', { class: 'mono muted', style: { fontSize: '11px' } }, `${d.fileType} · ${d.highlights} notes`));
       makeDraggable(row, d);
+      onContext(row, () => docMenu(d, () => showLibrary()));
       list.append(row);
     });
     shelf.append(list);
@@ -660,6 +974,7 @@ function renderShelf() {
       h('div', { class: 'a' }, d.displayAuthor || d.author || ' '),
       h('div', { class: 'm' }, `${pct(d.progress)}% · ${d.highlights} note${d.highlights === 1 ? '' : 's'}`));
     makeDraggable(card, d);
+    onContext(card, () => docMenu(d, () => showLibrary()));
     grid.append(card);
   });
   shelf.append(grid);
@@ -695,7 +1010,7 @@ function renderBook(main, d) {
   const tags = splitTags(d.tags);
   const left = h('div', null,
     h('div', { style: { cursor: canRead(d) ? 'pointer' : 'default' }, onclick: () => { if (canRead(d)) location.hash = `#/read/${d.id}`; } },
-      (() => { const img = coverImg(d, 'bc'); makeDraggable(img, d); return img; })()),
+      (() => { const img = coverImg(d, 'bc'); makeDraggable(img, d); onContext(img, () => docMenu(d, () => showBook(d.id))); return img; })()),
     coverButton(d),
     h('div', { class: 'facts', style: { flexDirection: 'column', gap: '4px' } },
       h('span', null, `${d.fileType} · ${fmtSize(d.size)}`),
@@ -1092,6 +1407,7 @@ function editAll(d, focus) {
       grid,
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
     if (focus === 'bib') setTimeout(() => { const first = grid.querySelector('input'); if (first) { first.scrollIntoView({ block: 'center' }); first.focus(); } }, 40);
+    if (focus === 'lookup') setTimeout(() => { lookPanel.scrollIntoView({ block: 'center' }); const b = lookPanel.querySelector('button'); if (b) b.click(); }, 60);
   });
 }
 
@@ -1158,7 +1474,7 @@ function noteItem(n, d, onChanged) {
     if (!d || !canRead(d)) return;
     location.hash = isPdf(d) ? `#/read/${d.id}?page=${n.pageNumber}&hl=${n.id}` : `#/read/${d.id}?pos=${n.pageNumber}&hl=${n.id}`;
   };
-  return h('div', { class: 'note' },
+  const el = h('div', { class: 'note' },
     h('div', { class: 'sw', style: { background: n.colorHex || '#E4E4E7' } }),
     h('div', { style: { minWidth: 0 } },
       h('div', { class: 'nt' }, n.title),
@@ -1174,6 +1490,8 @@ function noteItem(n, d, onChanged) {
         h('button', { class: 'btn quiet', onclick: () => confirmBox('Delete this note?', n.title, 'Delete', async () => {
           try { await api(`highlight/${n.id}`, { method: 'DELETE' }); toast('Note deleted'); onChanged && onChanged(); } catch (e) { fail(e); }
         }) }, 'Delete'))));
+  onContext(el, () => noteMenu(n, d, onChanged, d && canRead(d) ? openIt : null));
+  return el;
 }
 
 function editNote(n, onSaved) {
@@ -1678,10 +1996,12 @@ async function openReader(id, params) {
       side.append(h('h3', null, 'Notes', h('span', { class: 'mono muted', style: { fontSize: '12px', fontWeight: 400, marginLeft: '6px' } }, ctx.notes.length)));
       if (!ctx.notes.length) side.append(h('div', { class: 'muted' }, 'Select text in the book to highlight it or add a note.'));
       ctx.notes.slice().sort((a, b) => a.pageNumber - b.pageNumber).forEach(n => {
-        side.append(h('div', { class: 'nitem', onclick: () => readerOpen && readerOpen.goToNote(n) },
+        const ni = h('div', { class: 'nitem', onclick: () => readerOpen && readerOpen.goToNote(n) },
           h('div', { class: 'q', style: { borderLeftColor: n.colorHex || '#E4E4E7' } }, n.highlightedText),
           n.userNotes ? h('div', { style: { fontSize: '13px', marginTop: '3px', whiteSpace: 'pre-wrap' } }, n.userNotes.length > 220 ? n.userNotes.slice(0, 220) + '…' : n.userNotes) : null,
-          h('div', { class: 'w' }, n.title, ' · ', noteLocus(n, d), ' · ', h('a', { href: 'javascript:void 0', onclick: e => { e.stopPropagation(); editNote(n, () => { ctx.refreshNotes(); }); } }, 'edit'))));
+          h('div', { class: 'w' }, n.title, ' · ', noteLocus(n, d), ' · ', h('a', { href: 'javascript:void 0', onclick: e => { e.stopPropagation(); editNote(n, () => { ctx.refreshNotes(); }); } }, 'edit')));
+        onContext(ni, () => noteMenu(n, d, () => ctx.refreshNotes(), () => readerOpen && readerOpen.goToNote(n)));
+        side.append(ni);
       });
     }
   }
@@ -1932,6 +2252,7 @@ function setAsConfirm(ctx, sel, pv, opt, onDone) {
 /** The bar shown while text is selected: highlight in a colour, or write a note. */
 function selectionBar(ctx, sel, onDone) {
   const old = ctx.mainArea.querySelector('.selbar'); if (old) old.remove();
+  ctx.sel = sel || null; ctx.selDone = sel ? onDone : null;
   if (!sel) return;
   let color = localGet('ml.color', '#FFEB3B');
   const quick = async c => {
@@ -2293,8 +2614,11 @@ async function openPdf(ctx, params) {
       const pageOf = node => { const el = (node.nodeType === 1 ? node : node.parentElement).closest('.ppage'); return el ? +el.dataset.page : current; };
       let a = pageOf(s.anchorNode), b = pageOf(s.focusNode); if (a > b) [a, b] = [b, a];
       const lab = labels && labels[a - 1];
+      const labB = labels && labels[b - 1];
+      const printedOk = x => x && /\d|^[ivxlc]+$/i.test(x);
       selectionBar(ctx, {
         text,
+        pageRef: printedOk(lab) && lab !== String(a) ? (b > a && printedOk(labB) ? `${lab}–${labB}` : lab) : (b > a ? `${a}–${b}` : String(a)),
         where: `${chapterOf(a) ? chapterOf(a) + ' · ' : ''}PDF page ${a}${b > a ? '–' + b : ''}`,
         loc: { page: a, chapter: chapterOf(a) },
         save: async extra => {
@@ -2306,6 +2630,27 @@ async function openPdf(ctx, params) {
     }, 250);
   };
   document.addEventListener('selectionchange', onSel);
+
+  ctx.pageCount = n;
+  ctx.goToPage = p => goPage(p);
+  let menuPage = 0;
+  ctx.place = () => {
+    const p = menuPage || current;
+    const lab = labels && labels[p - 1];
+    return { page: p, label: lab && lab !== String(p) && /\d|^[ivxlc]+$/i.test(lab) ? lab : '', chapter: chapterOf(p), loc: { page: p, chapter: chapterOf(p) } };
+  };
+  onContext(scroll, e => {
+    const pg = e.target.closest && e.target.closest('.ppage');
+    menuPage = pg ? +pg.dataset.page : current;
+    const s = window.getSelection();
+    let inSel = false;
+    if (s && !s.isCollapsed && ctx.sel) {
+      for (let i = 0; i < s.rangeCount; i++) {
+        for (const r of s.getRangeAt(i).getClientRects()) if (e.clientX >= r.left - 2 && e.clientX <= r.right + 2 && e.clientY >= r.top - 2 && e.clientY <= r.bottom + 2) inSel = true;
+      }
+    }
+    return readerContext(ctx, e, inSel);
+  });
 
   const startPage = +params.get('page') || d.currentPage || 1;
   requestAnimationFrame(() => { goPage(startPage); updatePlace(); pages.forEach(p => io.observe(p)); });
@@ -2553,6 +2898,7 @@ async function openEpub(ctx, params) {
     const t = tocFor(href);
     selectionBar(ctx, {
       text,
+      pageRef: label || '',
       where: [t ? t.title : '', label ? 'p. ' + label : ''].filter(Boolean).join(' · '),
       loc: { href, progression, chapter: t ? t.title : '' },
       save: async extra => {
@@ -2569,6 +2915,33 @@ async function openEpub(ctx, params) {
     });
   });
   rendition.on('keydown', e => readerKeys(e));
+
+  ctx.pageCount = index && index.total ? index.total : 0;
+  ctx.goToPage = async n => { try { await goTo(locatePos(n)); } catch (e) { fail(e); } };
+  ctx.place = () => {
+    const st = (lastLoc && lastLoc.start) || {};
+    const disp = st.displayed || {};
+    const res = resourceFor(st.href);
+    const progression = disp.total ? Math.max(0, disp.page - 1) / disp.total : 0;
+    const pos = res && disp.total ? res.first + Math.floor(progression * res.count) : (d.currentPage || 1);
+    const t = tocFor(st.href);
+    return { pos, chapter: t ? t.title : '', loc: { href: st.href || '', progression, chapter: t ? t.title : '' } };
+  };
+  rendition.hooks.content.register(contents => {
+    const doc = contents.document; if (!doc) return;
+    doc.addEventListener('contextmenu', e => {
+      const fr = contents.window.frameElement;
+      const r = fr ? fr.getBoundingClientRect() : { left: 0, top: 0 };
+      const s = contents.window.getSelection();
+      let inSel = false;
+      if (s && !s.isCollapsed && ctx.sel) {
+        for (let i = 0; i < s.rangeCount; i++) for (const q of s.getRangeAt(i).getClientRects()) if (e.clientX >= q.left - 2 && e.clientX <= q.right + 2 && e.clientY >= q.top - 2 && e.clientY <= q.bottom + 2) inSel = true;
+      }
+      e.preventDefault();
+      openCtxMenu(r.left + e.clientX, r.top + e.clientY, readerContext(ctx, e, inSel));
+    });
+  });
+  onContext(view, e => readerContext(ctx, e, false));
 
   // Where to start: a note, a chapter, the app's own position, or where this browser left off
   const target = async () => {

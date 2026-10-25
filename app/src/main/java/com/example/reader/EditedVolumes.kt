@@ -332,6 +332,27 @@ object EditedVolumes {
         return msg
     }
 
+    /** Starts a chapter at [page] with [raw] as its title (renames the one already starting there). */
+    suspend fun startChapterAt(context: Context, document: DocumentEntity, page: Int, raw: String): String {
+        var v = get(context, document.id)
+        if (v == null || v.chapters.isEmpty()) {
+            v = ChapterDetector.detect(context, document).getOrNull()?.volume
+                ?: EditedVolume(enabled = true, totalPages = document.totalPages, format = EditedVolume.CURRENT_FORMAT)
+        }
+        val chapters = v.chapters.toMutableList()
+        val start = page.coerceAtLeast(1)
+        val (num, bare) = ChapterTitles.split(raw.replace(Regex("\\s+"), " ").trim())
+        val at = chapters.indexOfFirst { it.startPage == start && !it.isSection }
+        if (at >= 0) chapters[at] = chapters[at].copy(title = bare, label = num.ifBlank { chapters[at].label }, isManual = true)
+        else {
+            val c = VolumeChapter(title = bare, label = num, startPage = start, level = levelForNewChapter(chapters, start), isManual = true)
+            val idx = chapters.indexOfFirst { it.startPage > start }.let { if (it < 0) chapters.size else it }
+            chapters.add(idx, c)
+        }
+        put(context, document.id, v.copy(enabled = true, chapters = chapters))
+        return if (at >= 0) "Chapter renamed" else "Chapter starts on this page"
+    }
+
     /**
      * The author line for a book in the library and widgets: the editors, marked "(ed.)"/"(eds.)",
      * when the book has editors; otherwise the book's author.
