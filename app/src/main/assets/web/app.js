@@ -238,7 +238,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && cmRoot) { 
 /** Shows a menu at (x, y). Items: { label, hint, fn, sub (array or async function), color, danger, disabled } or '-'. */
 function openCtxMenu(x, y, items) {
   closeCtxMenu();
-  cmRoot = h('div', { class: 'cm-root', oncontextmenu: e => e.preventDefault() });
+  cmRoot = h('div', { class: 'ctxm-root', oncontextmenu: e => e.preventDefault() });
   document.body.append(cmRoot);
   const first = cmMenu(items, 0);
   cmRoot.append(first);
@@ -255,21 +255,21 @@ function cmPlace(m, x, y, fromRect) {
 }
 
 function cmMenu(items, level) {
-  const m = h('div', { class: 'cm', 'data-level': level, role: 'menu' });
-  const closeDeeper = () => [...cmRoot.querySelectorAll('.cm')].forEach(x => { if (+x.dataset.level > level) x.remove(); });
+  const m = h('div', { class: 'ctxm', 'data-level': level, role: 'menu' });
+  const closeDeeper = () => [...cmRoot.querySelectorAll('.ctxm')].forEach(x => { if (+x.dataset.level > level) x.remove(); });
   const list = (items || []).filter(Boolean);
   if (!list.filter(x => x !== '-').length) list.splice(0, list.length, { label: 'Nothing here', disabled: true });
   list.forEach(it => {
-    if (it === '-') { m.append(h('div', { class: 'cm-sep' })); return; }
-    const b = h('button', { class: 'cm-item' + (it.danger ? ' danger' : '') + (it.sub ? ' has-sub' : ''), disabled: !!it.disabled, role: 'menuitem' },
-      it.color ? h('i', { class: 'cm-sw', style: { background: it.color } }) : null,
-      h('span', { class: 'cm-l' }, it.label),
-      it.hint ? h('span', { class: 'cm-h' }, it.hint) : null,
-      it.sub ? h('span', { class: 'cm-arrow' }, '▸') : null);
+    if (it === '-') { m.append(h('div', { class: 'ctxm-sep' })); return; }
+    const b = h('button', { class: 'ctxm-item' + (it.danger ? ' danger' : '') + (it.sub ? ' has-sub' : ''), disabled: !!it.disabled, role: 'menuitem' },
+      it.color ? h('i', { class: 'ctxm-sw', style: { background: it.color } }) : null,
+      h('span', { class: 'ctxm-l' }, it.label),
+      it.hint ? h('span', { class: 'ctxm-h' }, it.hint) : null,
+      it.sub ? h('span', { class: 'ctxm-arrow' }, '▸') : null);
     let timer = 0;
     const openSub = async () => {
       closeDeeper();
-      [...m.querySelectorAll('.cm-item.open')].forEach(x => x.classList.remove('open'));
+      [...m.querySelectorAll('.ctxm-item.open')].forEach(x => x.classList.remove('open'));
       b.classList.add('open');
       const sm = cmMenu(Array.isArray(it.sub) ? it.sub : [{ label: 'Loading…', disabled: true }], level + 1);
       cmRoot.append(sm); cmPlace(sm, 0, 0, b.getBoundingClientRect());
@@ -286,7 +286,7 @@ function cmMenu(items, level) {
       b.addEventListener('mouseleave', () => clearTimeout(timer));
       b.addEventListener('click', e => { e.stopPropagation(); openSub(); });
     } else {
-      b.addEventListener('mouseenter', () => { closeDeeper(); [...m.querySelectorAll('.cm-item.open')].forEach(x => x.classList.remove('open')); });
+      b.addEventListener('mouseenter', () => { closeDeeper(); [...m.querySelectorAll('.ctxm-item.open')].forEach(x => x.classList.remove('open')); });
       b.addEventListener('click', () => { closeCtxMenu(); if (it.fn) it.fn(); });
     }
     m.append(b);
