@@ -788,7 +788,13 @@ fun ReaderScreen(
         gesturesEnabled = false,
         scrimColor = Color.Transparent,
         drawerContent = {
+            val tocVolumeTick = com.example.reader.EditedVolumes.changes.intValue
+            val tocVolume = remember(document.id, tocVolumeTick) {
+                com.example.reader.EditedVolumes.get(context, document.id)?.takeIf { it.enabled && it.chapters.any { c -> c.isArticle } }
+                    ?.takeIf { com.example.reader.EditedVolumes.isEditedVolume(context, document) }
+            }
             ReaderChapterDrawerSheet(
+                chapterAuthor = { ch -> tocVolume?.let { com.example.reader.EditedVolumes.authorForContentsEntry(it, ch.title) } },
                 documentTitle = document.title,
                 chaptersList = chaptersList,
                 activeChapter = activeChapter,

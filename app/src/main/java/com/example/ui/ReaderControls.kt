@@ -92,7 +92,8 @@ internal fun ReaderChapterDrawerSheet(
     onDaisyNavItemSelected: ((com.example.reader.DaisyNavItem) -> Unit)? = null,
     onDaisySmilClipSelected: ((com.example.reader.DaisySmilClip) -> Unit)? = null,
     onViewNotesClick: () -> Unit,
-    landmarksSection: (@Composable () -> Unit)? = null
+    landmarksSection: (@Composable () -> Unit)? = null,
+    chapterAuthor: (BookChapter) -> String? = { null }
 ) {
     var selectedDaisyTab by androidx.compose.runtime.remember(daisyBookIndex != null) {
         androidx.compose.runtime.mutableIntStateOf(0) // 0 = NCC Chapters, 1 = NCC Pages, 2 = SMIL Audio Clips
@@ -436,6 +437,17 @@ internal fun ReaderChapterDrawerSheet(
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                chapterAuthor(chapter)?.let { a ->
+                                    Text(
+                                        text = a.ifBlank { "Unknown author" },
+                                        fontFamily = FontFamily.Serif,
+                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                        fontSize = 12.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = if (isSelected) Color(0xFFE4E4E7) else if (a.isBlank()) Color(0xFF71717A) else Color(0xFF27272A)
+                                    )
+                                }
                                 val anchorSuffix = if (chapter.anchorId.isNotBlank()) " • #${chapter.anchorId}" else ""
                                 val printedLabel = chapter.pageLabel.trim().takeIf { it.isNotBlank() && it != chapter.pageNumber.toString() }
                                 Text(

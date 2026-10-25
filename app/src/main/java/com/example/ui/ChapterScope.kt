@@ -75,7 +75,8 @@ fun ChapterScopeBar(scope: ChapterScope) {
                             text = {
                                 Column {
                                     Text(chapterLine(v, i), fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    if (c.authors.isNotBlank()) Text(c.authors.replace("; ", ", "), fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 12.sp)
+                                    Text(c.authors.replace("; ", ", ").ifBlank { "Unknown author" }, fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 12.sp,
+                                        color = if (c.authors.isBlank()) Color(0xFF71717A) else Color.Unspecified)
                                 }
                             },
                             onClick = { scope.selected = i; open = false }

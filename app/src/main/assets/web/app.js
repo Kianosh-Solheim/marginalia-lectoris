@@ -1443,7 +1443,8 @@ function chaptersSection(d) {
         h('div', { class: 'no' }, c.number || ''),
         h('div', { style: { minWidth: 0 } },
           h('a', { class: 'ct', href: 'javascript:void 0', onclick: go, style: { textDecoration: 'none' } }, c.title),
-          c.authors ? h('div', { class: 'ca' }, c.authors.split(';').map(s => s.trim()).join(', ')) : null,
+          c.authors ? h('div', { class: 'ca' }, c.authors.split(';').map(s => s.trim()).join(', '))
+            : d.editedVolume && c.kind === 'chapter' ? h('div', { class: 'ca unknown' }, 'Unknown author') : null,
           h('div', { class: 'cm' }, [pages, c.notes ? `${c.notes} notes` : '', c.progress >= 0.999 ? 'read ✓' : c.progress > 0 ? `${pct(c.progress)}% read` : '', splitTags(c.tags).map(t => '#' + t).join(' ')].filter(Boolean).join(' · '))),
         c.kind === 'chapter' ? h('div', { class: 'row', style: { gap: '2px' } },
           h('button', { class: 'btn quiet', onclick: go }, 'Read'),
@@ -1457,6 +1458,19 @@ function chaptersSection(d) {
       h('span', { class: 'spacer' }),
       h('button', { class: 'chip' + (showSections ? ' on' : ''), onclick: e => { showSections = !showSections; localSet('ml.sections', showSections ? '1' : '0'); e.target.classList.toggle('on', showSections); draw(); } }, 'Sections')),
     list);
+}
+
+/** For an edited volume: a contents title → its chapter's author ('' if unknown, null if not a chapter). */
+function tocAuthorLookup(d) {
+  if (!d.editedVolume || !d.chapters) return () => null;
+  const key = t => (t || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const strip = t => key(t).replace(/^(chapter\s+)?([0-9]+|[ivxlc]+)\s+/, '');
+  const map = new Map();
+  d.chapters.filter(c => c.kind === 'chapter').forEach(c => {
+    const a = (c.authors || '').split(';').map(x => x.trim()).filter(Boolean).join(', ');
+    [key(c.title), key([c.number, c.title].filter(Boolean).join(' '))].forEach(k => { if (k && !map.has(k)) map.set(k, a); });
+  });
+  return t => map.has(key(t)) ? map.get(key(t)) : map.has(strip(t)) ? map.get(strip(t)) : null;
 }
 
 function noteLocus(n, d) {
@@ -1990,7 +2004,12 @@ async function openReader(id, params) {
       side.append(h('h3', null, 'Contents'));
       const toc = h('div', { class: 'toc' });
       if (!ctx.tocItems.length) toc.append(h('div', { class: 'muted' }, 'This book has no table of contents.'));
-      ctx.tocItems.forEach(t => toc.append(h('a', { class: 'l' + Math.min(2, t.level) + (t.current ? ' cur' : ''), onclick: () => t.go() }, t.title)));
+      const volAuthor = tocAuthorLookup(d);
+      ctx.tocItems.forEach(t => {
+        const a = volAuthor(t.title);
+        toc.append(h('a', { class: 'l' + Math.min(2, t.level) + (t.current ? ' cur' : ''), onclick: () => t.go() }, t.title,
+          a === null ? null : h('span', { class: 'tca' + (a ? '' : ' unknown') }, a || 'Unknown author')));
+      });
       side.append(toc);
     } else {
       side.append(h('h3', null, 'Notes', h('span', { class: 'mono muted', style: { fontSize: '12px', fontWeight: 400, marginLeft: '6px' } }, ctx.notes.length)));

@@ -329,7 +329,7 @@ private fun ChapterRow(
                         fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 15.sp, color = Color.Black
                     )
                 } else {
-                    Text("Author not set — tap ✎", fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 14.sp, color = VolGrey)
+                    Text("Unknown author — tap ✎", fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 14.sp, color = VolGrey)
                 }
                 if (chapter.tags.isNotBlank()) {
                     Text(com.example.reader.TagSplitter.split(chapter.tags).joinToString("  ") { "#$it" },

@@ -332,6 +332,17 @@ object EditedVolumes {
         return msg
     }
 
+    /**
+     * The author line for a contents entry, matched by title: null when the entry is not a
+     * chapter of this edited volume, "" when the chapter's author is not known.
+     */
+    fun authorForContentsEntry(volume: EditedVolume, title: String): String? {
+        val lk = lookupFor(volume)
+        val i = lk.byTitle[norm(title)] ?: lk.byTitle[norm(ChapterTitles.split(title).second)] ?: return null
+        val c = volume.chapters[i]
+        return if (c.isArticle) c.authors.replace("; ", ", ") else null
+    }
+
     /** Starts a chapter at [page] with [raw] as its title (renames the one already starting there). */
     suspend fun startChapterAt(context: Context, document: DocumentEntity, page: Int, raw: String): String {
         var v = get(context, document.id)
