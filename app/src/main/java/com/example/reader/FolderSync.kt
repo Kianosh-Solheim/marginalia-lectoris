@@ -115,12 +115,13 @@ object FolderSync {
         app = context.applicationContext
         BibStore.init(app)
         PdfSelections.init(app)
+        SpokenComments.init(app)
         scope.launch {
             lock.withLock { loadState() }
             val db = AppDatabase.getInstance(app)
             // App → files: any change to a book, its notes or its bibliographic record.
             launch {
-                combine(db.documentDao().getAllDocuments(), db.highlightDao().getAllHighlights(), BibStore.version, PdfSelections.version) { d, h, _, _ -> d to h }
+                combine(db.documentDao().getAllDocuments(), db.highlightDao().getAllHighlights(), BibStore.version, PdfSelections.version, SpokenComments.version) { d, h, _, _, _ -> d to h }
                     .debounce(1200)
                     .collect { (docs, hls) -> runCatching { lock.withLock { syncAll(docs, hls, onlyChangedFiles = false) } }.onFailure { Log.w(TAG, "Sync failed", it) } }
             }
@@ -201,7 +202,7 @@ object FolderSync {
         sb.append(rec.entryType).append(rec.fields.toSortedMap().toString()).append('|')
         notes.forEach { h -> sb.append(h.id).append(h.title).append(h.highlightedText).append(h.userNotes).append(h.tags).append(h.pageNumber)
             .append(h.printedPageLabel).append(h.chapterTitle).append(h.paragraphCitation).append(h.epubCfi)
-            .append(PdfSelections.get(h, d).orEmpty()).append(';') }
+            .append(PdfSelections.get(h, d).orEmpty()).append(SpokenComments.forHighlight(h.id).hashCode()).append(';') }
         sb.append("links2|")
         sb.append(s.defaultTags).append(s.mocTitleFormat).append(s.wikiLinkStyle).append(s.customFrontmatterYaml).append(Citations.defaultStyle().name)
         return sha(sb.toString())

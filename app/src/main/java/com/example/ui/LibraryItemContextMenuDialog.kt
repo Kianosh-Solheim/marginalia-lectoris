@@ -65,6 +65,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -818,6 +820,28 @@ fun LibraryItemContextMenuDialog(
                             }
                         }
                     }
+                }
+
+                // Recordings made while reading this book
+                run {
+                    var showRecordings by remember { mutableStateOf(false) }
+                    val recChanges by com.example.reader.Recordings.changes.collectAsState()
+                    val recCount = remember(document.id, recChanges) {
+                        runCatching { com.example.reader.Recordings.list(context, document, settings).size }.getOrDefault(0)
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(0.dp), color = Color.White, border = BorderStroke(1.5.dp, Color.Black),
+                        modifier = Modifier.fillMaxWidth().clickable { showRecordings = true }
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Icon(Icons.Default.Mic, contentDescription = null, tint = Color.Black, modifier = Modifier.size(22.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(if (recCount > 0) "Recordings ($recCount)" else "Recordings", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
+                                Text("Talk while you read; play, transcribe and link what you said to your highlights", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
+                            }
+                        }
+                    }
+                    if (showRecordings) RecordingsDialog(document) { showRecordings = false }
                 }
 
                 HorizontalDivider(thickness = 1.5.dp, color = Color.Black)

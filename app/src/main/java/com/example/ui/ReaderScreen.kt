@@ -61,6 +61,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -697,9 +698,19 @@ fun ReaderScreen(
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    val recordingNow by com.example.reader.Recordings.active.collectAsState()
     val activeChapter = remember(chaptersList, currentActivePage) {
         chaptersList.filter { it.pageNumber <= currentActivePage }
             .maxByOrNull { it.pageNumber } ?: chaptersList.firstOrNull()
+    }
+
+    val recordingLabel = {
+        if (isPdfDocument) activePdfPrintedPageLabel.trim()
+        else runCatching { activeEpubPages.getOrNull(currentActivePage - 1)?.pageEquivalentLabel.orEmpty() }.getOrDefault("")
+    }
+    val toggleRecording = rememberRecordingToggle(document) { Triple(currentActivePage, recordingLabel(), activeChapter?.title.orEmpty()) }
+    LaunchedEffect(currentActivePage, recordingNow?.docId) {
+        if (recordingNow != null) com.example.reader.Recordings.page(document.id, currentActivePage, recordingLabel(), activeChapter?.title.orEmpty())
     }
 
     // Compute synchronized page info strings for the Top Bar and Bottom Info Bar
@@ -945,6 +956,8 @@ fun ReaderScreen(
                             showPdfTextToolsDialog = true
                         }
                     } else null,
+                    isRecording = recordingNow?.docId == document.id,
+                    onToggleRecording = toggleRecording,
                     onToggleTtsBar = {
                         if (isDaisyDocument) {
                             if (!showDaisyAudioBar) {
@@ -1668,6 +1681,11 @@ fun ReaderScreen(
             hasPageList = currentEpubBook?.hasPageList == true || activeEpubHasPageListMetadata || activeEpubPages.any { it.pageEquivalentLabel.isNotBlank() },
             totalStableLocations = currentEpubBook?.totalStableLocations ?: activeEpubPages.maxOfOrNull { it.endStableLocation } ?: 1
         )
+    }
+
+    // Recording mode: "● REC 12:34" with pause and stop, over the book while recording.
+    Box(Modifier.fillMaxSize().statusBarsPadding().padding(top = if (isUiVisible) 96.dp else 8.dp, end = 12.dp), contentAlignment = Alignment.TopEnd) {
+        RecordingBadge()
     }
 
     // "Go to printed page" action exposed when Quick Scrubber is open and publication has page list metadata

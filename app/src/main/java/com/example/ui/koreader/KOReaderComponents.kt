@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.BatteryFull
@@ -195,6 +196,8 @@ fun KOReaderTopBar(
     onOpenPdfCropMenu: (() -> Unit)? = null,
     onOpenPdfTextToolsMenu: (() -> Unit)? = null,
     onToggleTtsBar: (() -> Unit)? = null,
+    isRecording: Boolean = false,
+    onToggleRecording: (() -> Unit)? = null,
     onOpenAnnotationsMenu: () -> Unit,
     onOpenSettingsMenu: () -> Unit,
     glossaeEnabled: Boolean = false,
@@ -296,6 +299,9 @@ fun KOReaderTopBar(
                     cells += { ReaderToolCell(Icons.Default.FormatSize, "Type", activeTheme, onOpenTypesettingMenu, tag = "koreader_tab_typesetting") }
                     if (onToggleTtsBar != null) {
                         cells += { ReaderToolCell(Icons.Default.RecordVoiceOver, "Listen", activeTheme, onToggleTtsBar, active = isTtsPlaying || isTtsBarVisible, tag = "koreader_tab_tts") }
+                    }
+                    if (onToggleRecording != null) {
+                        cells += { ReaderToolCell(Icons.Default.Mic, if (isRecording) "Stop rec." else "Record", activeTheme, onToggleRecording, active = isRecording, tag = "koreader_tab_record") }
                     }
                     if (onToggleGlossae != null) {
                         cells += { ReaderToolCell(Icons.Default.Layers, "Glossae", activeTheme, onToggleGlossae, active = glossaeEnabled, tag = "koreader_tab_glossae") }

@@ -286,6 +286,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             what == "text-config" && (m == "PUT" || m == "PATCH") -> HttpResponse.json(saveTextConfig(doc, JSONObject(req.bodyText())).toString())
             what == "page-text" -> HttpResponse.json(pageText(doc, req.query["page"]?.toIntOrNull() ?: 1).toString())
             what == "page-check" -> HttpResponse.json(pageCheck(doc, req.query["page"]?.toIntOrNull() ?: 1).toString())
+            what == "recordings" -> recordingsRoute(doc, req, rest.drop(1))
             what == "set-as" && m == "POST" && rest.getOrNull(1) == "preview" -> HttpResponse.json(setAsPreview(doc, JSONObject(req.bodyText())).toString())
             what == "set-as" && m == "POST" -> HttpResponse.json(setAs(doc, JSONObject(req.bodyText())).toString())
             what == "export" -> export(doc, rest.getOrNull(1).orEmpty(), req)
@@ -626,6 +627,67 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             val index = if (href.isNotBlank()) runCatching { EpubIndex.of(context, File(doc.filePath)) }.getOrNull() else null
             if (index != null) EpubIndex.positionFor(index, href, b.optDouble("progression", 0.0)) else b.optInt("page", 1).coerceAtLeast(1)
         }
+
+    // ------------------------------------------------------------------------------- recordings
+
+    private fun recJson(r: com.example.reader.Recordings.Info): JSONObject = JSONObject()
+        .put("id", r.id).put("started", r.startedAt).put("durationMs", r.durationMs).put("events", r.events)
+        .put("size", r.audio.length()).put("language", r.language).put("transcribed", r.transcribed)
+        .put("status", com.example.reader.Transcripts.progress.value[r.id]
+            ?: com.example.reader.LocalWhisper.state.value.takeIf { it.busy && it.id == r.id }?.status ?: JSONObject.NULL)
+        .put("error", com.example.reader.Transcripts.lastError.value[r.id] ?: JSONObject.NULL)
+
+    private suspend fun recordingsRoute(doc: DocumentEntity, req: HttpRequest, rest: List<String>): HttpResponse {
+        val settings = ops.repository.getSettings()
+        val recs = com.example.reader.Recordings
+        if (rest.isEmpty()) {
+            val active = recs.active.value?.takeIf { it.docId == doc.id }
+            return HttpResponse.json(JSONObject()
+                .put("recordings", JSONArray().apply { recs.list(context, doc, settings).forEach { put(recJson(it)) } })
+                .put("recording", if (active == null) JSONObject.NULL else JSONObject().put("elapsedMs", active.elapsedMs).put("paused", active.paused))
+                .put("online", JSONArray().apply { com.example.reader.Transcripts.onlineProviders(context).forEach { put(JSONObject().put("id", it.name).put("label", it.label)) } })
+                .put("offline", com.example.reader.WhisperNative.available)
+                .toString()).header("Cache-Control", "no-store")
+        }
+        val info = recs.find(context, doc, settings, rest[0]) ?: throw NoSuchElementException("No such recording.")
+        val m = req.method
+        return when (rest.getOrNull(1).orEmpty()) {
+            "audio" -> HttpResponse.FileBody(info.audio, "audio/mp4", if (req.query["download"] == "1") info.audio.name else null)
+            "timeline" -> HttpResponse.json(recs.timeline(info).toString())
+            "transcript" -> when (m) {
+                "POST" -> {
+                    val b = JSONObject(req.bodyText(32 * 1024 * 1024))
+                    val segs = com.example.reader.Transcripts.parseSegments(b.optJSONArray("segments") ?: JSONArray())
+                    com.example.reader.Transcripts.save(context, doc, info, segs, b.optString("language", "auto"), b.optString("engine", "Whisper in the browser"))
+                    HttpResponse.json(recJson(recs.info(info.audio) ?: info).toString())
+                }
+                else -> if (req.query["format"] == "md") {
+                    if (!info.transcript.isFile) throw NoSuchElementException("Not transcribed yet.")
+                    if (req.query["download"] == "1") HttpResponse.FileBody(info.transcript, "text/markdown; charset=utf-8", info.transcript.name)
+                    else HttpResponse.text(200, info.transcript.readText(), "text/markdown; charset=utf-8")
+                } else {
+                    val f = File(info.audio.parentFile, info.id + ".transcript.json")
+                    if (!f.isFile) throw NoSuchElementException("Not transcribed yet.")
+                    HttpResponse.json(f.readText())
+                }
+            }
+            "transcribe" -> {
+                val b = JSONObject(req.bodyText())
+                val lang = b.optString("language", "auto").let { if (it == "no" || it == "en") it else "auto" }
+                com.example.reader.Transcripts.clearError(info.id)
+                when (b.optString("engine")) {
+                    "tablet" -> com.example.reader.LocalWhisper.start(context, doc, info, lang)
+                    else -> {
+                        val p = runCatching { com.example.reader.AiProvider.valueOf(b.optString("provider")) }.getOrElse { throw IllegalArgumentException("Choose a service.") }
+                        com.example.reader.Transcripts.startOnline(context, doc, info, p, lang)
+                    }
+                }
+                HttpResponse.json(recJson(info).toString())
+            }
+            "" -> if (m == "DELETE") { recs.delete(info); HttpResponse.json("{}") } else HttpResponse.json(recJson(info).toString())
+            else -> throw NoSuchElementException("Unknown address.")
+        }
+    }
 
     private suspend fun setAsPreview(doc: DocumentEntity, b: JSONObject): JSONObject {
         BibStore.init(context)

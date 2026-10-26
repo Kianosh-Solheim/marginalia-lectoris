@@ -8,6 +8,8 @@ plugins {
   id("org.jetbrains.kotlin.plugin.serialization") version "2.2.10"
 }
 
+val whisperSource = file("src/main/cpp/whisper.cpp/CMakeLists.txt")
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -21,6 +23,13 @@ android {
     versionName = System.getenv("APP_VERSION_NAME") ?: "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    // Offline transcription (whisper.cpp) is built for 64-bit ARM, which the Boox tablets use.
+    if (whisperSource.exists()) ndk { abiFilters += listOf("arm64-v8a") }
+  }
+
+  // whisper.cpp is fetched by the GitHub build; without it the app builds without offline transcription.
+  if (whisperSource.exists()) {
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt") } }
   }
 
   signingConfigs {

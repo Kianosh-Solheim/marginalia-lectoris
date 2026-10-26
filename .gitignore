@@ -24,3 +24,6 @@ debug.keystore
 /.idea
 github-secrets.txt
 _to_delete/
+
+/app/src/main/cpp/whisper.cpp
+/app/.cxx

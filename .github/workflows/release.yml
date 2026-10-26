@@ -40,6 +40,9 @@ jobs:
           test -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}" || { echo "::error::No Android SDK on this runner"; exit 1; }
           yes | "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
+      - name: Speech recognition source (whisper.cpp, MIT)
+        run: git clone --quiet --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp app/src/main/cpp/whisper.cpp
+
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '9.3.1'

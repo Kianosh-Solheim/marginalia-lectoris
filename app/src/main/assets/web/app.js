@@ -223,6 +223,169 @@ function header() {
   ));
 }
 
+// ------------------------------------------------------------------ recordings
+
+function clockOf(ms) { const s = Math.floor((ms || 0) / 1000); return s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+const recPath = (d, r, tail) => `doc/${d.id}/recordings/${encodeURIComponent(r.id)}${tail ? '/' + tail : ''}`;
+
+/** The book page's Recordings section: play, transcribe (here, on the tablet, online), read, delete. */
+function recordingsSection(d) {
+  const box = h('div', { class: 'section', hidden: true });
+  let timer = 0;
+  const load = async () => {
+    let data;
+    try { data = await api(`doc/${d.id}/recordings`); } catch (_) { return; }
+    const list = data.recordings || [];
+    if (!list.length && !data.recording) { box.hidden = true; return; }
+    box.hidden = false;
+    clear(box).append(h('h2', null, 'Recordings', h('span', { class: 'count' }, list.length),
+      data.recording ? h('span', { class: 'recnow' }, (data.recording.paused ? 'Paused ' : '● Recording ') + clockOf(data.recording.elapsedMs)) : null));
+    list.forEach(r => box.append(recordingItem(d, r, data, load)));
+    clearTimeout(timer);
+    if (box.isConnected || !box.parentNode) timer = setTimeout(() => { if (box.isConnected) load(); }, list.some(r => r.status) || data.recording ? 3000 : 20000);
+  };
+  load();
+  return box;
+}
+
+function recordingItem(d, r, data, reload) {
+  const when = new Date(r.started).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const lang = { no: 'Norwegian', en: 'English' }[r.language] || '';
+  const engines = [
+    { label: 'On this computer', hint: 'Whisper in this browser', fn: () => transcribeHere(d, r, reload) },
+    data.offline ? { label: 'On the tablet', hint: 'offline, slow', fn: () => askLanguage(r, lang => api(recPath(d, r, 'transcribe'), { method: 'POST', json: { engine: 'tablet', language: lang } }).then(() => { toast('Transcribing on the tablet'); reload(); }).catch(fail)) } : null,
+    ...(data.online || []).map(p => ({ label: 'With ' + p.label, hint: 'audio is sent to ' + p.label, fn: () => askLanguage(r, lang => api(recPath(d, r, 'transcribe'), { method: 'POST', json: { engine: 'online', provider: p.id, language: lang } }).then(() => { toast('Sent to ' + p.label); reload(); }).catch(fail)) }))
+  ].filter(Boolean);
+  return h('div', { class: 'rec' },
+    h('div', { class: 'rec-head' },
+      h('b', null, when),
+      h('span', { class: 'mono muted' }, [clockOf(r.durationMs), `${r.events} events`, fmtSize(r.size), r.transcribed ? 'transcribed' + (lang ? ' · ' + lang : '') : ''].filter(Boolean).join(' · '))),
+    h('audio', { controls: true, preload: 'none', src: '/api/' + recPath(d, r, 'audio') }),
+    r.status ? h('div', { class: 'rec-status' }, r.status) : null,
+    r.error ? h('div', { class: 'warn' }, r.error) : null,
+    h('div', { class: 'row' },
+      r.transcribed ? h('button', { class: 'btn', onclick: () => showTranscript(d, r) }, 'Transcript') : null,
+      menuButton(r.transcribed ? 'Transcribe again ▾' : 'Transcribe ▾', engines.map(e => [e.label, e.hint, e.fn]), r.transcribed ? 'btn' : 'btn fill'),
+      menuButton('Download ▾', [
+        ['Audio (.m4a)', '', () => download(recPath(d, r, 'audio') + '?download=1', 'Downloading…')],
+        r.transcribed ? ['Transcript (.md)', 'with links to your highlights', () => download(recPath(d, r, 'transcript') + '?format=md&download=1', 'Downloading…')] : null
+      ].filter(Boolean)),
+      h('button', { class: 'btn quiet', onclick: () => confirmBox('Delete this recording?', 'The audio, timeline and transcript are deleted, and the spoken comments it added to your notes are removed.', 'Delete', async () => {
+        try { await api(recPath(d, r), { method: 'DELETE' }); toast('Recording deleted'); reload(); } catch (e) { fail(e); }
+      }) }, 'Delete')));
+}
+
+function askLanguage(r, then) {
+  modal((box, close) => {
+    let lang = r.language === 'no' || r.language === 'en' ? r.language : 'auto';
+    const chips = h('div', { class: 'row' });
+    const draw = () => clear(chips).append(...[['auto', 'Detect'], ['no', 'Norwegian'], ['en', 'English']].map(([v, l]) => h('button', { class: 'chip' + (lang === v ? ' on' : ''), onclick: () => { lang = v; draw(); } }, l)));
+    draw();
+    box.append(h('h2', null, 'Language of the recording'),
+      h('p', { class: 'muted', style: { marginTop: 0 } }, 'Choosing it gives better results; Norwegian uses the National Library’s NB-Whisper.'),
+      chips,
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: () => { close(); then(lang); } }, 'Transcribe')));
+  });
+}
+
+async function showTranscript(d, r) {
+  let md;
+  try {
+    const res = await fetch('/api/' + recPath(d, r, 'transcript') + '?format=md', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('Could not load the transcript.');
+    md = await res.text();
+  } catch (e) { fail(e); return; }
+  const body = md.replace(/^---[\s\S]*?\n---\n/, '').trim();
+  const audio = h('audio', { controls: true, src: '/api/' + recPath(d, r, 'audio'), style: { width: '100%' } });
+  const out = h('div', { class: 'transcript' });
+  body.split('\n').forEach(line => {
+    if (/^!\[\[/.test(line)) return;
+    const head = /^### \[\[[^|\]]*#t=(\d+)\|([^\]]+)\]\]\s*(.*)$/.exec(line);
+    if (head) {
+      out.append(h('h4', null, h('a', { href: 'javascript:void 0', onclick: () => { audio.currentTime = +head[1]; audio.play(); } }, '▶ ' + head[2]), ' ', head[3].replace(/\[\[([^\]]+)\]\]/g, '$1')));
+    } else if (/^> /.test(line)) out.append(h('blockquote', null, line.slice(2)));
+    else if (line.trim()) out.append(h('p', null, line));
+  });
+  modal((box, close) => {
+    box.classList.add('wide');
+    box.append(h('h2', null, 'Transcript'), h('div', { class: 'muted', style: { marginBottom: '8px' } }, new Date(r.started).toLocaleString()), audio, out,
+      h('div', { class: 'foot' },
+        h('button', { class: 'btn', onclick: () => copyText(md, 'Transcript copied as Markdown') }, 'Copy Markdown'),
+        h('button', { class: 'btn fill', onclick: close }, 'Close')));
+  }, () => { try { audio.pause(); } catch (_) {} });
+}
+
+/** Whisper running in this browser (transformers.js). The model is downloaded once and kept by the browser. */
+const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6';
+let asrCache = {};
+async function transcribeHere(d, r, reload) {
+  askLanguage(r, async lang => {
+    const gpu = !!navigator.gpu;
+    let cancelled = false;
+    const status = h('div', { class: 'mono', style: { fontSize: '12px', margin: '10px 0' } }, 'Loading Whisper…');
+    const bar = h('div', { class: 'pbar' }, h('i'));
+    const setP = (text, frac) => { status.textContent = text; if (frac != null) bar.firstChild.style.width = Math.round(frac * 100) + '%'; };
+    const close = modal((box, close) => {
+      box.append(h('h2', null, 'Transcribing on this computer'),
+        h('p', { class: 'muted', style: { marginTop: 0 } }, gpu ? 'Using the graphics card (WebGPU).' :
+          'This browser does not offer WebGPU on this address, so Whisper runs on the processor, which is slower. To use the graphics card in Chrome or Edge, open chrome://flags, find “Insecure origins treated as secure”, add ' + location.origin + ' and restart the browser.'),
+        status, bar,
+        h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Keep this tab open until it is done. The first time, the speech model is downloaded (about 250–400 MB) and kept by the browser.'),
+        h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: () => { cancelled = true; close(); } }, 'Cancel')));
+    }, () => { cancelled = true; });
+    try {
+      const { pipeline, env } = await import(TRANSFORMERS);
+      env.allowLocalModels = false;
+      const model = lang === 'no' ? 'onnx-community/nb-whisper-small-ONNX' : 'onnx-community/whisper-small';
+      const key = model + (gpu ? ':gpu' : ':cpu');
+      const files = {};
+      if (!asrCache[key]) {
+        asrCache[key] = pipeline('automatic-speech-recognition', model, {
+          device: gpu ? 'webgpu' : 'wasm',
+          dtype: gpu ? { encoder_model: 'fp16', decoder_model_merged: 'q4' } : { encoder_model: 'q8', decoder_model_merged: 'q8' },
+          progress_callback: p => {
+            if (p.status === 'progress' && p.file) {
+              files[p.file] = [p.loaded || 0, p.total || 0];
+              const v = Object.values(files), got = v.reduce((a, x) => a + x[0], 0), all = v.reduce((a, x) => a + x[1], 0);
+              setP(`Downloading the speech model: ${Math.round(got / 1e6)} of ${Math.round(all / 1e6)} MB`, all ? got / all : null);
+            }
+          }
+        });
+      }
+      const asr = await asrCache[key];
+      if (cancelled) return;
+      setP('Reading the recording…', 0);
+      const buf = await (await fetch('/api/' + recPath(d, r, 'audio'), { credentials: 'same-origin' })).arrayBuffer();
+      const actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const audio = await actx.decodeAudioData(buf);
+      actx.close();
+      const pcm = audio.getChannelData(0);
+      const CH = 16000 * 300, total = pcm.length, segments = [];
+      let detected = lang === 'auto' ? '' : lang;
+      for (let off = 0; off < total; off += CH) {
+        if (cancelled) return;
+        setP(`Transcribing: ${Math.round(off / total * 100)}%  (${clockOf(off / 16)} of ${clockOf(total / 16)})`, off / total);
+        const part = pcm.subarray(off, Math.min(total, off + CH));
+        const opts = { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' };
+        if (lang === 'no') opts.language = 'norwegian'; else if (lang === 'en') opts.language = 'english';
+        const res = await asr(part, opts);
+        const base = off / 16;
+        (res.chunks || [{ timestamp: [0, part.length / 16000], text: res.text }]).forEach(c => {
+          const t = (c.text || '').trim(); if (!t || /^\[.*\]$/.test(t)) return;
+          const [a, b] = c.timestamp || [0, null];
+          segments.push({ start: Math.round(base + (a || 0) * 1000), end: Math.round(base + ((b == null ? a : b) || 0) * 1000), text: t });
+        });
+      }
+      setP('Linking to your highlights on the tablet…', 1);
+      await api(recPath(d, r, 'transcript'), { method: 'POST', json: { segments, language: detected || 'auto', engine: 'Whisper in the browser (' + (gpu ? 'WebGPU' : 'CPU') + ')' } });
+      close(); toast('Transcribed — saved on the tablet'); reload();
+    } catch (e) {
+      console.error(e);
+      setP('Could not transcribe: ' + (e.message || e));
+    }
+  });
+}
+
 // ------------------------------------------------------------------ right-click menus
 
 let cmRoot = null;
@@ -1045,6 +1208,7 @@ function renderBook(main, d) {
     d.summary ? h('div', { class: 'section' }, h('h2', null, 'Abstract'), h('div', { class: 'summary' }, d.summary)) : null,
     d.chapters ? chaptersSection(d) : null,
     notesSection(d, main),
+    recordingsSection(d),
     bibSection(d, main));
 
   main.append(h('div', { class: 'book' }, left, right));

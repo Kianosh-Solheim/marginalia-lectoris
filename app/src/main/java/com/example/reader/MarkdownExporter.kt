@@ -652,6 +652,9 @@ object MarkdownExporter {
         } else {
             sb.appendLine("*Part of [$linkToMoc](${sanitizeFilename(linkToMoc)}.md)*")
         }
+        // What was said about this highlight while recording (after the footer, so it is never read back as your notes).
+        val spoken = SpokenComments.markdownFor(highlight.id)
+        if (spoken.isNotBlank()) sb.append(spoken)
 
         return sb.toString()
     }
