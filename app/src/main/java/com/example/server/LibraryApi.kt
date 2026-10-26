@@ -64,6 +64,14 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         if (p == "/api/session") {
             return HttpResponse.json(JSONObject().put("signedIn", authed(req)).put("device", deviceName()).toString())
         }
+        // The tablet's own presenter screen (a WebView on 127.0.0.1) signs in with a token only the app knows.
+        if (p == "/api/local-login" && (req.remote.startsWith("127.") || req.remote == "::1" || req.remote.endsWith(":127.0.0.1")) &&
+            WebServer.localToken.isNotBlank() && req.query["t"] == WebServer.localToken) {
+            val token = Sessions.create(context)
+            val next = req.query["next"].orEmpty().takeIf { it.startsWith("#/") } ?: "#/"
+            return HttpResponse.text(302, "").header("Location", "/$next")
+                .header("Set-Cookie", "$COOKIE=$token; Path=/; Max-Age=${30 * 24 * 3600}; HttpOnly; SameSite=Strict")
+        }
         if (!authed(req)) return HttpResponse.error(401, "Sign in with the PIN shown on the tablet.")
         if (req.method != "GET" && req.method != "HEAD" && req.header("x-marginalia") != "1") {
             return HttpResponse.error(403, "Missing request header.")
@@ -100,6 +108,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 return HttpResponse.json(JSONObject().put("documents", JSONArray(t.documents)).put("notes", JSONArray(t.notes)).toString())
             }
             s == listOf("upload") && m == "POST" -> return upload(req)
+            s.firstOrNull() == "presentations" -> return presentationsRoute(req, s.drop(1))
+            s.firstOrNull() == "live" -> return liveRoute(req, s.drop(1))
             s == listOf("settings") && m == "GET" -> return HttpResponse.json(settingsApi.get().toString()).header("Cache-Control", "no-store")
             s == listOf("settings") && (m == "PUT" || m == "PATCH") -> return HttpResponse.json(settingsApi.put(JSONObject(req.bodyText())).toString())
             s == listOf("settings", "ai-key") && m == "POST" -> return HttpResponse.json(settingsApi.setKey(JSONObject(req.bodyText())).toString())
@@ -627,6 +637,57 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             val index = if (href.isNotBlank()) runCatching { EpubIndex.of(context, File(doc.filePath)) }.getOrNull() else null
             if (index != null) EpubIndex.positionFor(index, href, b.optDouble("progression", 0.0)) else b.optInt("page", 1).coerceAtLeast(1)
         }
+
+    // ------------------------------------------------------------------------------- presentations
+
+    private suspend fun presentationsRoute(req: HttpRequest, rest: List<String>): HttpResponse {
+        val m = req.method
+        val P = Presentations
+        if (rest.isEmpty()) {
+            return when (m) {
+                "POST" -> {
+                    val name = File(req.query["name"].orEmpty()).name.ifBlank { "presentation.pptx" }
+                    require(req.contentLength > 0) { "The file is empty." }
+                    HttpResponse.json(P.json(P.add(context, name, req.body)).toString(), 201)
+                }
+                else -> HttpResponse.json(JSONObject().put("presentations", JSONArray().apply { P.list(context).forEach { put(P.json(it)) } }).toString())
+                    .header("Cache-Control", "no-store")
+            }
+        }
+        val d = P.get(context, rest[0]) ?: throw NoSuchElementException("No such presentation.")
+        return when (rest.getOrNull(1).orEmpty()) {
+            "" -> when (m) {
+                "DELETE" -> { P.delete(d); HttpResponse.json("{}") }
+                "PATCH" -> { P.rename(d, JSONObject(req.bodyText()).optString("title")); HttpResponse.json(P.json(P.get(context, d.id) ?: d).toString()) }
+                else -> HttpResponse.json(P.json(d).put("info", P.info(d)).put("myNotes", P.myNotes(d)).put("ink", P.ink(d)).toString()).header("Cache-Control", "no-store")
+            }
+            "file" -> HttpResponse.FileBody(d.file, MiniHttpServer.mimeFor(d.file.name), if (req.query["download"] == "1") d.file.name else null)
+            "notes" -> { val b = JSONObject(req.bodyText()); P.setMyNote(d, b.optInt("slide"), b.optString("text")); HttpResponse.json(P.myNotes(d).toString()) }
+            "ink" -> { val b = JSONObject(req.bodyText(8 * 1024 * 1024)); P.setInk(d, b.optInt("slide"), b.optJSONArray("strokes") ?: JSONArray()); HttpResponse.json("{}") }
+            else -> throw NoSuchElementException("Unknown address.")
+        }
+    }
+
+    private fun liveRoute(req: HttpRequest, rest: List<String>): HttpResponse {
+        val P = Presentations
+        return when {
+            rest.isEmpty() && req.method == "POST" -> {
+                val b = JSONObject(req.bodyText(8 * 1024 * 1024))
+                P.presenterSeen = System.currentTimeMillis()
+                P.setLive(b.optString("id"), b.optInt("slide"), b.optBoolean("black"), b.optJSONArray("ink"))
+                HttpResponse.json(P.liveJson().toString())
+            }
+            rest.isEmpty() -> {
+                if (req.query["role"] == "audience") P.audienceSeen(req.remote)
+                val since = req.query["since"]?.toLongOrNull() ?: -1
+                val l = if (since >= 0) P.waitLive(since, 25_000) else P.live
+                HttpResponse.json(P.liveJson(l).put("presenterSeen", P.presenterSeen)
+                    .put("addresses", JSONArray().apply { WebServer.addresses.value.forEach { a -> put(JSONObject().put("label", a.label).put("url", a.url)) } }).toString())
+                    .header("Cache-Control", "no-store")
+            }
+            else -> throw NoSuchElementException("Unknown address.")
+        }
+    }
 
     // ------------------------------------------------------------------------------- recordings
 

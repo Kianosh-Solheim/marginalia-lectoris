@@ -162,6 +162,7 @@ function route() {
   const params = new URLSearchParams(qs || '');
   const parts = path.split('/').filter(Boolean);
   closeReader();
+  if (typeof stopLive === 'function') stopLive();
   state.uploadFolder = null;
   state.currentBook = parts[0] === 'book' && parts[1] ? +parts[1] : null;
   state.currentDoc = null;
@@ -169,6 +170,9 @@ function route() {
   if (parts[0] === 'read' && parts[1]) return openReader(+parts[1], params);
   if (parts[0] === 'notes') { state.tab = 'notes'; return showNotes(); }
   if (parts[0] === 'settings') { state.tab = 'settings'; return showSettings(); }
+  if (parts[0] === 'presentations') { state.tab = 'presentations'; return showPresentations(); }
+  if (parts[0] === 'presenter' && parts[1]) return showPresenter(decodeURIComponent(parts[1]), params);
+  if (parts[0] === 'audience') return showAudience();
   state.tab = ['books', 'articles'].includes(parts[0]) ? parts[0] : 'all';
   return showLibrary();
 }
@@ -203,7 +207,7 @@ function showLogin() {
 // ------------------------------------------------------------------ header
 
 function header() {
-  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['settings', 'Settings', '#/settings']];
+  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['presentations', 'Presentations', '#/presentations'], ['settings', 'Settings', '#/settings']];
   const search = h('input', { type: 'search', class: 'search', placeholder: 'Search title, author, tag…', value: state.query });
   search.addEventListener('input', () => {
     state.query = search.value;
@@ -2012,6 +2016,8 @@ window.addEventListener('drop', e => {
     });
     else toast('Open a book first, then drop its .ris file on its page');
   }
+  const decks = files.filter(f => isPresentationFile(f) || (state.tab === 'presentations' && /\.pdf$/i.test(f.name)));
+  if (decks.length) { files = files.filter(f => !decks.includes(f)); uploadDecks(decks); }
   if (files.length) uploadFiles(files);
 });
 

@@ -446,3 +446,46 @@ input.tagtype { flex: 1 1 140px; min-width: 120px; border: 0 !important; padding
 .transcript h4 a { font-family: var(--mono); text-decoration: none; }
 .transcript blockquote { margin: 4px 0 6px; padding-left: 10px; border-left: 3px solid #FFEB3B; color: var(--grey); font-size: 14px; }
 .transcript p { margin: 0 0 6px; }
+
+/* ---------- presentations */
+.pres-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; }
+.pres-card { border: 1.5px solid var(--ink); display: flex; flex-direction: column; }
+.pres-thumb { aspect-ratio: 16 / 9; background: var(--wash); overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 12px; color: var(--soft); border-bottom: 1px solid var(--ink); }
+.pres-thumb > * { position: absolute !important; left: 0; top: 0; }
+.pres-info { padding: 10px 12px 12px; }
+.pres-info .t { font-family: var(--serif); font-size: 17px; font-weight: 700; margin-bottom: 2px; }
+body.presenting { overflow: hidden; }
+.presenter { position: fixed; inset: 0; display: flex; flex-direction: column; background: #f4f4f5; }
+.p-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--paper); border-bottom: 1.5px solid var(--ink); flex-wrap: wrap; }
+.p-title { font-family: var(--serif); font-size: 16px; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-status { font-size: 12px; color: var(--soft); } .p-status.ok { color: #15803d; } .p-status.bad { color: #b91c1c; }
+.p-body { flex: 1; display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1fr); gap: 14px; padding: 14px; min-height: 0; }
+.p-left { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
+.p-curwrap { position: relative; width: 100%; max-height: calc(100vh - 150px); }
+.p-cur, .p-next { position: relative; width: 100%; background: #fff; border: 1px solid var(--ink); overflow: hidden; }
+.p-cur > *, .p-next > * { position: absolute !important; left: 0; top: 0; }
+.p-right { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.p-notes { background: var(--paper); border: 1px solid var(--rule); padding: 8px 10px; font-size: 16px; line-height: 1.45; overflow: auto; min-height: 80px; max-height: 34vh; }
+.p-notes p { margin: 0 0 6px; }
+.p-mine { min-height: 120px; flex: 1; font-size: 15px; }
+.p-end { position: static !important; display: flex; align-items: center; justify-content: center; height: 100%; color: var(--soft); font-family: var(--mono); font-size: 12px; aspect-ratio: auto; }
+.p-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.p-tools .swatch { width: 22px; height: 22px; border: 1px solid var(--ink); cursor: pointer; padding: 0; }
+canvas.ink { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; touch-action: none; }
+canvas.ink.active { pointer-events: auto; cursor: crosshair; }
+.presenter.eink * { transition: none !important; animation: none !important; }
+@media (max-width: 860px) { .p-body { grid-template-columns: 1fr; overflow: auto; } }
+.audience { position: fixed; inset: 0; background: #000; cursor: none; }
+.audience.cursor { cursor: default; }
+.aud-stage { position: absolute; overflow: hidden; background: #000; }
+.aud-layer { position: absolute; inset: 0; background: #fff; }
+.aud-layer > * { position: absolute !important; left: 0; top: 0; }
+.aud-ink { z-index: 5; }
+.aud-black { position: absolute; inset: 0; background: #000; z-index: 10; }
+.aud-wait { position: absolute; inset: 0; z-index: 11; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #e4e4e7; text-align: center; padding: 24px; cursor: default; }
+.aud-wait[hidden] { display: none; }
+.aud-wait h1 { font-family: var(--serif); color: #fff; }
+.aud-wait .btn { background: #fff; color: #000; }
+.odp-page { position: relative; overflow: hidden; font-family: "Liberation Sans", Arial, sans-serif; }
+.odp-shape { position: absolute; box-sizing: border-box; overflow: hidden; }
+.odp-text { position: absolute; inset: 0; display: flex; flex-direction: column; padding: 0.15em 0.25em; line-height: 1.2; color: #000; }

@@ -39,6 +39,9 @@ object WebServer {
     /** Browsers that used the server in the last two minutes. */
     val activeBrowsers = mutableIntStateOf(0)
 
+    /** Lets the tablet's own presenter screen (on 127.0.0.1) sign in without the PIN. */
+    val localToken: String = java.util.UUID.randomUUID().toString().replace("-", "")
+    fun port(): Int? = http?.port
     @Volatile internal var http: MiniHttpServer? = null
     @Volatile internal var api: LibraryApi? = null
     @Volatile var lastActivity: Long = 0L
@@ -113,7 +116,7 @@ object WebServer {
     private fun labelFor(name: String): String? {
         val n = name.lowercase()
         return when {
-            n.startsWith("rndis") || n.startsWith("usb") || n.startsWith("ncm") -> null
+            n.startsWith("rndis") || n.startsWith("usb") || n.startsWith("ncm") -> "USB cable"
             n.startsWith("swlan") || n.startsWith("ap") || n.startsWith("softap") -> "Tablet hotspot"
             n.startsWith("wlan") || n.startsWith("wifi") -> "Wi‑Fi"
             n.startsWith("eth") -> "Ethernet"
