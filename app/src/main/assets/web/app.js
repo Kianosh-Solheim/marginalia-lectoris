@@ -390,6 +390,160 @@ async function transcribeHere(d, r, reload) {
   });
 }
 
+// ------------------------------------------------------------------ reader: info panel (left, like Zotero)
+
+const INFO_ORDER = ['TITLE', 'SUBTITLE', '@AUTHOR', 'EDITOR', 'TRANSLATOR', 'JOURNAL', 'BOOKTITLE', 'PUBLISHER', 'PLACE', 'YEAR', 'EDITION',
+  'VOLUME', 'ISSUE', 'PAGES', 'SERIES', 'LANGUAGE', 'DOI', 'ISBN', 'ISSN', 'URL', 'CITEKEY'];
+const INFO_LABELS = { SUBTITLE: 'Subtitle', EDITOR: 'Editor(s)', TRANSLATOR: 'Translator', JOURNAL: 'Publication', BOOKTITLE: 'Book title', PUBLISHER: 'Publisher',
+  PLACE: 'Place', YEAR: 'Date', EDITION: 'Edition', VOLUME: 'Volume', ISSUE: 'Issue', PAGES: 'Pages', SERIES: 'Series', LANGUAGE: 'Language', DOI: 'DOI', ISBN: 'ISBN', ISSN: 'ISSN', URL: 'URL', CITEKEY: 'Citation key' };
+const INFO_TYPES = [['book', 'Book'], ['article', 'Journal article'], ['incollection', 'Book section'], ['inbook', 'Book chapter'], ['phdthesis', 'Thesis'], ['techreport', 'Report'], ['misc', 'Other']];
+
+function infoPanel(ctx) {
+  const box = h('div', { class: 'info' });
+  const open = JSON.parse(localGet('ml.infoOpen', '{"info":true,"abstract":true,"tags":true,"cite":true,"chapter":true,"file":false}'));
+  const sec = (key, title, body, extra) => {
+    const content = h('div', { class: 'info-body', hidden: !open[key] });
+    const head = h('button', { class: 'info-head', onclick: () => { open[key] = content.hidden; content.hidden = !content.hidden; head.classList.toggle('closed', content.hidden); localSet('ml.infoOpen', JSON.stringify(open)); } },
+      h('span', null, title), extra || null, h('span', { class: 'chev' }, '⌃'));
+    head.classList.toggle('closed', !open[key]);
+    content.append(...[].concat(body).filter(Boolean));
+    return h('section', { class: 'info-sec' }, head, content);
+  };
+  const reload = async () => { try { const fresh = await api(`doc/${ctx.d.id}`); Object.assign(ctx.d, fresh); draw(); } catch (e) { fail(e); } };
+  const saveDoc = async patch => { await api(`doc/${ctx.d.id}`, { method: 'PATCH', json: patch }); toast('Saved'); await reload(); };
+  const saveBib = async patch => { await api(`doc/${ctx.d.id}/bib`, { method: 'PUT', json: patch }); toast('Saved'); await reload(); };
+
+  /** A Zotero-style row: label left, value right; click the value to edit it. */
+  const row = (label, value, onSave, opts = {}) => {
+    const val = h('div', { class: 'info-val' + (value ? '' : ' empty'), tabindex: onSave ? 0 : -1, title: onSave ? 'Click to edit' : '' });
+    const show = () => { clear(val).append(value ? (opts.link ? h('a', { href: opts.link(value), target: '_blank', rel: 'noopener' }, value) : value) : ''); };
+    show();
+    if (onSave) {
+      const edit = () => {
+        if (val.querySelector('input,textarea,select')) return;
+        const inp = opts.long ? h('textarea', { rows: opts.rows || 3 }) : h('input', { type: 'text' });
+        inp.value = value || '';
+        clear(val).append(inp); inp.focus(); inp.select && inp.select();
+        let done = false;
+        const finish = async ok => {
+          if (done) return; done = true;
+          const v = inp.value.trim();
+          if (!ok || v === (value || '').trim()) { show(); return; }
+          val.classList.add('saving');
+          try { await onSave(v); } catch (e) { fail(e); show(); }
+          val.classList.remove('saving');
+        };
+        inp.addEventListener('keydown', e => { if (e.key === 'Enter' && (!opts.long || e.ctrlKey || e.metaKey)) { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } });
+        inp.addEventListener('blur', () => finish(true));
+      };
+      val.addEventListener('click', e => { if (e.target.tagName !== 'A') edit(); });
+      val.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); edit(); } });
+    }
+    return h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, label), val);
+  };
+
+  function chapterNow() {
+    const d = ctx.d;
+    if (!d.chapters || !ctx.place) return null;
+    const p = ctx.place();
+    const at = p.page || p.pos || 0;
+    const list = d.chapters.filter(c => c.kind === 'chapter');
+    return list.filter(c => c.startPage <= at && (!c.endPage || at <= c.endPage)).pop() || null;
+  }
+
+  function draw() {
+    const d = ctx.d, bib = d.bib || { fields: {}, labels: {} }, f = bib.fields || {}, L = bib.labels || {};
+    const isArticle = d.category === 'ARTICLE';
+    // Item type
+    const typeSel = h('select', { class: 'info-type' }, INFO_TYPES.map(([v, l]) => h('option', { value: v }, l)));
+    typeSel.value = bib.entryType || (isArticle ? 'article' : 'book');
+    typeSel.addEventListener('change', () => saveBib({ _type: typeSel.value }).catch(fail));
+    const shelf = h('div', { class: 'row', style: { gap: '4px' } }, [['BOOK', 'Book'], ['ARTICLE', 'Article']].map(([v, l]) =>
+      h('button', { class: 'chip' + (d.category === v ? ' on' : ''), onclick: () => { if (d.category !== v) saveDoc({ category: v }).catch(fail); } }, l)));
+    const rows = [h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Item type'), h('div', { class: 'info-val' }, typeSel)),
+      h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Shelf'), h('div', { class: 'info-val' }, shelf))];
+    INFO_ORDER.forEach(k => {
+      if (k === 'TITLE') { rows.push(row('Title', d.title, v => saveDoc({ title: v }), { long: true, rows: 2 })); return; }
+      if (k === '@AUTHOR') {
+        rows.push(row(d.folder ? 'Editor(s)' : 'Author(s)', d.author, v => saveDoc({ author: v })));
+        return;
+      }
+      if (isArticle && k === 'BOOKTITLE' && !f[k]) return;
+      if (!isArticle && (k === 'JOURNAL' || k === 'ISSUE') && !f[k]) return;
+      const label = INFO_LABELS[k] ? (k === 'JOURNAL' && !isArticle ? 'Container' : INFO_LABELS[k]) : (L[k] || k);
+      rows.push(row(label, f[k] || '', v => saveBib({ [k]: v }), {
+        link: k === 'DOI' ? v => 'https://doi.org/' + v.replace(/^https?:\/\/(dx\.)?doi\.org\//, '') : k === 'URL' ? v => v : null
+      }));
+    });
+    rows.push(row('Added', fmtDate(d.dateAdded)), row('Last read', fmtDate(d.lastRead)));
+    const tools = h('div', { class: 'row', style: { margin: '8px 0 2px', gap: '4px' } },
+      h('button', { class: 'btn', onclick: async () => { try { editAll(await api(`doc/${d.id}`), 'lookup'); } catch (e) { fail(e); } } }, 'Look up details'),
+      h('button', { class: 'btn quiet', onclick: async () => { try { editAll(await api(`doc/${d.id}`)); } catch (e) { fail(e); } } }, 'Edit all…'));
+
+    // Abstract
+    const abs = row('', d.summary, v => saveDoc({ summary: v }), { long: true, rows: 8 });
+    abs.classList.add('info-abstract');
+    // Tags
+    const tagBox = h('div');
+    const tagList = splitTags(d.tags);
+    const drawTags = () => {
+      clear(tagBox);
+      const chips = h('div', { class: 'tags', style: { margin: '0 0 6px' } }, tagList.map(t => h('span', { class: 'tag' }, '#' + t,
+        h('button', { class: 'tag-x', title: 'Remove', onclick: () => saveDoc({ tags: tagList.filter(x => x !== t).join(', ') }).catch(fail) }, '×'))));
+      const add = h('input', { placeholder: 'Add a tag and press Enter' });
+      add.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' || !add.value.trim()) return;
+        const more = splitTags(add.value).filter(t => !tagList.some(x => x.toLowerCase() === t.toLowerCase()));
+        saveDoc({ tags: tagList.concat(more).join(', ') }).catch(fail);
+      });
+      tagBox.append(tagList.length ? chips : h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '6px' } }, 'No tags yet.'), add);
+    };
+    drawTags();
+    // Citation
+    const citeBox = h('div');
+    let style = bib.defaultStyle || 'CHICAGO_AUTHOR_DATE';
+    const drawCite = () => clear(citeBox).append(citeBlock(bib, style));
+    drawCite();
+    // Chapter (edited volumes)
+    const chBox = h('div');
+    const drawChapter = () => {
+      clear(chBox);
+      const c = chapterNow();
+      if (!c) { chBox.append(h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Not inside a chapter of the chapter list.')); return; }
+      chBox.append(
+        h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Chapter'), h('div', { class: 'info-val' }, [c.number, c.title].filter(Boolean).join('. '))),
+        h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Author(s)'), h('div', { class: 'info-val' + (c.authors ? '' : ' unknown') }, c.authors ? c.authors.split(';').map(s => s.trim()).join(', ') : 'Unknown author')),
+        c.printedPages ? h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Pages'), h('div', { class: 'info-val' }, c.printedPages)) : null,
+        c.tags ? h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Tags'), h('div', { class: 'info-val' }, splitTags(c.tags).map(t => '#' + t).join(' '))) : null,
+        c.abstract ? h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Abstract'), h('div', { class: 'info-val' }, c.abstract)) : null,
+        h('div', { class: 'row', style: { marginTop: '6px', gap: '4px' } },
+          h('button', { class: 'btn', onclick: () => citeChapter(d, c) }, 'Cite this chapter'),
+          chapterExportMenu(d, c)),
+        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '6px' } }, 'To change it, select text in the book and use Set as ▸ This chapter.'));
+      chBox.dataset.key = c.index;
+    };
+    if (d.editedVolume && d.chapters) drawChapter();
+    // File
+    const fileRows = [
+      row('File type', d.fileType), row('Size', fmtSize(d.size)), row(isEpub(d) ? 'Positions' : 'Pages', String(d.totalPages || '')),
+      row('Notes', String((ctx.notes || []).length)), d.citekey ? row('Citation key', d.citekey) : null].filter(Boolean);
+
+    clear(box).append(
+      h('div', { class: 'info-title' }, d.title),
+      sec('info', 'Info', [...rows, tools]),
+      sec('abstract', 'Abstract', abs),
+      sec('tags', 'Tags', tagBox, h('span', { class: 'info-count' }, tagList.length || '')),
+      sec('cite', 'Citation', citeBox, styleSelect(bib, v => { style = v; drawCite(); })),
+      d.editedVolume && d.chapters ? sec('chapter', 'Chapter', chBox) : null,
+      sec('file', 'File', fileRows));
+    box._drawChapter = d.editedVolume && d.chapters ? () => { const c = chapterNow(); if (!c || String(c.index) !== chBox.dataset.key) drawChapter(); } : null;
+  }
+  draw();
+  // Keep the chapter section in step with where you are.
+  const t = setInterval(() => { if (!box.isConnected) { clearInterval(t); return; } if (box._drawChapter) box._drawChapter(); }, 2000);
+  return box;
+}
+
 // ------------------------------------------------------------------ right-click menus
 
 let cmRoot = null;
@@ -2118,18 +2272,24 @@ async function openReader(id, params) {
   const app = clear(document.getElementById('app'));
   const titleB = h('b', null, '…'), placeS = h('span', null, '');
   const side = h('aside', { class: 'rside', hidden: localGet('ml.side', '1') !== '1' });
+  const lside = h('aside', { class: 'lside', hidden: localGet('ml.info', '0') !== '1' });
   const mainArea = h('div', { class: 'rmain' }, h('div', { class: 'loading', id: 'rload' }, h('div', { class: 'spin' }), h('div', { id: 'rloadmsg' }, 'Opening the book…')));
   const status = h('div', { class: 'rstatus' });
   const zoomBox = h('span', { class: 'row', style: { gap: '4px' } });
   const sideTabs = { toc: null, notes: null };
+  let infoBtn = null, infoCtx = null;
   let sideMode = localGet('ml.sideMode', 'notes');
   const bar = h('div', { class: 'rbar' },
     h('button', { class: 'btn', onclick: () => { if (history.length > 1) history.back(); else location.hash = `#/book/${id}`; }, title: 'Back (Esc)' }, '←'),
+    infoBtn = h('button', { class: 'btn' + (localGet('ml.info', '0') === '1' ? ' fill' : ''), title: 'Details of this book or article', onclick: () => {
+      lside.hidden = !lside.hidden; localSet('ml.info', lside.hidden ? '0' : '1'); infoBtn.classList.toggle('fill', !lside.hidden);
+      if (!lside.hidden && !lside.firstChild && infoCtx) lside.append(infoPanel(infoCtx));
+    } }, 'Info'),
     h('div', { class: 'rt' }, titleB, placeS),
     zoomBox,
     sideTabs.toc = h('button', { class: 'btn', onclick: () => toggleSide('toc') }, 'Contents'),
     sideTabs.notes = h('button', { class: 'btn', onclick: () => toggleSide('notes') }, 'Notes'));
-  const readerRoot = h('div', { class: 'reader' }, bar, h('div', { class: 'rbody' }, mainArea, side), status);
+  const readerRoot = h('div', { class: 'reader' }, bar, h('div', { class: 'rbody' }, lside, mainArea, side), status);
   app.append(readerRoot);
   applyReaderChrome(readerRoot);
   document.addEventListener('keydown', readerKeys);
@@ -2195,6 +2355,8 @@ async function openReader(id, params) {
     }
   }
   ctx.renderSide = drawSide;
+  infoCtx = ctx;
+  if (!lside.hidden) lside.append(infoPanel(ctx));
   ctx.refreshNotes = async () => {
     try { ctx.notes = await api(`doc/${id}/highlights`); } catch (e) { fail(e); }
     if (readerOpen && readerOpen.notesChanged) readerOpen.notesChanged();
