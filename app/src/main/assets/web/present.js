@@ -425,7 +425,7 @@ async function showPresenter(id, params) {
   const fitRoot = () => {
     if (!root.isConnected) { window.removeEventListener('resize', fitRoot); return; }
     const vv = window.visualViewport;
-    root.style.height = Math.floor(vv ? vv.height : window.innerHeight) + 'px';
+    root.style.height = Math.floor(Math.min(vv ? vv.height : Infinity, window.innerHeight, document.documentElement.clientHeight || Infinity)) + 'px';
   };
   fitRoot(); window.addEventListener('resize', fitRoot);
   if (window.visualViewport) window.visualViewport.addEventListener('resize', fitRoot);
