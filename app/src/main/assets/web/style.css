@@ -466,8 +466,9 @@ body.presenting { overflow: hidden; }
 .p-cur > *, .p-next > * { position: absolute !important; left: 0; top: 0; }
 .p-right { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .p-nav { justify-content: center; font-size: 16px; padding: 18px 10px; width: 100%; }
-.p-right .p-nav:last-child { flex: 1; max-height: 40vh; min-height: 90px; }
-.p-right .p-nav:first-child { min-height: 70px; }
+.p-navs { margin-top: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 4px; }
+.p-prev { min-height: 110px; }
+.p-nextbtn { min-height: 26vh; }
 .p-notesrow { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 140px; }
 .p-minebox[hidden] { display: none; }
 .p-minebox .p-mine { min-height: 110px; }

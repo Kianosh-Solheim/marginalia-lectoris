@@ -497,9 +497,10 @@ async function showPresenter(id, params) {
           h('div', { class: 'p-col' }, h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('div', { class: 'label' }, 'Speaker notes'), mineBtn), notesEl),
           mineBox)),
       h('div', { class: 'p-right' },
-        h('button', { class: 'btn p-nav', onclick: () => go(-1), title: 'Previous (←)' }, '▲ Previous'),
-        h('div', { class: 'label', style: { marginTop: '10px' } }, 'Next slide'), nextBox,
-        h('button', { class: 'btn fill p-nav', onclick: () => go(1), title: 'Next (→, space)' }, 'Next ▼'))));
+        h('div', { class: 'label' }, 'Next slide'), nextBox,
+        h('div', { class: 'p-navs' },
+          h('button', { class: 'btn p-nav p-prev', onclick: () => go(-1), title: 'Previous (←)' }, '▲ Previous'),
+          h('button', { class: 'btn fill p-nav p-nextbtn', onclick: () => go(1), title: 'Next (→, space)' }, 'Next ▼')))));
 
   let mineTimer = 0;
   mine.addEventListener('input', () => {
