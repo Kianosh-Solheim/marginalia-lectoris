@@ -439,16 +439,43 @@ async function showPresenter(id, params) {
     if (done) saveInk();
   });
   curWrap.append(inkL.el);
+  // Laser pointer: a red dot on the slide that the audience screen shows too (not saved).
+  const laserDot = h('div', { class: 'laser', hidden: true });
+  const laserPad = h('div', { class: 'laser-pad' });
+  curWrap.append(laserPad, laserDot);
+  let laser = null, laserHide = 0;
+  const setLaser = pos => {
+    laser = pos;
+    laserDot.hidden = !pos;
+    if (pos) { laserDot.style.left = pos.x * 100 + '%'; laserDot.style.top = pos.y * 100 + '%'; }
+    sendLive(pos ? 40 : 0);
+  };
+  const laserAt = e => { const r = laserPad.getBoundingClientRect(); return { x: +Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)).toFixed(4), y: +Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)).toFixed(4) }; };
+  laserPad.addEventListener('pointermove', e => { clearTimeout(laserHide); setLaser(laserAt(e)); });
+  laserPad.addEventListener('pointerdown', e => { e.preventDefault(); clearTimeout(laserHide); setLaser(laserAt(e)); });
+  const laserOut = () => { clearTimeout(laserHide); laserHide = setTimeout(() => setLaser(null), 1200); };
+  laserPad.addEventListener('pointerleave', laserOut); laserPad.addEventListener('pointerup', e => { if (e.pointerType !== 'mouse') laserOut(); });
   const notesEl = h('div', { class: 'p-notes' });
   const mine = h('textarea', { class: 'p-mine', placeholder: 'Your notes for this slide (saved in the presentation’s folder)…' });
+  // Your own note on this slide: behind a button, open by itself when the slide already has one.
+  let mineOpen = false;
+  const mineBox = h('div', { class: 'p-col p-minebox', hidden: true }, h('div', { class: 'label' }, 'Your note on this slide'), mine);
+  const mineBtn = h('button', { class: 'btn', onclick: () => { mineOpen = !mineBox.hidden ? false : true; drawMine(); if (mineOpen) mine.focus(); } }, '+ My note');
+  const drawMine = () => {
+    const has = !!(myNotes[cur + 1] || '').trim();
+    mineBox.hidden = !(mineOpen || has);
+    mineBtn.textContent = mineBox.hidden ? '+ My note' : (has ? 'My note ✓' : 'Hide my note');
+  };
   const counter = h('span', { class: 'mono' });
   const clock = h('button', { class: 'btn quiet mono', title: 'Time since the first slide change · click to reset', onclick: () => { startedAt = Date.now(); } }, '0:00');
   const status = h('span', { class: 'p-status mono' });
   const blackBtn = h('button', { class: 'btn', title: 'Black screen (B)', onclick: () => { black = !black; blackBtn.classList.toggle('fill', black); sendLive(0); } }, 'Black');
   const tools = h('span', { class: 'row', style: { gap: '4px' } });
   let tool = 'off';
-  const toolBtn = (t, label, title) => h('button', { class: 'btn' + (tool === t ? ' fill' : ''), title, onclick: () => { tool = tool === t ? 'off' : t; inkL.tool(tool); drawTools(); } }, label);
+  const toolBtn = (t, label, title) => h('button', { class: 'btn' + (tool === t ? ' fill' : ''), title, onclick: () => {
+    tool = tool === t ? 'off' : t; inkL.tool(tool === 'laser' ? 'off' : tool); laserPad.classList.toggle('active', tool === 'laser'); if (tool !== 'laser') setLaser(null); drawTools(); } }, label);
   const drawTools = () => clear(tools).append(
+    toolBtn('laser', '● Laser', 'A laser pointer the audience sees (hover or touch the slide)'),
     toolBtn('pen', '✎ Pen', 'Draw on the slide'), toolBtn('hl', '▮ Marker', 'Highlight on the slide'), toolBtn('erase', '⌫ Eraser', 'Erase strokes'),
     h('button', { class: 'btn quiet', title: 'Clear this slide’s ink', onclick: () => inkL.clear() }, 'Clear'),
     ...['#e11d48', '#2563eb', '#16a34a', '#111111'].map(cv => h('button', { class: 'swatch', style: { background: cv }, title: 'Ink colour', onclick: () => inkL.color(cv) })),
@@ -460,16 +487,19 @@ async function showPresenter(id, params) {
     h('b', { class: 'p-title' }, meta.title),
     counter, clock, status,
     h('span', { class: 'spacer' }),
-    blackBtn,
-    h('button', { class: 'btn', onclick: () => go(-1), title: 'Previous (←)' }, '‹ Prev'),
-    h('button', { class: 'btn fill', onclick: () => go(1), title: 'Next (→, space)' }, 'Next ›'));
+    blackBtn);
   clear(root).append(bar,
     h('div', { class: 'p-body' },
-      h('div', { class: 'p-left' }, curWrap, h('div', { class: 'p-tools' }, tools)),
+      h('div', { class: 'p-left' },
+        curWrap,
+        h('div', { class: 'p-tools' }, tools),
+        h('div', { class: 'p-notesrow' },
+          h('div', { class: 'p-col' }, h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('div', { class: 'label' }, 'Speaker notes'), mineBtn), notesEl),
+          mineBox)),
       h('div', { class: 'p-right' },
-        h('div', { class: 'label' }, 'Next'), nextBox,
-        h('div', { class: 'label', style: { marginTop: '10px' } }, 'Speaker notes'), notesEl,
-        h('div', { class: 'label', style: { marginTop: '10px' } }, 'Your notes'), mine)));
+        h('button', { class: 'btn p-nav', onclick: () => go(-1), title: 'Previous (←)' }, '▲ Previous'),
+        h('div', { class: 'label', style: { marginTop: '10px' } }, 'Next slide'), nextBox,
+        h('button', { class: 'btn fill p-nav', onclick: () => go(1), title: 'Next (→, space)' }, 'Next ▼'))));
 
   let mineTimer = 0;
   mine.addEventListener('input', () => {
@@ -483,7 +513,7 @@ async function showPresenter(id, params) {
   let liveTimer = 0, lastSent = 0;
   function sendLive(delay) {
     clearTimeout(liveTimer);
-    const send = () => { lastSent = Date.now(); api('live', { method: 'POST', json: { id, slide: cur, black, ink: showInk ? (ink[cur + 1] || []) : [] } }).then(r => showStatus(r)).catch(() => showStatus(null)); };
+    const send = () => { lastSent = Date.now(); api('live', { method: 'POST', json: { id, slide: cur, black, ink: showInk ? (ink[cur + 1] || []) : [], laser } }).then(r => showStatus(r)).catch(() => showStatus(null)); };
     if (!delay) send(); else if (Date.now() - lastSent > delay) send(); else liveTimer = setTimeout(send, delay);
   }
   function showStatus(r) {
@@ -501,7 +531,9 @@ async function showPresenter(id, params) {
     const info = deck.slideInfo(cur);
     clear(notesEl).append(...(info.notes ? info.notes.split('\n').map(l => h('p', null, l)) : [h('div', { class: 'muted' }, deck.meta.type === 'pdf' ? 'PDF slides have no speaker notes.' : 'No speaker notes on this slide.')]));
     mine.value = myNotes[cur + 1] || '';
+    mineOpen = false; drawMine();
     inkL.set(ink[cur + 1] || []);
+    if (laser) { laser = null; laserDot.hidden = true; }
     sendLive(0);
     await deck.render(cur, curBox).catch(err => { curBox.textContent = 'This slide could not be drawn: ' + (err.message || err); });
     let n = cur + 1; while (n < deck.count && deck.hidden(n)) n++;
@@ -525,6 +557,7 @@ async function showPresenter(id, params) {
   // Swipe on the slide (when no pen is in use) to move on.
   let sx = 0, sy = 0;
   curWrap.addEventListener('pointerdown', e => { if (tool === 'off') { sx = e.clientX; sy = e.clientY; } });
+  // (with the laser or pen on, touches draw or point instead of turning pages)
   curWrap.addEventListener('pointerup', e => {
     if (tool !== 'off') return;
     const dx = e.clientX - sx, dy = e.clientY - sy;
@@ -561,6 +594,7 @@ async function showAudience() {
   const poll = { stop: false };
   livePoll = poll;
   let deck = null, deckId = '', shown = -1, layer = null, inkL = null, version = -1;
+  const laserDot = h('div', { class: 'laser aud-laser', hidden: true });
   const place = () => {
     if (!deck) return;
     const W = window.innerWidth, H = window.innerHeight, a = deck.aspect;
@@ -589,9 +623,11 @@ async function showAudience() {
       if (old) { await runTransition(tr, next, old, forward); old.remove(); }
       shown = l.slide;
       if (!inkL) { inkL = inkLayer(() => {}); inkL.el.classList.add('aud-ink'); }
-      stage.append(inkL.el);
+      stage.append(inkL.el, laserDot);
     }
     if (inkL) inkL.set(l.ink || []);
+    laserDot.hidden = !l.laser;
+    if (l.laser) { laserDot.style.left = l.laser.x * 100 + '%'; laserDot.style.top = l.laser.y * 100 + '%'; }
   }
 
   (async () => {
