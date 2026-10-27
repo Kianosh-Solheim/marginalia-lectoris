@@ -421,6 +421,14 @@ async function showPresenter(id, params) {
   document.body.classList.add('presenting');
   const root = h('div', { class: 'presenter' + (eink ? ' eink' : '') }, h('div', { class: 'loading', style: { position: 'static', height: '200px' } }, h('div', { class: 'spin' })));
   app.append(root);
+  // Size the screen to what is actually visible (some Android WebViews report a taller layout viewport).
+  const fitRoot = () => {
+    if (!root.isConnected) { window.removeEventListener('resize', fitRoot); return; }
+    const vv = window.visualViewport;
+    root.style.height = Math.floor(vv ? vv.height : window.innerHeight) + 'px';
+  };
+  fitRoot(); window.addEventListener('resize', fitRoot);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', fitRoot);
   let deck;
   try { deck = await openDeck(id); } catch (e) { clear(root).append(h('div', { class: 'empty' }, h('h2', null, 'Could not open the presentation'), h('div', { class: 'muted' }, e.message || String(e)), h('a', { href: '#/presentations' }, 'Back'))); return; }
   const meta = deck.meta;

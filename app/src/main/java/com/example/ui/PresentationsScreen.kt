@@ -47,6 +47,13 @@ val presentationsOpen = mutableStateOf(false)
 fun PresentationsHost() {
     if (!presentationsOpen.value) return
     Dialog(onDismissRequest = { presentationsOpen.value = false }, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
+        // A dialog's window only wraps its content by default; make it exactly the screen, so the
+        // presenter page inside can never run past the bottom edge.
+        val view = androidx.compose.ui.platform.LocalView.current
+        SideEffect {
+            (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window?.setLayout(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+        }
         Surface(Modifier.fillMaxSize(), color = Color.White) { PresentationsScreen(onClose = { presentationsOpen.value = false }) }
     }
 }
