@@ -149,7 +149,7 @@ fun PresenterView(deck: Presentations.Deck, onClose: () -> Unit) {
         onDispose { w?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
     BackHandler { onClose() }
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         val p = port
         val audience = addresses.firstOrNull()?.url
         Row(Modifier.fillMaxWidth().background(Color.Black).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -161,7 +161,7 @@ fun PresenterView(deck: Presentations.Deck, onClose: () -> Unit) {
             TextButton(onClick = onClose) { Text("Close", color = Color.White, fontWeight = FontWeight.Bold) }
         }
         if (p == null || !running) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Text(if (waited) "The library server did not start. Switch on “Library in the browser” in Settings and try again." else "Starting…",
                     fontSize = 16.sp, color = Color.Black)
             }
@@ -181,7 +181,8 @@ fun PresenterView(deck: Presentations.Deck, onClose: () -> Unit) {
                     }
                 },
                 onRelease = { it.destroy() },
-                modifier = Modifier.fillMaxSize()
+                // weight, not fillMaxSize: the page must end where the screen ends, below the address bar.
+                modifier = Modifier.fillMaxWidth().weight(1f)
             )
         }
     }
