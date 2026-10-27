@@ -459,16 +459,16 @@ body.presenting { overflow: hidden; }
 .p-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--paper); border-bottom: 1.5px solid var(--ink); flex-wrap: wrap; }
 .p-title { font-family: var(--serif); font-size: 16px; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .p-status { font-size: 12px; color: var(--soft); } .p-status.ok { color: #15803d; } .p-status.bad { color: #b91c1c; }
-.p-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) clamp(170px, 22vw, 300px); gap: 14px; padding: 12px; min-height: 0; }
+.p-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) clamp(170px, 22vw, 300px); grid-template-rows: minmax(0, 1fr); gap: 14px; padding: 12px; min-height: 0; overflow: hidden; }
 .p-left { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0; }
 .p-curwrap { position: relative; width: 100%; }
 .p-cur, .p-next { position: relative; width: 100%; background: #fff; border: 1px solid var(--ink); overflow: hidden; }
 .p-cur > *, .p-next > * { position: absolute !important; left: 0; top: 0; }
 .p-right { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .p-nav { justify-content: center; font-size: 16px; padding: 18px 10px; width: 100%; }
-.p-navs { margin-top: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 4px; }
+.p-navs { margin-top: auto; margin-bottom: 18vh; display: flex; flex-direction: column; gap: 10px; }
 .p-prev { min-height: 110px; }
-.p-nextbtn { min-height: 26vh; }
+.p-nextbtn { min-height: 20vh; }
 .p-notesrow { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 140px; }
 .p-minebox[hidden] { display: none; }
 .p-minebox .p-mine { min-height: 110px; }

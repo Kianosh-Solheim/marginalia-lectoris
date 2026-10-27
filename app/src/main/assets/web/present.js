@@ -499,8 +499,8 @@ async function showPresenter(id, params) {
       h('div', { class: 'p-right' },
         h('div', { class: 'label' }, 'Next slide'), nextBox,
         h('div', { class: 'p-navs' },
-          h('button', { class: 'btn p-nav p-prev', onclick: () => go(-1), title: 'Previous (←)' }, '▲ Previous'),
-          h('button', { class: 'btn fill p-nav p-nextbtn', onclick: () => go(1), title: 'Next (→, space)' }, 'Next ▼')))));
+          h('button', { class: 'btn p-nav p-prev', onclick: () => go(-1), title: 'Previous (←)' }, '‹ Previous'),
+          h('button', { class: 'btn fill p-nav p-nextbtn', onclick: () => go(1), title: 'Next (→, space)' }, 'Next ›')))));
 
   let mineTimer = 0;
   mine.addEventListener('input', () => {
