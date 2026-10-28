@@ -6417,6 +6417,7 @@ function ww(e, t, r, n, i) {
   })).filter((A) => A.visible).map((A) => A.index), m = v[0], g = v[v.length - 1], y = v.length === 1 ? v[0] : void 0;
   for (const [A, w] of a.paragraphs.entries()) {
     const D = document.createElement("div");
+    D.dataset.para = String(A), D.dataset.paraLevel = String(w.level ?? 0);
     D.style.width = "100%", D.style.minWidth = "0px", D.style.maxWidth = "100%", D.style.boxSizing = "border-box", D.style.overflowWrap = "anywhere";
     const E = w.level;
     i != null && i.isVerticalText && (D.style.wordBreak = "keep-all");
@@ -49546,6 +49547,21 @@ function yX(e) {
   };
 }
 function nd(e, t) {
+  // Marginalia: tag every rendered node with its shape id, name and kind (for Morph and animations).
+  const __el = nd0(e, t);
+  try {
+    if (__el && __el.dataset) {
+      __el.dataset.spId = e.id ?? "";
+      __el.dataset.spName = e.name ?? "";
+      __el.dataset.spKind = e.nodeType ?? "";
+      e.presetGeometry && (__el.dataset.spGeom = e.presetGeometry);
+      e.rotation && (__el.dataset.spRot = String(e.rotation));
+      e.placeholder && (__el.dataset.spPh = (e.placeholder.type ?? "") + ":" + (e.placeholder.idx ?? ""));
+    }
+  } catch {}
+  return __el;
+}
+function nd0(e, t) {
   switch (e.nodeType) {
     case "shape":
       return LR(e, t);
@@ -49626,7 +49642,7 @@ function Zv(e, t, r) {
   );
   l.asyncTasks = a, r != null && r.onNavigate && (l.onNavigate = r.onNavigate);
   const c = document.createElement("div");
-  c.style.position = "relative", c.style.width = `${e.width}px`, c.style.height = `${e.height}px`, c.style.overflow = "hidden", c.style.backgroundColor = "#FFFFFF", l.measurementRoot = c;
+  c.style.position = "relative", c.style.width = `${e.width}px`, c.style.height = `${e.height}px`, c.style.overflow = "hidden", c.style.backgroundColor = "#FFFFFF", c.dataset.slideRoot = "1", l.measurementRoot = c;
   const u = SX(c);
   try {
     try {
@@ -49650,7 +49666,7 @@ function Zv(e, t, r) {
       for (const b of x)
         try {
           const _ = nd(b, y);
-          c.appendChild(_);
+          _.dataset.spOrigin = "master", c.appendChild(_);
         } catch {
         }
     }
@@ -49670,14 +49686,14 @@ function Zv(e, t, r) {
       for (const b of x)
         try {
           const _ = nd(b, y);
-          c.appendChild(_);
+          _.dataset.spOrigin = "layout", c.appendChild(_);
         } catch {
         }
     }
     for (const y of t.nodes)
       try {
         const x = nd(y, l);
-        c.appendChild(x);
+        x.dataset.spOrigin = "slide", c.appendChild(x);
       } catch (x) {
         (g = r == null ? void 0 : r.onNodeError) == null || g.call(r, y.id, x), c.appendChild(xX(y));
       }

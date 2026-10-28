@@ -38,3 +38,8 @@ Copyright © Ecma International. The repository copy is preserved unchanged. The
 and copyright policy apply to material copied or mechanically derived from the standard.
 Independently authored renderer and evaluation code remains licensed under this project's
 Apache-2.0 license.
+
+
+## Changes in Marginalia Lectoris
+
+pptx-renderer.browser.es.js is modified: rendered shapes carry data-sp-id, data-sp-name, data-sp-kind, data-sp-geom, data-sp-origin and paragraphs data-para attributes, used for Morph and slide animations.

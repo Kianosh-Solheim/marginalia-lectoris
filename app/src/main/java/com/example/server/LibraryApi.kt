@@ -674,7 +674,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             rest.isEmpty() && req.method == "POST" -> {
                 val b = JSONObject(req.bodyText(8 * 1024 * 1024))
                 P.presenterSeen = System.currentTimeMillis()
-                P.setLive(b.optString("id"), b.optInt("slide"), b.optBoolean("black"), b.optJSONArray("ink"), b.optJSONObject("laser"))
+                P.setLive(b.optString("id"), b.optInt("slide"), b.optBoolean("black"), b.optJSONArray("ink"), b.optJSONObject("laser"), b.optInt("build"))
                 HttpResponse.json(P.liveJson().toString())
             }
             rest.isEmpty() -> {

@@ -313,7 +313,7 @@ object Presentations {
 
     // ------------------------------------------------------------------------ live: presenter → audience
 
-    data class Live(val id: String = "", val slide: Int = 0, val black: Boolean = false, val version: Long = 0, val ink: JSONArray? = null, val laser: JSONObject? = null)
+    data class Live(val id: String = "", val slide: Int = 0, val black: Boolean = false, val version: Long = 0, val ink: JSONArray? = null, val laser: JSONObject? = null, val build: Int = 0)
 
     @Volatile var live = Live()
         private set
@@ -321,9 +321,9 @@ object Presentations {
     private val audiences = HashMap<String, Long>() // remote → last seen
     @Volatile var presenterSeen = 0L
 
-    fun setLive(id: String, slide: Int, black: Boolean, ink: JSONArray?, laser: JSONObject? = null) {
+    fun setLive(id: String, slide: Int, black: Boolean, ink: JSONArray?, laser: JSONObject? = null, build: Int = 0) {
         synchronized(lock) {
-            live = Live(id, slide, black, live.version + 1, ink, laser)
+            live = Live(id, slide, black, live.version + 1, ink, laser, build)
             (lock as Object).notifyAll()
         }
     }
@@ -345,5 +345,5 @@ object Presentations {
     fun audienceCount(): Int = synchronized(audiences) { val now = System.currentTimeMillis(); audiences.entries.removeAll { now - it.value > 40_000 }; audiences.size }
 
     fun liveJson(l: Live = live): JSONObject = JSONObject().put("id", l.id).put("slide", l.slide).put("black", l.black)
-        .put("version", l.version).put("audiences", audienceCount()).put("ink", l.ink ?: JSONArray()).put("laser", l.laser ?: JSONObject.NULL)
+        .put("version", l.version).put("audiences", audienceCount()).put("ink", l.ink ?: JSONArray()).put("laser", l.laser ?: JSONObject.NULL).put("build", l.build)
 }

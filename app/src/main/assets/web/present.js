@@ -118,7 +118,39 @@ async function openDeck(id) {
   return p;
 }
 
+/** Transitions, animations and paragraphs of each slide of a PPTX, in show order (see slidefx.js). */
+async function pptxFx(buf) {
+  const zip = await JSZip.loadAsync(buf);
+  const parse = async name => { const f = zip.file(name); return f ? new DOMParser().parseFromString(await f.async('string'), 'application/xml') : null; };
+  const relsOf = async path => {
+    const dir = path.replace(/\/[^/]*$/, ''), doc = await parse(`${dir}/_rels/${path.split('/').pop()}.rels`), out = {};
+    if (!doc) return out;
+    for (const r of doc.getElementsByTagNameNS('*', 'Relationship')) {
+      const t = r.getAttribute('Target') || '';
+      const parts = [];
+      (t.startsWith('/') ? t.slice(1) : `${dir}/${t}`).split('/').forEach(seg => { if (seg === '..') parts.pop(); else if (seg && seg !== '.') parts.push(seg); });
+      out[r.getAttribute('Id')] = parts.join('/');
+    }
+    return out;
+  };
+  const pres = await parse('ppt/presentation.xml');
+  if (!pres) return [];
+  const rels = await relsOf('ppt/presentation.xml');
+  const out = [];
+  for (const id of pres.getElementsByTagNameNS('*', 'sldId')) {
+    const rid = [...id.attributes].find(a => a.localName === 'id' && a.namespaceURI && a.namespaceURI.includes('relationships'));
+    const doc = rid && rels[rid.value] ? await parse(rels[rid.value]) : null;
+    if (!doc) { out.push({}); continue; }
+    let tr = null, anims = [], paras = {};
+    try { tr = SlideFX.slideTransition(doc); } catch (_) {}
+    try { anims = SlideAnim.parseTiming(doc); paras = SlideAnim.slideParagraphs(doc); } catch (_) {}
+    out.push({ tr, anims, paras });
+  }
+  return out;
+}
+
 async function pptxDeck(buf) {
+  const fx = await pptxFx(buf).catch(() => []);
   const mod = await import('./lib/pptx-renderer/pptx-renderer.browser.es.js');
   const host = h('div', { style: { position: 'fixed', left: '-20000px', top: '0', width: '960px', height: '540px', overflow: 'hidden' }, 'aria-hidden': 'true' });
   document.body.append(host);
@@ -126,6 +158,7 @@ async function pptxDeck(buf) {
   const pd = viewer.presentationData;
   return {
     count: viewer.slideCount,
+    fx: i => fx[i] || {},
     aspect: pd && pd.width ? pd.height / pd.width : 9 / 16,
     async render(i, el) {
       if (el._handle) { try { el._handle.dispose(); } catch (_) {} el._handle = null; }
@@ -311,46 +344,120 @@ async function odpDeck(buf) {
   };
 }
 
-// ------------------------------------------------------------------ transitions
+// ------------------------------------------------------------------ transitions, Morph and animations (slidefx.js, slidemorph.js, slideanim.js)
 
-function transitionOf(info) {
-  const t = (info && info.transition) || null;
+/** The transition into slide `i`: {kind, option, ms} with DeckCraft's kinds and options, or null. */
+function transitionOf(deck, i) {
+  const own = deck.fx && deck.fx(i).tr;
+  if (own) return own.kind === 'none' ? null : { kind: own.kind, option: own.option || '', ms: Math.max(0, Math.min(10000, own.ms || 0)) };
+  const t = (deck.slideInfo(i) || {}).transition;
   if (!t || !t.type) return null;
-  const ms = Math.max(150, Math.min(3000, t.ms || 600));
-  const ty = t.type;
-  const map = { fade: 'fade', fadeBlack: 'fadeBlack', dissolve: 'fade', random: 'fade', randomBar: 'wipe', push: 'push', wipe: 'wipe', cover: 'cover', pull: 'uncover', uncover: 'uncover',
-    split: 'split', zoom: 'zoom', newsflash: 'zoom', circle: 'circle', diamond: 'circle', plus: 'circle', wedge: 'circle', wheel: 'circle', strips: 'wipe', blinds: 'wipe', checker: 'fade', comb: 'wipe',
-    cut: 'cut', none: 'cut' };
-  let kind = map[ty] || 'fade'; // p14/p15 effects (vortex, morph, prism…) fall back to a fade
-  if (ty === 'fade' && t.dir === 'thruBlk') kind = 'fadeBlack';
-  return { kind, ms, dir: t.dir || '' };
+  const d = t.dir || '';
+  const m = { fade: ['fade', 'smoothly'], fadeBlack: ['fade', 'throughBlack'], push: ['push', d || 'l'], wipe: ['wipe', d || 'r'], cover: ['cover', d || 'l'], uncover: ['uncover', d || 'l'],
+    split: ['split', 'vertOut'], zoom: ['zoom', 'in'], circle: ['shape', 'circle'], cut: ['cut', ''], dissolve: ['dissolve', ''] }[t.type] || ['fade', 'smoothly'];
+  return { kind: m[0], option: m[1], ms: Math.max(150, Math.min(3000, t.ms || 600)) };
+}
+const slideRoot = el => (el && (el.querySelector('[data-slide-root]') || null));
+/** The animation timeline of slide `i` as drawn in `el` (null without animations). */
+function timelineOf(deck, i, el) {
+  const f = deck.fx ? deck.fx(i) : null;
+  if (!f || !f.anims || !f.anims.length) return null;
+  try { return SlideAnim.timelineFor(f.anims, slideRoot(el), f.paras); } catch (_) { return null; }
+}
+/** Click steps of slide `i`: {n, first} — first is 1 when step 1 starts by itself as the slide appears. */
+function stepsOf(deck, i) {
+  deck._steps = deck._steps || new Map();
+  if (!deck._steps.has(i)) {
+    let v = { n: 0, first: 0 };
+    const f = deck.fx ? deck.fx(i) : null;
+    if (f && f.anims && f.anims.length) { try { const shapes = {}; for (const [k, v] of Object.entries(f.paras || {})) shapes[k] = { paras: v }; const t = SlideAnim.Timeline(f.anims, shapes, 960, 540); v = { n: t.steps(), first: t.steps() && t.stepIsAuto(0) ? 1 : 0 }; } catch (_) {} }
+    deck._steps.set(i, v);
+  }
+  return deck._steps.get(i);
 }
 
-/** Animates [incoming] over [outgoing] (both absolutely placed in the same stage). */
-async function runTransition(tr, incoming, outgoing, forward = true) {
-  if (!tr || tr.kind === 'cut' || !outgoing || !incoming.animate) return;
-  const d = tr.dir || 'l', ms = tr.ms;
-  const vec = { l: [-1, 0], r: [1, 0], u: [0, -1], d: [0, 1], lu: [-1, -1], ru: [1, -1], ld: [-1, 1], rd: [1, 1] }[d] || [-1, 0];
-  const [dx, dy] = forward ? vec : [-vec[0], -vec[1]];
-  const from = `translate(${-dx * 100}%, ${-dy * 100}%)`, to = `translate(${dx * 100}%, ${dy * 100}%)`;
-  const opts = { duration: ms, easing: 'ease-in-out', fill: 'both' };
-  const clip = { l: 'inset(0 0 0 100%)', r: 'inset(0 100% 0 0)', u: 'inset(100% 0 0 0)', d: 'inset(0 0 100% 0)' }[d] || 'inset(0 0 0 100%)';
-  let a = [];
-  switch (tr.kind) {
-    case 'fade': a = [incoming.animate([{ opacity: 0 }, { opacity: 1 }], opts)]; break;
-    case 'fadeBlack':
-      a = [outgoing.animate([{ opacity: 1 }, { opacity: 0 }], { ...opts, duration: ms / 2 }),
-        incoming.animate([{ opacity: 0 }, { opacity: 0, offset: 0.5 }, { opacity: 1 }], opts)]; break;
-    case 'push': a = [incoming.animate([{ transform: from }, { transform: 'none' }], opts), outgoing.animate([{ transform: 'none' }, { transform: to }], opts)]; break;
-    case 'cover': a = [incoming.animate([{ transform: from }, { transform: 'none' }], opts)]; break;
-    case 'uncover': outgoing.style.zIndex = 3; a = [outgoing.animate([{ transform: 'none' }, { transform: to }], opts)]; break;
-    case 'wipe': a = [incoming.animate([{ clipPath: clip }, { clipPath: 'inset(0 0 0 0)' }], opts)]; break;
-    case 'split': a = [incoming.animate([{ clipPath: (d === 'vert' ? 'inset(0 50% 0 50%)' : 'inset(50% 0 50% 0)') }, { clipPath: 'inset(0 0 0 0)' }], opts)]; break;
-    case 'zoom': a = [incoming.animate([{ transform: 'scale(0.6)', opacity: 0 }, { transform: 'none', opacity: 1 }], opts)]; break;
-    case 'circle': a = [incoming.animate([{ clipPath: 'circle(0% at 50% 50%)' }, { clipPath: 'circle(75% at 50% 50%)' }], opts)]; break;
+/** A picture of a drawn slide (`el`, the size of the stage) for the transition compositor. */
+async function slidePicture(el, w, h, filter) {
+  if (!el) return null;
+  const c = el.querySelector(':scope > canvas');
+  if (c && !slideRoot(el)) return c; // PDF pages are pictures already
+  if (!window.htmlToImage) return null;
+  const pr = Math.min(2, window.devicePixelRatio || 1, 2560 / Math.max(1, w));
+  try {
+    return await htmlToImage.toCanvas(el, { width: w, height: h, pixelRatio: pr, skipFonts: true, cacheBust: false, filter,
+      style: { position: 'relative', left: '0', top: '0', right: 'auto', bottom: 'auto', width: w + 'px', height: h + 'px', opacity: '1', visibility: 'visible' } });
+  } catch (_) { return null; }
+}
+/** Backgrounds and contents of slide `i` drawn apart (for Pan, Conveyor, Rotate… and Reveal). */
+async function slideParts(deck, i, w, h, build) {
+  const tmp = h_('div', { position: 'fixed', left: '-30000px', top: '0', width: w + 'px', height: h + 'px', overflow: 'hidden', background: 'transparent' });
+  document.body.append(tmp);
+  try {
+    await deck.render(i, tmp);
+    const root = slideRoot(tmp);
+    if (!root) return null;
+    const tl = timelineOf(deck, i, tmp);
+    if (tl) SlideAnim.apply(tl, root, build, 0);
+    const back = await slidePicture(tmp, w, h, n => !(n.dataset && n.dataset.spOrigin === 'slide'));
+    root.style.background = 'none'; root.style.backgroundColor = 'transparent';
+    const content = await slidePicture(tmp, w, h, n => !(n.dataset && (n.dataset.spOrigin === 'master' || n.dataset.spOrigin === 'layout')));
+    return back && content ? { back, content } : null;
+  } finally { tmp.remove(); }
+}
+function h_(tag, style) { const e = document.createElement(tag); Object.assign(e.style, style); return e; }
+const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+/** Runs `draw(t)` for `ms` milliseconds (t linear 0..1); `stop.skip` jumps to the end. */
+async function animateFor(ms, draw, stop) {
+  const t0 = performance.now();
+  for (;;) {
+    const t = ms > 0 ? (performance.now() - t0) / ms : 1;
+    if (t >= 1 || (stop && stop.skip)) { draw(1); return; }
+    draw(t);
+    await nextFrame();
   }
-  await Promise.all(a.map(x => x.finished.catch(() => {})));
-  outgoing.style.zIndex = '';
+}
+
+/**
+ * Plays the transition into `next` (an .aud-layer, drawn and hidden) over `old` (shown, or null
+ * for black) inside `stage`; afterwards `next` is shown.
+ */
+async function playTransition(deck, tr, i, prevIndex, old, next, stage, stop) {
+  const show = () => { next.style.opacity = ''; next.style.visibility = ''; };
+  if (!tr || !tr.ms || tr.kind === 'none' || (tr.kind === 'cut' && tr.option !== 'throughBlack')) { show(); return; }
+  const w = stage.clientWidth, hh = stage.clientHeight;
+  if (tr.kind === 'morph' && old && slideRoot(old) && slideRoot(next)) {
+    const host = h('div', { class: 'aud-layer aud-fx' });
+    stage.append(host);
+    let m = null;
+    try { m = SlideMorph.build(host, slideRoot(old), slideRoot(next), tr.option, SlideAnim.hiddenAtStart(timelineOf(deck, i, next))); } catch (e) { console.warn('Morph', e); }
+    if (m) {
+      old.style.visibility = 'hidden';
+      await animateFor(tr.ms, t => m.draw(t), stop);
+      show(); m.dispose(); host.remove(); old.style.visibility = '';
+      return;
+    }
+    host.remove();
+    tr = { kind: 'fade', option: 'smoothly', ms: tr.ms };
+  }
+  const canvas = h('canvas', { class: 'aud-fx' });
+  const pr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.round(w * pr); canvas.height = Math.round(hh * pr);
+  Object.assign(canvas.style, { position: 'absolute', left: '0', top: '0', width: w + 'px', height: hh + 'px', zIndex: 4 });
+  const comp = SlideFX.Compositor(canvas);
+  const src = { New: await slidePicture(next, w, hh), Old: old ? await slidePicture(old, w, hh) : null };
+  if (!comp || !src.New) { show(); return; }
+  if (SlideFX.usesSlideParts(tr.kind, tr.option) && deck.fx) {
+    const [po, pn] = await Promise.all([prevIndex >= 0 ? slideParts(deck, prevIndex, w, hh, Infinity) : null, slideParts(deck, i, w, hh, 0)]);
+    if (po) { src.OldBack = po.back; src.OldContent = po.content; }
+    if (pn) { src.NewBack = pn.back; src.NewContent = pn.content; if (!po) src.OldContent = h('canvas', { width: 1, height: 1 }); }
+  }
+  comp.setSources(src);
+  stage.append(canvas);
+  const aspect = w / Math.max(1, hh);
+  await animateFor(tr.ms, t => comp.draw(SlideFX.transitionFrame(tr.kind, tr.option, t, aspect)), stop);
+  show();
+  await nextFrame();
+  canvas.remove(); comp.dispose();
 }
 
 // ------------------------------------------------------------------ ink
@@ -435,6 +542,7 @@ async function showPresenter(id, params) {
   const myNotes = Object.assign({}, meta.myNotes || {});
   const ink = Object.assign({}, meta.ink || {});
   let cur = Math.max(0, Math.min(deck.count - 1, (+params.get('slide') || 1) - 1));
+  let build = stepsOf(deck, cur).first, ptl = null;
   let black = false, startedAt = 0, showInk = true;
 
   const curBox = h('div', { class: 'p-cur' });
@@ -522,7 +630,7 @@ async function showPresenter(id, params) {
   let liveTimer = 0, lastSent = 0;
   function sendLive(delay) {
     clearTimeout(liveTimer);
-    const send = () => { lastSent = Date.now(); api('live', { method: 'POST', json: { id, slide: cur, black, ink: showInk ? (ink[cur + 1] || []) : [], laser } }).then(r => showStatus(r)).catch(() => showStatus(null)); };
+    const send = () => { lastSent = Date.now(); api('live', { method: 'POST', json: { id, slide: cur, build, black, ink: showInk ? (ink[cur + 1] || []) : [], laser } }).then(r => showStatus(r)).catch(() => showStatus(null)); };
     if (!delay) send(); else if (Date.now() - lastSent > delay) send(); else liveTimer = setTimeout(send, delay);
   }
   function showStatus(r) {
@@ -534,9 +642,23 @@ async function showPresenter(id, params) {
   // Ask the tablet now and then how many audience screens follow.
   const statusLoop = async () => { while (document.body.contains(root)) { try { showStatus(await api('live')); } catch (_) { showStatus(null); } await new Promise(r => setTimeout(r, 5000)); } };
 
-  async function show(i, dir) {
+  const drawCounter = () => {
+    const st = stepsOf(deck, cur);
+    counter.textContent = `${cur + 1} / ${deck.count}` + (st.n ? ` · ▸ ${build}/${st.n}` : '');
+    counter.title = st.n ? 'Slide · animation steps shown (Next plays the next one)' : '';
+  };
+  /** The current slide as the audience sees it: animations up to the current click done. */
+  const drawState = () => { if (ptl) SlideAnim.apply(ptl, slideRoot(curBox), build, 0); };
+  async function renderCur() {
+    await deck.render(cur, curBox).catch(err => { curBox.textContent = 'This slide could not be drawn: ' + (err.message || err); });
+    ptl = timelineOf(deck, cur, curBox);
+    drawState();
+  }
+  async function show(i, atEnd) {
     cur = i;
-    counter.textContent = `${cur + 1} / ${deck.count}`;
+    const st = stepsOf(deck, cur);
+    build = atEnd ? st.n : st.first;
+    drawCounter();
     const info = deck.slideInfo(cur);
     clear(notesEl).append(...(info.notes ? info.notes.split('\n').map(l => h('p', null, l)) : [h('div', { class: 'muted' }, deck.meta.type === 'pdf' ? 'PDF slides have no speaker notes.' : 'No speaker notes on this slide.')]));
     mine.value = myNotes[cur + 1] || '';
@@ -544,23 +666,27 @@ async function showPresenter(id, params) {
     inkL.set(ink[cur + 1] || []);
     if (laser) { laser = null; laserDot.hidden = true; }
     sendLive(0);
-    await deck.render(cur, curBox).catch(err => { curBox.textContent = 'This slide could not be drawn: ' + (err.message || err); });
+    await renderCur();
     let n = cur + 1; while (n < deck.count && deck.hidden(n)) n++;
     if (n < deck.count) deck.render(n, nextBox).catch(() => {}); else clear(nextBox).append(h('div', { class: 'p-end' }, 'End of the presentation'));
   }
   function go(step) {
+    if (!startedAt) startedAt = Date.now();
+    // Animations first: Next plays the slide's next click step, Previous takes one back.
+    const st = stepsOf(deck, cur);
+    if (step > 0 && build < st.n) { build++; drawCounter(); drawState(); sendLive(0); return; }
+    if (step < 0 && build > st.first) { build--; drawCounter(); drawState(); sendLive(0); return; }
     let i = cur + step;
     while (i >= 0 && i < deck.count && deck.hidden(i)) i += step;
     if (i < 0 || i >= deck.count) return;
-    if (!startedAt) startedAt = Date.now();
-    show(i, step);
+    show(i, step < 0);
   }
   presenterKeys = e => {
     if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT')) return;
     if (['ArrowRight', 'PageDown', ' ', 'ArrowDown', 'Enter'].includes(e.key)) { e.preventDefault(); go(1); }
     else if (['ArrowLeft', 'PageUp', 'ArrowUp', 'Backspace'].includes(e.key)) { e.preventDefault(); go(-1); }
     else if (e.key === 'b' || e.key === 'B' || e.key === '.') blackBtn.click();
-    else if (e.key === 'Home') show(0); else if (e.key === 'End') show(deck.count - 1);
+    else if (e.key === 'Home') show(0); else if (e.key === 'End') show(deck.count - 1, true);
   };
   document.addEventListener('keydown', presenterKeys);
   // Swipe on the slide (when no pen is in use) to move on.
@@ -573,7 +699,7 @@ async function showPresenter(id, params) {
     if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) go(dx < 0 ? 1 : -1);
     else if (Math.abs(dx) < 8 && Math.abs(dy) < 8) { const r = curWrap.getBoundingClientRect(); go(e.clientX - r.left > r.width / 3 ? 1 : -1); }
   });
-  new ResizeObserver(() => { clearTimeout(curBox._rt); curBox._rt = setTimeout(() => { deck.render(cur, curBox).catch(() => {}); }, 200); }).observe(curBox);
+  new ResizeObserver(() => { clearTimeout(curBox._rt); curBox._rt = setTimeout(() => { renderCur(); }, 200); }).observe(curBox);
   setInterval(() => { if (startedAt) { const s = Math.floor((Date.now() - startedAt) / 1000); clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; } }, 1000);
   show(cur);
   statusLoop();
@@ -610,30 +736,57 @@ async function showAudience() {
     const w = Math.min(W, H / a), hh = w * a;
     Object.assign(stage.style, { width: w + 'px', height: hh + 'px', left: (W - w) / 2 + 'px', top: (H - hh) / 2 + 'px' });
   };
-  window.addEventListener('resize', () => { place(); if (deck && layer) deck.render(shown, layer).catch(() => {}); });
+  let tl = null, built = 0, stepRun = null;
+  const stateNow = () => { if (tl && layer) SlideAnim.apply(tl, slideRoot(layer), built, 0); };
+  window.addEventListener('resize', () => { place(); if (deck && layer) deck.render(shown, layer).then(() => { tl = timelineOf(deck, shown, layer); stateNow(); }).catch(() => {}); });
+
+  /** Plays click step `k` of the shown slide (its effects, then the state they leave). */
+  function playStep(k) {
+    const run = { skip: false };
+    stepRun = run;
+    const root = slideRoot(layer), dur = tl ? tl.stepDuration(k) : 0;
+    const done = animateFor(dur * 1000, t => { if (tl && root) SlideAnim.apply(tl, root, k, Math.min(t, 1) * dur + (t >= 1 ? 1e-6 : 0)); }, run)
+      .then(() => { if (stepRun === run) { stepRun = null; stateNow(); } });
+    return done;
+  }
+  async function syncBuild(target) {
+    if (stepRun) { stepRun.skip = true; await nextFrame(); }
+    if (!tl) { built = target; return; }
+    target = Math.max(0, Math.min(tl.steps(), target));
+    if (target === built + 1) { const k = built; built = target; playStep(k); }
+    else { built = target; stateNow(); }
+  }
 
   async function apply(l) {
     if (!l || !l.id) { wait.hidden = false; return; }
     if (l.id !== deckId) {
       deckId = l.id; shown = -1;
       try { deck = await openDeck(l.id); } catch (e) { wait.hidden = false; wait.querySelector('p').textContent = 'Could not open the presentation: ' + (e.message || e); return; }
-      clear(stage); layer = null; place();
+      clear(stage); layer = null; tl = null; place();
     }
     wait.hidden = true;
     blackout.hidden = !l.black;
+    const build = typeof l.build === 'number' ? l.build : Infinity;
     if (l.slide !== shown) {
-      const next = h('div', { class: 'aud-layer' });
+      if (stepRun) { stepRun.skip = true; await nextFrame(); }
+      const next = h('div', { class: 'aud-layer', style: { opacity: '0' } });
       stage.append(next);
       await deck.render(l.slide, next).catch(err => { next.textContent = 'This slide could not be drawn: ' + (err.message || err); });
-      const tr = transitionOf(deck.slideInfo(l.slide));
-      const forward = l.slide > shown;
-      const old = layer;
-      layer = next;
-      if (old) { await runTransition(tr, next, old, forward); old.remove(); }
-      shown = l.slide;
+      const ntl = timelineOf(deck, l.slide, next);
+      // Forward (as in a slide show) the slide comes in with its transition, before its first click;
+      // backward or jumping it is shown as it was left.
+      const forward = l.slide === shown + 1 || (shown >= 0 && l.slide > shown && deck.hidden && [...Array(l.slide - shown - 1)].every((_, k) => deck.hidden(shown + 1 + k)));
+      const fresh = forward || shown < 0;
+      const startAt = fresh ? 0 : build;
+      if (ntl) SlideAnim.apply(ntl, slideRoot(next), Math.min(startAt, ntl.steps()), 0);
+      const old = layer, prev = shown;
+      try { await playTransition(deck, fresh ? transitionOf(deck, l.slide) : null, l.slide, prev, old, next, stage, null); } catch (e) { console.warn('transition', e); next.style.opacity = ''; }
+      if (old) old.remove();
+      layer = next; shown = l.slide; tl = ntl; built = startAt;
       if (!inkL) { inkL = inkLayer(() => {}); inkL.el.classList.add('aud-ink'); }
       stage.append(inkL.el, laserDot);
     }
+    if (build !== built) await syncBuild(build === Infinity ? (tl ? tl.steps() : 0) : build);
     if (inkL) inkL.set(l.ink || []);
     laserDot.hidden = !l.laser;
     if (l.laser) { laserDot.style.left = l.laser.x * 100 + '%'; laserDot.style.top = l.laser.y * 100 + '%'; }
