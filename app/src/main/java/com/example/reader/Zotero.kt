@@ -562,6 +562,78 @@ object Zotero {
         return newKey
     }
 
+    // ------------------------------------------------------------------------------ attachments (files kept in Zotero)
+
+    data class Attachment(val key: String, val version: Int, val title: String, val fileName: String, val contentType: String, val linkMode: String) {
+        /** Zotero keeps a copy online (synced file storage) only for stored files, not for linked ones. */
+        val downloadable get() = linkMode == "imported_file" || linkMode == "imported_url"
+        fun toJson(): JSONObject = JSONObject().put("key", key).put("version", version).put("title", title).put("fileName", fileName)
+            .put("contentType", contentType).put("linkMode", linkMode).put("downloadable", downloadable)
+    }
+
+    private val readableTypes = setOf("application/pdf", "application/epub+zip")
+
+    /** PDF and EPUB files attached to item [itemKey] (asked from Zotero each time). */
+    fun attachments(ctx: Context, itemKey: String): List<Attachment> {
+        init(ctx)
+        val arr = get(ctx, "items/$itemKey/children?format=json&limit=100") { r ->
+            check(r.isSuccessful) { "Zotero answered HTTP ${r.code}." }
+            JSONArray(r.body?.string().orEmpty())
+        } as JSONArray
+        return (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("data") }
+            .filter { it.optString("itemType") == "attachment" }
+            .map { Attachment(it.optString("key"), it.optInt("version"), it.optString("title"), it.optString("filename"), it.optString("contentType"), it.optString("linkMode")) }
+            .filter { it.contentType in readableTypes || it.fileName.lowercase(Locale.ROOT).let { n -> n.endsWith(".pdf") || n.endsWith(".epub") } }
+    }
+
+    /** Downloads attachment [att] into [dir]. The key is sent to Zotero only, never to the storage it redirects to. */
+    fun downloadAttachment(ctx: Context, att: Attachment, dir: File): File {
+        val acct = account(ctx) ?: throw IllegalArgumentException("Connect Zotero first.")
+        require(att.downloadable) { "This file is linked on your computer, so Zotero has no copy of it online." }
+        val name = att.fileName.ifBlank { att.title.ifBlank { att.key } + if (att.contentType == "application/epub+zip") ".epub" else ".pdf" }
+            .replace(Regex("[\\/:*?\"<>|]"), "_")
+        dir.mkdirs()
+        val out = File(dir, name)
+        val noRedirect = client.newBuilder().followRedirects(false).followSslRedirects(false).callTimeout(10, TimeUnit.MINUTES).build()
+        fun save(r: Response) {
+            check(r.isSuccessful) { if (r.code == 404) "Zotero has no copy of this file online (it may be stored with WebDAV or only on your computer)." else "Zotero answered HTTP ${r.code} for the file." }
+            val body = r.body ?: throw IllegalStateException("Zotero sent an empty file.")
+            val tmp = File(dir, "$name.part")
+            tmp.outputStream().use { o -> body.byteStream().use { it.copyTo(o, 256 * 1024) } }
+            if (out.exists()) out.delete()
+            if (!tmp.renameTo(out)) { tmp.copyTo(out, overwrite = true); tmp.delete() }
+        }
+        val first = Request.Builder().url("$BASE/users/${acct.userId}/items/${att.key}/file")
+            .header("Zotero-API-Key", key(ctx)).header("Zotero-API-Version", "3").build()
+        noRedirect.newCall(first).execute().use { r ->
+            if (r.isRedirect) {
+                val loc = r.header("Location") ?: throw IllegalStateException("Zotero did not say where the file is.")
+                noRedirect.newBuilder().followRedirects(true).followSslRedirects(true).build()
+                    .newCall(Request.Builder().url(loc).build()).execute().use { save(it) }
+            } else save(r)
+        }
+        check(out.length() > 0) { "The file from Zotero is empty." }
+        return out
+    }
+
+    /** Moves an attachment to Zotero's trash (it can be restored there). Only done when the reader asks for it. */
+    fun trashItem(ctx: Context, itemKey: String, version: Int) {
+        init(ctx)
+        ensureWrite(ctx)
+        val acct = account(ctx)!!
+        val req = Request.Builder().url("$BASE/users/${acct.userId}/items/$itemKey")
+            .header("Zotero-API-Key", key(ctx)).header("Zotero-API-Version", "3")
+            .header("If-Unmodified-Since-Version", version.toString())
+            .patch(JSONObject().put("deleted", 1).toString().toRequestBody(JSON_TYPE)).build()
+        request(req) { r ->
+            when {
+                r.code == 412 -> throw IllegalStateException("The file changed in Zotero meanwhile; it was kept there.")
+                r.code == 403 -> throw IllegalArgumentException("Zotero did not allow removing it (the key may be read-only).")
+                !r.isSuccessful && r.code != 404 -> throw IllegalStateException("Zotero answered HTTP ${r.code}.")
+            }
+        }
+    }
+
     /** Collection names as the app's tags (spaces become _), added to [current] without removing any. */
     fun withCollectionTags(current: String, d: JSONObject): String {
         val names = collectionNames(d).map { it.trim().replace(Regex("\\s+"), "_") }.filter { it.isNotBlank() }

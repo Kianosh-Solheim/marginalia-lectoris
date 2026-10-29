@@ -156,6 +156,7 @@ class LibraryOps(context: Context) {
         val oldFolderCanon = runCatching { oldFolder?.canonicalPath }.getOrNull()
         val newFolderCanon = runCatching { newFolder.canonicalPath }.getOrDefault(newFolder.absolutePath)
         if (oldFolder != null && oldFolder.exists() &&
+            !document.fileType.equals("ZOTERO", true) &&
             oldFolderCanon != null &&
             !oldFolderCanon.equals(newFolderCanon, ignoreCase = true) &&
             oldFolder.name != "Books" && oldFolder.name != "Articles"
@@ -448,7 +449,7 @@ class LibraryOps(context: Context) {
     suspend fun changeCategory(document: DocumentEntity, category: String): DocumentEntity {
         val cat = if (category.equals("ARTICLE", true)) "ARTICLE" else "BOOK"
         if (document.category.equals(cat, true)) return document
-        if (document.fileType.equals("FOLDER", true)) {
+        if (document.fileType.equals("FOLDER", true) || document.fileType.equals("ZOTERO", true)) {
             val updated = document.copy(category = cat)
             repository.updateDocument(updated)
             return updated

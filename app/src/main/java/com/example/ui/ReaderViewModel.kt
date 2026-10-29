@@ -63,10 +63,13 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         section to query.trim()
     }.flatMapLatest { (section, rawQuery) ->
         val normalizedQuery = rawQuery.removePrefix("#").trim()
-        val sourceFlow = if (normalizedQuery.isEmpty()) {
+        val baseFlow = if (normalizedQuery.isEmpty()) {
             repository.allDocuments.combine(com.example.reader.FolderBooks.version) { docs, _ -> com.example.reader.FolderBooks.visible(docs) }
         } else {
             repository.searchDocuments(normalizedQuery)
+        }
+        val sourceFlow = baseFlow.combine(com.example.reader.ZoteroPlaceholders.hidden(getApplication())) { docs, hide ->
+            if (hide == true) docs.filter { !com.example.reader.ZoteroPlaceholders.isPlaceholder(it) } else docs
         }
         sourceFlow.map { docs ->
             val filteredBySection = when (section) {
@@ -96,7 +99,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val recentDocuments: StateFlow<List<DocumentEntity>> = repository.allDocuments
-        .combine(com.example.reader.FolderBooks.version) { docs, _ -> com.example.reader.FolderBooks.visible(docs) }
+        .combine(com.example.reader.FolderBooks.version) { docs, _ -> com.example.reader.FolderBooks.visible(docs).filter { !com.example.reader.ZoteroPlaceholders.isPlaceholder(it) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** Every library item, including the chapter files inside folder books (for notes lists and lookups). */
@@ -182,6 +185,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             var fresh = repository.getDocumentById(document.id) ?: document
+            if (com.example.reader.ZoteroPlaceholders.isPlaceholder(fresh)) { com.example.ui.placeholderOpen.value = fresh.id; return@launch }
             if (com.example.reader.FolderBooks.isFolder(fresh)) {
                 // A folder book opens at the chapter read last.
                 fresh = com.example.reader.FolderBooks.resumePart(getApplication(), fresh.id) ?: return@launch
@@ -201,6 +205,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
         _pendingResume.value = resume
         viewModelScope.launch(Dispatchers.IO) {
             var fresh = repository.getDocumentById(documentId)
+            if (com.example.reader.ZoteroPlaceholders.isPlaceholder(fresh)) { _pendingResume.value = null; com.example.ui.placeholderOpen.value = documentId; return@launch }
             if (com.example.reader.FolderBooks.isFolder(fresh)) {
                 _pendingResume.value = null
                 fresh = com.example.reader.FolderBooks.resumePart(getApplication(), documentId)
@@ -443,6 +448,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             val oldFolderCanon = runCatching { oldFolder?.canonicalPath }.getOrNull()
             val newFolderCanon = runCatching { newFolder.canonicalPath }.getOrDefault(newFolder.absolutePath)
             if (oldFolder != null && oldFolder.exists() &&
+                !document.fileType.equals("ZOTERO", true) &&
                 oldFolderCanon != null &&
                 !oldFolderCanon.equals(newFolderCanon, ignoreCase = true) &&
                 oldFolder.name != "Books" && oldFolder.name != "Articles"
@@ -557,6 +563,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             if (_activeDocument.value?.id == document.id) {
                 _activeDocument.value = updatedDoc
             }
+            com.example.reader.ZoteroPlaceholders.pushSoon(app, document.id)
 
             // Keep highlight.md and Notes on X.md in the document's folder synchronized with the new author, summary, tags, and cover
             val allDocHighlights = repository.getHighlightsListForDocument(document.id)

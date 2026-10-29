@@ -584,6 +584,9 @@ main.zotero { max-width: none; padding: 0 16px 16px; }
 .zstate { font-size: 13px; font-weight: 700; }
 .zstate.ok { color: #15803d; }
 .zstate.bad { color: #b45309; }
+.zstate.ph { color: var(--ink); }
+.card .badge.phbadge { background: var(--paper); color: var(--ink); border: 1px solid var(--ink); }
+.phnote { border: 1px dashed var(--ink); padding: 8px 10px; font-size: 13px; margin: 0 0 12px; line-height: 1.45; }
 .zpick { max-height: 50vh; overflow: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .zrefs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; border-top: 1px solid var(--rule); padding-top: 10px; }
 .zcmp .fnd.blank { color: var(--soft); }

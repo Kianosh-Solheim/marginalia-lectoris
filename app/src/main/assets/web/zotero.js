@@ -315,16 +315,24 @@ async function showZotero() {
     const linkBox = h('div', { class: 'zlinkbox' });
     const linkTo = async docId => { try { await api('zotero/link', { method: 'POST', json: { doc: docId, key } }); toast('Linked'); await loadItems(); showItem(key); } catch (e) { fail(e); } };
     if (it.linkedDoc) {
-      linkBox.append(h('div', { class: 'zstate ok' }, '▣ On the tablet: ', h('a', { href: `#/book/${it.linkedDoc.id}` }, it.linkedDoc.title), it.linkedDoc.chapter != null ? ` (chapter ${it.linkedDoc.chapter + 1})` : ''),
+      const ph = it.linkedDoc.placeholder;
+      linkBox.append(h('div', { class: 'zstate ' + (ph ? 'ph' : 'ok') }, ph ? '▢ Placeholder, no file yet: ' : '▣ On the tablet: ', h('a', { href: `#/book/${it.linkedDoc.id}` }, it.linkedDoc.title), it.linkedDoc.chapter != null ? ` (chapter ${it.linkedDoc.chapter + 1})` : ''),
+        it.linkedDoc.synced ? h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Details kept in step with Zotero.') : null,
         h('div', { class: 'row', style: { gap: '4px' } },
-          h('button', { class: 'btn fill', onclick: () => zoteroCheckDialog(it.linkedDoc.id, it.linkedDoc.chapter == null ? null : it.linkedDoc.chapter, () => showItem(key)) }, 'Check citation'),
-          h('a', { class: 'btn', href: `#/read/${it.linkedDoc.id}` }, 'Read'),
+          h('button', { class: 'btn' + (ph ? '' : ' fill'), onclick: () => zoteroCheckDialog(it.linkedDoc.id, it.linkedDoc.chapter == null ? null : it.linkedDoc.chapter, () => showItem(key)) }, 'Check citation'),
+          ph ? h('a', { class: 'btn fill', href: `#/book/${it.linkedDoc.id}` }, 'Get the file…') : h('a', { class: 'btn', href: `#/read/${it.linkedDoc.id}` }, 'Read'),
           h('button', { class: 'btn quiet', onclick: async () => { await api('zotero/unlink', { method: 'POST', json: { doc: it.linkedDoc.id, chapter: it.linkedDoc.chapter == null ? null : it.linkedDoc.chapter } }); await loadItems(); showItem(key); } }, 'Unlink')));
     } else {
       linkBox.append(h('div', { class: 'label' }, 'Not on the tablet yet'));
       (it.suggestions || []).forEach(s => linkBox.append(h('div', { class: 'zsug' }, h('div', null, h('b', null, s.title), h('div', { class: 'muted' }, [s.author, s.reason].filter(Boolean).join(' · '))),
         h('button', { class: 'btn' + (s.strength >= 3 ? ' fill' : ''), onclick: () => linkTo(s.id) }, 'Link'))));
-      linkBox.append(h('button', { class: 'btn', onclick: () => pickBook(it.title, linkTo) }, 'Link to another book…'));
+      linkBox.append(h('div', { class: 'row', style: { gap: '4px' } },
+        h('button', { class: 'btn', onclick: () => pickBook(it.title, linkTo) }, 'Link to another book…'),
+        h('button', { class: 'btn', title: 'Put it in the library with all its details from Zotero, without the file (it can be added later)', onclick: async () => {
+          const made = await addPlaceholders([key]);
+          if (made) { await loadItems(); showItem(key); }
+        } }, 'Add without the file')),
+        h('div', { class: 'muted', style: { fontSize: '12px' } }, '“Add without the file” makes a placeholder: in the library with its details from Zotero, its own notes and overview note; the file can come later.'));
     }
     clear(detail).append(...[h('h2', null, it.title), linkBox,
       h('div', { class: 'label', style: { marginTop: '12px' } }, `Zotero’s reference · ${(STYLE_NAMES[it.style] || it.style)}`),
@@ -367,14 +375,29 @@ async function showZotero() {
           h('div', { class: 'row', style: { gap: '4px' } }, ...it.suggestions.slice(0, 2).map(s => h('button', { class: 'btn', title: `${s.title} · ${s.reason}`, onclick: async e => {
             try { await api('zotero/link', { method: 'POST', json: { doc: s.id, key: it.key } }); e.target.textContent = 'Linked ✓'; e.target.disabled = true; } catch (er) { fail(er); }
           } }, `Link to “${s.title.slice(0, 28)}${s.title.length > 28 ? '…' : ''}”`))))),
+        r.unmatched.length ? h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', margin: '10px 0 0' } },
+          h('button', { class: 'btn fill', onclick: async e => {
+            e.target.disabled = true; e.target.textContent = 'Adding…';
+            const made = await addPlaceholders(r.unmatched.map(it => it.key));
+            e.target.textContent = made ? `${made} added ✓` : 'Add them as placeholders'; if (!made) e.target.disabled = false;
+            loadItems();
+          } }, `Add the ${r.unmatched.length} missing as placeholders`),
+          h('span', { class: 'muted', style: { fontSize: '12px' } }, 'In the library with their details from Zotero, without the files.')) : null,
         sec('Not on the tablet', r.unmatched, it => h('div', { class: 'zsug' }, h('div', null, h('b', null, it.title), h('div', { class: 'muted' }, [it.creators, it.year].filter(Boolean).join(' · '))),
-          h('button', { class: 'btn quiet', onclick: () => { close(); pickBook(it.title, async docId => { try { await api('zotero/link', { method: 'POST', json: { doc: docId, key: it.key } }); toast('Linked'); loadItems(); } catch (e) { fail(e); } }); } }, 'Link to a book…'))),
+          h('div', { class: 'row', style: { gap: '4px' } },
+            h('button', { class: 'btn quiet', onclick: async e => { e.target.disabled = true; if (await addPlaceholders([it.key])) e.target.textContent = 'Added ✓'; else e.target.disabled = false; } }, 'Add without the file'),
+            h('button', { class: 'btn quiet', onclick: () => { close(); pickBook(it.title, async docId => { try { await api('zotero/link', { method: 'POST', json: { doc: docId, key: it.key } }); toast('Linked'); loadItems(); } catch (e) { fail(e); } }); } }, 'Link to a book…')))),
         h('div', { class: 'foot' }, h('button', { class: 'btn fill', onclick: close }, 'Done'))].filter(Boolean));
     });
   };
   const sync = async loud => {
     refresh.disabled = true; refresh.textContent = 'Fetching…';
-    try { const s = await api('zotero/sync', { method: 'POST', timeout: 180000 }); showStatus(s); if (loud) toast(s.changed ? `${s.changed} change${s.changed === 1 ? '' : 's'} from Zotero` : 'Up to date'); await drawCols(); await loadItems(); }
+    try {
+      const s = await api('zotero/sync', { method: 'POST', timeout: 180000 }); showStatus(s);
+      const extra = [s.placeholdersUpdated ? `${s.placeholdersUpdated} book${s.placeholdersUpdated === 1 ? '' : 's'} updated from Zotero` : '', s.placeholdersSent ? `${s.placeholdersSent} sent to Zotero` : '', s.placeholdersFailed ? `${s.placeholdersFailed} couldn’t be sent` : ''].filter(Boolean);
+      if (loud || extra.length) toast([s.changed ? `${s.changed} change${s.changed === 1 ? '' : 's'} from Zotero` : (loud ? 'Up to date' : ''), ...extra].filter(Boolean).join(' · '));
+      state.docs = []; await drawCols(); await loadItems();
+    }
     catch (e) { fail(e); }
     refresh.disabled = false; refresh.textContent = 'Refresh';
   };
@@ -383,6 +406,68 @@ async function showZotero() {
   await drawCols(); await loadItems();
   if (zstate.item) showItem(zstate.item);
   sync(false); // what changed since last time, in the background
+}
+
+/** Adds Zotero items to the library as placeholders (no file). Returns how many were added. */
+async function addPlaceholders(keys) {
+  try {
+    const r = await api('zotero/placeholder', { method: 'POST', json: { keys }, timeout: 180000 });
+    const n = r.created.length;
+    const skipped = r.skipped.filter(s => s.reason !== 'already in the library');
+    toast(n ? `${n} placeholder${n === 1 ? '' : 's'} added to the library` + (skipped.length ? ` · ${skipped.length} not added` : '') : (r.skipped[0] ? 'Not added: ' + r.skipped[0].reason : 'Nothing added'));
+    state.docs = [];
+    return n;
+  } catch (e) { fail(e); return 0; }
+}
+
+/** On a placeholder's page: get the file from Zotero (choosing one if there are several), then ask about Zotero's copy. */
+async function placeholderFetch(d, onDone) {
+  let atts;
+  try { toast('Asking Zotero for the file…'); atts = (await api(`zotero/attachments?doc=${d.id}`)).attachments; } catch (e) { fail(e); return; }
+  const ok = atts.filter(a => a.downloadable);
+  if (!atts.length) { toast('This item has no PDF or EPUB in Zotero. Add the file from your computer instead.'); return; }
+  if (!ok.length) { toast('Zotero keeps no copy of this file online (it is linked on your computer or stored with WebDAV). Add it from your computer instead.'); return; }
+  const run = async att => {
+    let r;
+    try { toast('Fetching the file from Zotero…'); r = await api('zotero/fetch-file', { method: 'POST', json: { doc: d.id, attachment: att.key }, timeout: 600000 }); } catch (e) { fail(e); return; }
+    modal((box, close) => {
+      const done = () => { close(); onDone(); };
+      box.append(h('h2', null, 'File added'),
+        h('p', null, `“${att.fileName || att.title}” is now on the tablet, and the book’s details stay in step with Zotero.`),
+        h('p', { class: 'muted' }, r.canWrite ? 'Keep the file in Zotero too, or move Zotero’s copy to Zotero’s trash (it can be restored there)?' : 'Your Zotero key is read-only, so the file stays in Zotero.'),
+        h('div', { class: 'foot' },
+          r.canWrite ? h('button', { class: 'btn quiet', onclick: async () => {
+            try { await api('zotero/trash-attachment', { method: 'POST', json: { key: att.key, version: att.version } }); toast('Zotero’s copy moved to its trash'); } catch (e) { fail(e); }
+            done();
+          } }, 'Move to Zotero’s trash') : null,
+          h('button', { class: 'btn fill', onclick: done }, 'Keep it in Zotero')));
+    });
+  };
+  if (ok.length === 1) return run(ok[0]);
+  modal((box, close) => {
+    box.append(h('h2', null, 'Which file?'), ...ok.map(a => h('button', { class: 'cand', type: 'button', onclick: () => { close(); run(a); } }, h('b', null, a.title || a.fileName), h('span', null, a.fileName || ''))),
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel')));
+  });
+}
+
+/** On a placeholder's page: a file from this computer becomes the book's file. */
+function placeholderUpload(d, onDone) {
+  const input = h('input', { type: 'file', accept: '.pdf,.epub,.zip,.html,.htm,.md,.txt' });
+  input.addEventListener('change', () => {
+    const f = input.files[0]; if (!f) return;
+    const xhr = new XMLHttpRequest();
+    toast(`Uploading ${f.name}…`);
+    xhr.open('POST', `/api/doc/${d.id}/attach-file?name=${encodeURIComponent(f.name)}`);
+    xhr.setRequestHeader('X-Marginalia', '1');
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { toast('File added'); onDone(); }
+      else { let m = 'Upload failed'; try { m = JSON.parse(xhr.responseText).error || m; } catch (_) {} toast(m); }
+    };
+    xhr.onerror = () => toast('Upload failed');
+    xhr.send(f);
+  });
+  input.click();
 }
 
 const STYLE_NAMES = { CHICAGO_AUTHOR_DATE: 'Chicago author-date', APA7: 'APA 7', CHICAGO_NOTES: 'Chicago notes', HARVARD: 'Harvard', MLA9: 'MLA 9' };

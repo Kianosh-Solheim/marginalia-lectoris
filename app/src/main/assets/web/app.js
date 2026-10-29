@@ -11,6 +11,7 @@ const state = {
   device: '',
   docs: [],
   view: localGet('ml.view', 'grid'),
+  hidePh: localGet('ml.hidePh', '0') === '1',
   sort: localGet('ml.sort', 'recent'),
   tab: 'all',
   query: '',
@@ -753,7 +754,7 @@ function docMenu(d, onChanged) {
       ? [['All chapters (.zip)', () => download(`doc/${d.id}/export/folder`, 'Exporting every chapter…')], ['BibTeX (.bib)', () => download(`doc/${d.id}/export/bib`, 'Preparing…')]]
       : EXPORTS.map(([k, label]) => [label, () => download(`doc/${d.id}/export/${k}`, 'Preparing ' + label.toLowerCase() + '…')]);
     const items = list.map(([label, fn]) => ({ label, fn }));
-    if (!d.folder) items.push('-', { label: 'The book file', fn: () => download(`doc/${d.id}/file?download=1`, 'Downloading the book…') });
+    if (!d.folder && !d.placeholder) items.push('-', { label: 'The book file', fn: () => download(`doc/${d.id}/file?download=1`, 'Downloading the book…') });
     if (isPdf(d)) items.push('-',
       { label: 'Clean text (.txt)', fn: () => download(`doc/${d.id}/export/clean-text`, 'Reading every page on the tablet…') },
       { label: 'Searchable PDF', fn: () => download(`doc/${d.id}/export/searchable-pdf`, 'Making a searchable PDF on the tablet…') });
@@ -786,6 +787,8 @@ function docMenu(d, onChanged) {
     { label: 'Edit details…', fn: withFull(f => editAll(f)) },
     d.folder ? null : { label: 'Look up details…', hint: 'DOI · ISBN · title', fn: withFull(f => editAll(f, 'lookup')) },
     d.folder ? null : { label: 'Change cover…', fn: () => changeCover(d) },
+    d.placeholder ? { label: 'Get the file from Zotero', fn: () => placeholderFetch(d, reload) } : null,
+    d.placeholder ? { label: 'Add the file from this computer…', fn: () => placeholderUpload(d, reload) } : null,
     { label: 'Tags…', fn: () => editTags(d, reload) },
     { label: `Move to ${other[1]}`, fn: async () => {
       try { await api(`doc/${d.id}`, { method: 'PATCH', json: { category: other[0] } }); toast(`Moved to ${other[1]}`); reload(); } catch (e) { fail(e); }
@@ -1086,6 +1089,7 @@ function filteredDocs() {
   if (state.tab === 'books') docs = docs.filter(d => d.category !== 'ARTICLE');
   if (state.tab === 'articles') docs = docs.filter(d => d.category === 'ARTICLE');
   if (state.tag) docs = docs.filter(d => splitTags(d.tags).some(t => t.toLowerCase() === state.tag.toLowerCase()));
+  if (state.hidePh) docs = docs.filter(d => !d.placeholder);
   const q = norm(state.query.trim().replace(/^#/, ''));
   if (!q) docs = docs.filter(d => !d.inFolder);
   if (q) {
@@ -1348,6 +1352,7 @@ function renderShelf() {
       s.addEventListener('change', () => { state.sort = s.value; localSet('ml.sort', s.value); renderShelf(); });
       return s;
     })(),
+    state.docs.some(d => d.placeholder) ? h('button', { class: 'chip' + (state.hidePh ? ' on' : ''), title: 'Zotero items in the library without a file', onclick: () => { state.hidePh = !state.hidePh; localSet('ml.hidePh', state.hidePh ? '1' : '0'); renderShelf(); } }, state.hidePh ? 'Placeholders hidden' : 'Hide placeholders') : null,
     h('button', { class: 'chip' + (state.view === 'grid' ? ' on' : ''), onclick: () => { state.view = 'grid'; localSet('ml.view', 'grid'); renderShelf(); } }, 'Covers'),
     h('button', { class: 'chip' + (state.view === 'list' ? ' on' : ''), onclick: () => { state.view = 'list'; localSet('ml.view', 'list'); renderShelf(); } }, 'List')
   );
@@ -1376,8 +1381,8 @@ function renderShelf() {
         h('div', { style: { minWidth: 0 } }, h('div', { class: 't' }, d.title), h('div', { class: 'muted', style: { fontSize: '13px' } }, d.displayAuthor || d.author)),
         h('div', { class: 'mono muted', style: { fontSize: '11px' } }, splitTags(d.tags).slice(0, 3).map(t => '#' + t).join(' ')),
         h('div', { class: 'mono', style: { fontSize: '12px' } }, `${pct(d.progress)}%`),
-        h('div', { class: 'mono muted', style: { fontSize: '11px' } }, `${d.fileType} · ${d.highlights} notes`));
-      makeDraggable(row, d);
+        h('div', { class: 'mono muted', style: { fontSize: '11px' } }, `${d.placeholder ? 'No file · Zotero' : d.fileType} · ${d.highlights} notes`));
+      if (!d.placeholder) makeDraggable(row, d);
       onContext(row, () => docMenu(d, () => showLibrary()));
       list.append(row);
     });
@@ -1387,12 +1392,12 @@ function renderShelf() {
   const grid = h('div', { class: 'grid' });
   docs.forEach(d => {
     const card = h('div', { class: 'card', onclick: () => { location.hash = `#/book/${d.id}`; }, title: 'Open · drag to your desktop to save the file' },
-      coverFrame(d, h('span', { class: 'badge' }, d.folder ? `FOLDER · ${d.partCount || 0}` : d.fileType), d.pinned ? h('span', { class: 'pin', title: 'Pinned to the widget' }, '◆') : null),
+      coverFrame(d, h('span', { class: 'badge' + (d.placeholder ? ' phbadge' : '') }, d.folder ? `FOLDER · ${d.partCount || 0}` : d.placeholder ? 'NO FILE · ZOTERO' : d.fileType), d.pinned ? h('span', { class: 'pin', title: 'Pinned to the widget' }, '◆') : null),
       h('div', { class: 'bar' }, h('i', { style: { width: pct(d.progress) + '%' } })),
       h('div', { class: 't' }, d.title),
       h('div', { class: 'a' }, d.displayAuthor || d.author || ' '),
-      h('div', { class: 'm' }, `${pct(d.progress)}% · ${d.highlights} note${d.highlights === 1 ? '' : 's'}`));
-    makeDraggable(card, d);
+      h('div', { class: 'm' }, d.placeholder ? `No file yet · ${d.highlights} note${d.highlights === 1 ? '' : 's'}` : `${pct(d.progress)}% · ${d.highlights} note${d.highlights === 1 ? '' : 's'}`));
+    if (!d.placeholder) makeDraggable(card, d);
     onContext(card, () => docMenu(d, () => showLibrary()));
     grid.append(card);
   });
@@ -1425,6 +1430,7 @@ async function showBook(id) {
 function renderBook(main, d) {
   state.currentDoc = d;
   if (d.folder) return renderFolder(main, d);
+  const again = () => showBook(d.id);
   const exportMenu = menuButton('Export ▾', EXPORTS.map(([k, label, sub]) => [label, sub, () => download(`doc/${d.id}/export/${k}`, 'Preparing ' + label.toLowerCase() + '…')]));
   const tags = splitTags(d.tags);
   const left = h('div', null,
@@ -1432,10 +1438,10 @@ function renderBook(main, d) {
       (() => { const img = coverImg(d, 'bc'); makeDraggable(img, d); onContext(img, () => docMenu(d, () => showBook(d.id))); return img; })()),
     coverButton(d),
     h('div', { class: 'facts', style: { flexDirection: 'column', gap: '4px' } },
-      h('span', null, `${d.fileType} · ${fmtSize(d.size)}`),
-      h('span', null, `${d.category === 'ARTICLE' ? 'Article' : 'Book'} · ${d.totalPages} ${isEpub(d) ? 'positions' : 'pages'}`),
+      d.placeholder ? h('span', null, 'No file yet · from Zotero') : h('span', null, `${d.fileType} · ${fmtSize(d.size)}`),
+      d.placeholder ? h('span', null, d.category === 'ARTICLE' ? 'Article' : 'Book') : h('span', null, `${d.category === 'ARTICLE' ? 'Article' : 'Book'} · ${d.totalPages} ${isEpub(d) ? 'positions' : 'pages'}`),
       h('span', null, `Added ${fmtDate(d.dateAdded)}`),
-      h('span', null, `Last read ${fmtDate(d.lastRead)}`)),
+      d.placeholder ? null : h('span', null, `Last read ${fmtDate(d.lastRead)}`)),
     bibFacts(d));
 
   const right = h('div', null,
@@ -1444,14 +1450,20 @@ function renderBook(main, d) {
     h('h1', null, d.title),
     h('div', { class: 'by' }, d.displayAuthor || d.author || 'Unknown author'),
     tags.length ? h('div', { class: 'tags' }, tags.map(t => h('span', { class: 'tag' }, '#' + t))) : null,
+    d.placeholder ? h('div', { class: 'phnote' }, h('b', null, 'Placeholder from Zotero. '),
+      'The file is not on the tablet yet. Its details follow Zotero (changes there arrive when the Zotero tab is opened or refreshed), and what you change here is sent to Zotero. Notes and the Obsidian overview note work as for any book.') :
+      d.zoteroSynced ? h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '8px' } }, 'Details kept in step with Zotero.') : null,
     h('div', { class: 'facts' },
-      h('span', null, `${pct(d.progress)}% read`),
+      d.placeholder ? null : h('span', null, `${pct(d.progress)}% read`),
       d.chapter ? h('span', null, d.chapter) : null,
       h('span', null, `${d.highlights} note${d.highlights === 1 ? '' : 's'}`)),
-    h('div', { class: 'bar', style: { height: '4px', background: 'var(--rule)', marginBottom: '16px' } }, h('i', { style: { display: 'block', height: '100%', background: '#000', width: pct(d.progress) + '%' } })),
+    d.placeholder ? null : h('div', { class: 'bar', style: { height: '4px', background: 'var(--rule)', marginBottom: '16px' } }, h('i', { style: { display: 'block', height: '100%', background: '#000', width: pct(d.progress) + '%' } })),
     h('div', { class: 'row' },
+      d.placeholder ? h('button', { class: 'btn fill', onclick: () => placeholderFetch(d, again) }, 'Get the file from Zotero') : null,
+      d.placeholder ? h('button', { class: 'btn', onclick: () => placeholderUpload(d, again) }, 'Add the file from this computer…') : null,
+      d.placeholder ? h('button', { class: 'btn', onclick: () => placeholderNote(d, again) }, 'New note') : null,
       canRead(d) ? h('button', { class: 'btn fill', onclick: () => { location.hash = `#/read/${d.id}`; } }, d.progress > 0 ? 'Continue reading' : 'Read') : null,
-      h('button', { class: 'btn', onclick: () => download(`doc/${d.id}/file?download=1`, 'Downloading the book…') }, 'Download file'),
+      d.placeholder ? null : h('button', { class: 'btn', onclick: () => download(`doc/${d.id}/file?download=1`, 'Downloading the book…') }, 'Download file'),
       exportMenu,
       h('button', { class: 'btn', onclick: () => editAll(d) }, 'Edit details'),
       h('button', { class: 'btn', onclick: () => addToFolderBook(d) }, d.folderNav ? 'Move to another folder book…' : 'Add to a folder book…'),
@@ -1962,7 +1974,7 @@ function notesSection(d, main) {
   const draw = () => {
     clear(list);
     const sorted = notes.slice().sort(order === 'new' ? (a, b) => b.created - a.created : (a, b) => a.pageNumber - b.pageNumber || a.created - b.created);
-    if (!sorted.length) list.append(h('div', { class: 'muted' }, canRead(d) ? 'No notes yet. Open the book and select text to make one.' : 'No notes yet.'));
+    if (!sorted.length) list.append(h('div', { class: 'muted' }, canRead(d) ? 'No notes yet. Open the book and select text to make one.' : d.placeholder ? 'No notes yet. Use “New note” to write one.' : 'No notes yet.'));
     sorted.forEach(n => list.append(noteItem(n, d, () => showBook(d.id))));
   };
   draw();
@@ -1971,6 +1983,34 @@ function notesSection(d, main) {
       h('button', { class: 'chip' + (order === 'place' ? ' on' : ''), onclick: e => { order = 'place'; localSet('ml.noteOrder', order); e.target.parentNode.querySelectorAll('.chip').forEach(c => c.classList.remove('on')); e.target.classList.add('on'); draw(); } }, 'In order'),
       h('button', { class: 'chip' + (order === 'new' ? ' on' : ''), onclick: e => { order = 'new'; localSet('ml.noteOrder', order); e.target.parentNode.querySelectorAll('.chip').forEach(c => c.classList.remove('on')); e.target.classList.add('on'); draw(); } }, 'Newest')),
     list);
+}
+
+/** A note of your own on a book without a file: title, notes, an optional quote, and where in the book. */
+function placeholderNote(d, onDone) {
+  modal((box, close) => {
+    const title = h('input', { placeholder: 'Title' });
+    const notes = h('textarea', { rows: 5, placeholder: 'Your notes' });
+    const quote = h('textarea', { rows: 3, placeholder: 'Quote (optional)' });
+    const page = h('input', { placeholder: 'Page, e.g. 42 or 42–44', style: { width: '160px' } });
+    const chapter = h('input', { placeholder: 'Chapter (optional)' });
+    const tags = tagInput('', true);
+    const save = h('button', { class: 'btn fill', onclick: async () => {
+      if (!title.value.trim() && !notes.value.trim() && !quote.value.trim()) { toast('Write the note first.'); return; }
+      const label = page.value.trim();
+      const n = parseInt((label.match(/\d+/) || ['1'])[0], 10) || 1;
+      save.disabled = true;
+      try {
+        await api(`doc/${d.id}/highlights`, { method: 'POST', json: { title: title.value.trim(), userNotes: notes.value.trim(), text: quote.value.trim(), page: n, pageLabel: label, chapter: chapter.value.trim(), tags: tags.value } });
+        toast('Note saved'); close(); onDone();
+      } catch (e) { fail(e); save.disabled = false; }
+    } }, 'Save');
+    box.append(h('h2', null, 'New note'), h('div', { class: 'muted', style: { marginTop: '-6px', marginBottom: '8px' } }, d.title),
+      h('label', { class: 'label' }, 'Title'), title, h('label', { class: 'label' }, 'Notes'), notes, h('label', { class: 'label' }, 'Quote'), quote,
+      h('div', { class: 'row', style: { gap: '8px' } }, h('div', null, h('label', { class: 'label' }, 'Page'), page), h('div', { style: { flex: 1 } }, h('label', { class: 'label' }, 'Chapter'), chapter)),
+      h('label', { class: 'label' }, 'Tags'), tags._widget || tags,
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), save));
+    setTimeout(() => title.focus(), 0);
+  });
 }
 
 function bibSection(d, main) {

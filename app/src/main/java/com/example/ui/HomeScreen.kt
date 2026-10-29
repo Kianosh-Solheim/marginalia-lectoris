@@ -198,6 +198,7 @@ fun HomeScreen(
     val coroutineScope = rememberCoroutineScope()
     PresentationsHost()
     ZoteroHost()
+    PlaceholderHost()
     var tileScalePref by remember { mutableStateOf(TileScalePreference.AUTO) }
     var libraryViewMode by remember {
         val saved = uiPrefs.getString("library_view_mode", LibraryViewMode.GRID.name)
@@ -422,6 +423,25 @@ fun HomeScreen(
                         .padding(horizontal = 12.dp, vertical = 3.dp)
                         .border(1.dp, Color.Black)
                 )
+
+                run {
+                    val drawerCtx = androidx.compose.ui.platform.LocalContext.current
+                    val hidePlaceholders by com.example.reader.ZoteroPlaceholders.hidden(drawerCtx).collectAsState()
+                    NavigationDrawerItem(
+                        icon = { Text(if (hidePlaceholders == true) "○" else "●", color = Color.Black) },
+                        label = { Text(if (hidePlaceholders == true) "Show Zotero placeholders" else "Hide Zotero placeholders", fontWeight = FontWeight.Medium) },
+                        selected = false,
+                        onClick = { com.example.reader.ZoteroPlaceholders.setHidden(drawerCtx, hidePlaceholders != true) },
+                        shape = RoundedCornerShape(0.dp),
+                        colors = NavigationDrawerItemDefaults.colors(
+                            unselectedContainerColor = Color.White,
+                            unselectedTextColor = Color.Black
+                        ),
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 3.dp)
+                            .border(1.dp, Color.Black)
+                    )
+                }
 
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Default.Slideshow, contentDescription = null, tint = Color.Black) },
@@ -1266,7 +1286,7 @@ fun ContinueReadingBannerCard(
     val badgeLabel = if (document.fileType.equals("EPUB", ignoreCase = true)) {
         document.epubVersion.ifBlank { "EPUB" }
     } else {
-        document.fileType.uppercase()
+        (if (document.fileType.equals("ZOTERO", true)) "NO FILE · ZOTERO" else document.fileType.uppercase())
     }
     val locusSummary = remember(document) {
         com.example.widget.ContinueFormatter.locus(document)
@@ -1811,7 +1831,7 @@ fun DocumentCardItem(
                 val badgeLabel = if (document.fileType.equals("EPUB", ignoreCase = true)) {
                     document.epubVersion.ifBlank { "EPUB" }
                 } else {
-                    document.fileType.uppercase()
+                    (if (document.fileType.equals("ZOTERO", true)) "NO FILE · ZOTERO" else document.fileType.uppercase())
                 }
                 Surface(
                     color = formatSwatch.fill,
@@ -2184,7 +2204,7 @@ fun DocumentHorizontalListItem(
                         val badgeLabel = if (document.fileType.equals("EPUB", ignoreCase = true)) {
                             document.epubVersion.ifBlank { "EPUB" }
                         } else {
-                            document.fileType.uppercase()
+                            (if (document.fileType.equals("ZOTERO", true)) "NO FILE · ZOTERO" else document.fileType.uppercase())
                         }
                         Surface(
                             color = formatSwatch.fill,

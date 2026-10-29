@@ -37,6 +37,7 @@ import com.example.reader.Citations
 import com.example.reader.MetadataLookup
 import com.example.reader.People
 import com.example.reader.Zotero
+import com.example.reader.ZoteroPlaceholders
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -80,16 +81,25 @@ fun ZoteroScreen(onClose: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<String?>(null) }
     var docs by remember { mutableStateOf<List<DocumentEntity>>(emptyList()) }
-    var importResult by remember { mutableStateOf<String?>(null) }
+    var importResult by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
+    var bulkBusy by remember { mutableStateOf(false) }
     BackHandler { if (selected != null) selected = null else onClose() }
 
     fun sync(loud: Boolean) {
         if (account == null) return
         busy = true; status = "Fetching from Zotero…"
         scope.launch {
-            val r = withContext(Dispatchers.IO) { runCatching { Zotero.sync(context) } }
+            val r = withContext(Dispatchers.IO) { runCatching { Zotero.sync(context).let { n -> n to runCatching { ZoteroPlaceholders.syncAll(context) }.getOrNull() } } }
             busy = false
-            status = r.fold({ n -> if (n > 0 || loud) "$n change${if (n == 1) "" else "s"} from Zotero" else "" }, { "Couldn't reach Zotero: ${it.message}" })
+            status = r.fold({ (n, p) ->
+                val base = if (n > 0 || loud) "$n change${if (n == 1) "" else "s"} from Zotero" else ""
+                val extra = listOfNotNull(
+                    p?.updated?.takeIf { it > 0 }?.let { "$it book${if (it == 1) "" else "s"} updated from Zotero" },
+                    p?.sent?.takeIf { it > 0 }?.let { "$it sent to Zotero" },
+                    p?.failed?.takeIf { it > 0 }?.let { "$it couldn't be sent" })
+                (listOf(base).filter { it.isNotBlank() } + extra).joinToString(" · ")
+            }, { "Couldn't reach Zotero: ${it.message}" })
+            docs = withContext(Dispatchers.IO) { AppDatabase.getInstance(context).documentDao().getAllDocumentsSnapshot() }
             version++
         }
     }
@@ -140,7 +150,7 @@ fun ZoteroScreen(onClose: () -> Unit) {
                             val col = collection ?: return@InkButton
                             busy = true
                             scope.launch {
-                                importResult = withContext(Dispatchers.IO) { runCatching { importCollection(context, col) }.getOrElse { "Couldn't import: ${it.message}" } }
+                                importResult = withContext(Dispatchers.IO) { runCatching { importCollection(context, col) }.getOrElse { "Couldn't import: ${it.message}" to emptyList() } }
                                 busy = false; version++
                             }
                         })
@@ -162,16 +172,32 @@ fun ZoteroScreen(onClose: () -> Unit) {
                 Column(Modifier.weight(1.2f).fillMaxHeight().border(1.dp, ZRule).padding(14.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val k = selected
                     if (k == null) Text("Choose an item.", color = ZGrey)
-                    else ZoteroItemDetail(k, docs, onChanged = { version++ })
+                    else ZoteroItemDetail(k, docs, onChanged = { scope.launch { docs = withContext(Dispatchers.IO) { AppDatabase.getInstance(context).documentDao().getAllDocumentsSnapshot() }; version++ } })
                 }
             }
         }
     }
-    importResult?.let { msg ->
-        AlertDialog(onDismissRequest = { importResult = null }, containerColor = Color.White, shape = RoundedCornerShape(4.dp),
+    importResult?.let { (msg, missing) ->
+        AlertDialog(onDismissRequest = { if (!bulkBusy) importResult = null }, containerColor = Color.White, shape = RoundedCornerShape(4.dp),
             title = { Text("Collection imported", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) },
-            text = { Text(msg) },
-            confirmButton = { TextButton(onClick = { importResult = null }) { Text("Done", color = Color.Black, fontWeight = FontWeight.Bold) } })
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) { Text(msg) } },
+            confirmButton = {
+                Row {
+                    if (missing.isNotEmpty()) TextButton(enabled = !bulkBusy, onClick = {
+                        bulkBusy = true
+                        scope.launch {
+                            val res = withContext(Dispatchers.IO) { runCatching { ZoteroPlaceholders.create(context, missing) } }
+                            bulkBusy = false
+                            val made = res.getOrNull()?.count { it.doc != null } ?: 0
+                            importResult = null
+                            status = res.fold({ "$made placeholder${if (made == 1) "" else "s"} added to the library" }, { "Couldn't add placeholders: ${it.message}" })
+                            docs = withContext(Dispatchers.IO) { AppDatabase.getInstance(context).documentDao().getAllDocumentsSnapshot() }
+                            version++
+                        }
+                    }) { Text(if (bulkBusy) "Adding…" else "Add the ${missing.size} missing as placeholders", color = Color.Black, fontWeight = FontWeight.Bold) }
+                    TextButton(enabled = !bulkBusy, onClick = { importResult = null }) { Text("Done", color = Color.Black, fontWeight = FontWeight.Bold) }
+                }
+            })
     }
 }
 
@@ -200,7 +226,7 @@ private fun ZoteroConnect(onConnected: (Zotero.Account) -> Unit) {
             InkButton(if (busy) "Checking…" else "Connect", filled = true, enabled = !busy && key.isNotBlank(), onClick = {
                 busy = true; msg = ""
                 scope.launch {
-                    val r = withContext(Dispatchers.IO) { runCatching { Zotero.connect(context, key).also { runCatching { Zotero.sync(context) } } } }
+                    val r = withContext(Dispatchers.IO) { runCatching { Zotero.connect(context, key).also { runCatching { Zotero.sync(context); ZoteroPlaceholders.syncAll(context) } } } }
                     busy = false
                     r.onSuccess { onConnected(it) }.onFailure { msg = it.message ?: "Couldn't connect." }
                 }
@@ -212,11 +238,11 @@ private fun ZoteroConnect(onConnected: (Zotero.Account) -> Unit) {
 }
 
 /** Links what clearly matches, tags the books with the collection, and says what is left. */
-private suspend fun importCollection(context: android.content.Context, collection: String): String {
+private suspend fun importCollection(context: android.content.Context, collection: String): Pair<String, List<String>> {
     val dao = AppDatabase.getInstance(context).documentDao()
     val docs = dao.getAllDocumentsSnapshot()
     var linked = 0; var already = 0; var tagged = 0
-    val unsure = mutableListOf<String>(); val missing = mutableListOf<String>()
+    val unsure = mutableListOf<String>(); val missing = mutableListOf<String>(); val missingKeys = mutableListOf<String>()
     Zotero.list(collection, null).forEach { d ->
         val k = d.getString("key")
         val existing = Zotero.docFor(k)
@@ -232,13 +258,14 @@ private suspend fun importCollection(context: android.content.Context, collectio
         if (top != null && top.strength >= 3 && best.count { it.strength >= 3 } == 1) {
             Zotero.link(context, top.document.id, k); linked++
             val t = Zotero.withCollectionTags(top.document.tags, d); if (t != top.document.tags) { dao.updateTags(top.document.id, t); tagged++ }
-        } else if (best.isNotEmpty()) unsure += d.optString("title") else missing += d.optString("title")
+        } else if (best.isNotEmpty()) unsure += d.optString("title") else { missing += d.optString("title"); missingKeys += k }
     }
     return buildString {
         append("$linked linked now, $already linked already, $tagged book${if (tagged == 1) "" else "s"} tagged with the collection.")
         if (unsure.isNotEmpty()) append("\n\nProbably on the tablet — open each to choose the book:\n• " + unsure.take(12).joinToString("\n• "))
         if (missing.isNotEmpty()) append("\n\nNot on the tablet:\n• " + missing.take(12).joinToString("\n• ") + if (missing.size > 12) "\n…" else "")
-    }
+        if (missing.isNotEmpty()) append("\n\nThey can be added as placeholders: in the library with all their details from Zotero, without the file (it can be added later).")
+    } to missingKeys
 }
 
 @Composable
@@ -259,9 +286,12 @@ private fun ZoteroItemDetail(itemKey: String, docs: List<DocumentEntity>, onChan
     Column(Modifier.fillMaxWidth().border(1.dp, ZRule).padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (link != null) {
             val doc = docs.firstOrNull { it.id == link.first }
-            Text("▣ On the tablet: ${doc?.title ?: "book ${link.first}"}" + (link.second?.let { " (chapter ${it + 1})" } ?: ""), fontWeight = FontWeight.Bold, color = Color(0xFF15803D), fontSize = 14.sp)
+            val isPh = ZoteroPlaceholders.isPlaceholder(doc)
+            Text((if (isPh) "▢ Placeholder (no file): " else "▣ On the tablet: ") + (doc?.title ?: "book ${link.first}") + (link.second?.let { " (chapter ${it + 1})" } ?: ""), fontWeight = FontWeight.Bold, color = if (isPh) ZGrey else Color(0xFF15803D), fontSize = 14.sp)
+            if (link.second == null && ZoteroPlaceholders.isSynced(context, link.first)) Text("Details kept in step with Zotero.", fontSize = 12.sp, color = ZGrey)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                InkButton("Check citation", filled = true, onClick = { checking = link })
+                if (isPh) InkButton("Get the file…", filled = true, onClick = { placeholderOpen.value = link.first })
+                InkButton("Check citation", filled = !isPh, onClick = { checking = link })
                 InkButton("Unlink", onClick = { Zotero.unlink(context, link.first, link.second); refresh++; onChanged() })
             }
         } else {
@@ -282,7 +312,18 @@ private fun ZoteroItemDetail(itemKey: String, docs: List<DocumentEntity>, onChan
                     })
                 }
             }
-            InkButton("Link to another book…", onClick = { picking = true })
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                InkButton("Link to another book…", onClick = { picking = true })
+                InkButton("Add without the file", onClick = {
+                    scope.launch {
+                        val r = withContext(Dispatchers.IO) { runCatching { ZoteroPlaceholders.create(context, listOf(itemKey)).first() } }
+                        r.fold({ c -> Toast.makeText(context, if (c.doc != null) "Added to the library as a placeholder" else "Not added: ${c.skipped}", Toast.LENGTH_LONG).show() },
+                            { Toast.makeText(context, "Couldn't add it: ${it.message}", Toast.LENGTH_LONG).show() })
+                        refresh++; onChanged()
+                    }
+                })
+            }
+            Text("“Add without the file” puts it in the library with all its details from Zotero; the file can be added later.", fontSize = 12.sp, color = ZGrey)
         }
     }
     Text("ZOTERO’S REFERENCE · ${Citations.defaultStyle(context).label.uppercase()}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = ZGrey)
@@ -325,7 +366,7 @@ private data class ZRow(val key: String, val label: String, val mine: String, va
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ZoteroCheckDialog(docId: Long, chapter: Int?, itemKey: String, onDismiss: () -> Unit) {
+internal fun ZoteroCheckDialog(docId: Long, chapter: Int?, itemKey: String, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var rows by remember { mutableStateOf<List<ZRow>?>(null) }

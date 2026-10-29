@@ -84,6 +84,7 @@ fun kaleidoSwatchForFileType(fileType: String): KaleidoTagSwatch {
         "HTML", "HTM", "XHTML" -> KaleidoTagSwatch(Color(0xFF6B8DA9), Color.Black, Color.Black) // Blue
         "MD", "MARKDOWN" -> KaleidoTagSwatch(Color(0xFF9C7CB8), Color.Black, Color.Black) // Purple
         "TXT" -> KaleidoTagSwatch(Color(0xFFE8E8E6), Color.Black, Color.Black)
+        "ZOTERO" -> KaleidoTagSwatch(Color.White, Color.Black, Color.Black) // No file yet: an outlined badge
         else -> KaleidoTagSwatch(Color(0xFF6B8DA9), Color.Black, Color.Black)
     }
 }

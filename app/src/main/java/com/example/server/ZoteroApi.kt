@@ -12,6 +12,7 @@ import com.example.reader.FolderBooks
 import com.example.reader.MetadataLookup
 import com.example.reader.People
 import com.example.reader.Zotero
+import com.example.reader.ZoteroPlaceholders
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -31,6 +32,10 @@ import org.json.JSONObject
  *   POST   chapter-apply {doc, chapter, fields}
  *   POST   import {collection}        link what matches, add collection tags, list the rest
  *   POST   lookup {identifier}        DOI, ISBN, PMID, arXiv or ISSN
+ *   POST   placeholder {keys}         add Zotero items to the library without a file
+ *   GET    attachments?doc=id         the PDF/EPUB files Zotero has for a book's item
+ *   POST   fetch-file {doc, attachment?}  take Zotero's file into a placeholder
+ *   POST   trash-attachment {key, version}  move that file to Zotero's trash (only when asked)
  */
 class ZoteroApi(private val context: Context) {
     private val db = AppDatabase.getInstance(context)
@@ -50,13 +55,14 @@ class ZoteroApi(private val context: Context) {
             what == "status" -> ok(status())
             what == "key" && m == "POST" -> {
                 Zotero.connect(context, JSONObject(req.bodyText()).optString("key"))
-                runCatching { Zotero.sync(context) }
+                runCatching { Zotero.sync(context); ZoteroPlaceholders.syncAll(context) }
                 ok(status())
             }
             what == "key" && m == "DELETE" -> { Zotero.disconnect(context); ok(status()) }
             what == "sync" && m == "POST" -> {
                 val n = Zotero.sync(context)
-                ok(status().put("changed", n))
+                val p = ZoteroPlaceholders.syncAll(context)
+                ok(status().put("changed", n).put("placeholdersUpdated", p.updated).put("placeholdersSent", p.sent).put("placeholdersFailed", p.failed))
             }
             what == "collections" -> ok(JSONObject().put("collections", JSONArray().apply {
                 Zotero.collectionList().forEach { c ->
@@ -84,6 +90,7 @@ class ZoteroApi(private val context: Context) {
                 val b = JSONObject(req.bodyText())
                 val chapter = if (b.has("chapter") && !b.isNull("chapter")) b.getInt("chapter") else null
                 Zotero.unlink(context, b.getLong("doc"), chapter)
+                if (chapter == null) ZoteroPlaceholders.forget(context, b.getLong("doc"))
                 ok(JSONObject().put("ok", true))
             }
             what == "push" && m == "POST" -> {
@@ -117,6 +124,31 @@ class ZoteroApi(private val context: Context) {
                 if (f.has("ABSTRACT")) next = next.copy(abstract = f.optString("ABSTRACT").trim(), isManual = true)
                 EditedVolumes.put(context, doc.id, v.copy(chapters = v.chapters.toMutableList().also { it[idx] = next }))
                 ok(docCheck(doc.id, idx, style(req)))
+            }
+            what == "placeholder" && m == "POST" -> {
+                val a = JSONObject(req.bodyText()).optJSONArray("keys") ?: JSONArray()
+                val keys = (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
+                require(keys.isNotEmpty()) { "Choose the Zotero items to add." }
+                val res = ZoteroPlaceholders.create(context, keys)
+                ok(JSONObject()
+                    .put("created", JSONArray().apply { res.mapNotNull { it.doc }.forEach { d -> put(JSONObject().put("id", d.id).put("title", d.title).put("author", d.author)) } })
+                    .put("skipped", JSONArray().apply { res.filter { it.doc == null }.forEach { put(JSONObject().put("key", it.key).put("reason", it.skipped)) } }))
+            }
+            what == "attachments" -> {
+                val docId = req.query["doc"]?.toLongOrNull() ?: throw IllegalArgumentException("Which book?")
+                val key = Zotero.linkOf(docId) ?: throw IllegalArgumentException("This book is not linked to a Zotero item.")
+                ok(JSONObject().put("attachments", JSONArray().apply { Zotero.attachments(context, key).forEach { put(it.toJson()) } }))
+            }
+            what == "fetch-file" && m == "POST" -> {
+                val b = JSONObject(req.bodyText())
+                val (doc, att) = ZoteroPlaceholders.fetchFromZotero(context, b.getLong("doc"), b.optString("attachment").takeIf { it.isNotBlank() })
+                ok(JSONObject().put("doc", doc.id).put("fileType", doc.fileType).put("attachment", att.toJson())
+                    .put("canWrite", Zotero.account(context)?.canWrite == true))
+            }
+            what == "trash-attachment" && m == "POST" -> {
+                val b = JSONObject(req.bodyText())
+                Zotero.trashItem(context, b.getString("key"), b.getInt("version"))
+                ok(JSONObject().put("ok", true).put("message", "Moved to Zotero's trash"))
             }
             what == "import" && m == "POST" -> ok(importCollection(JSONObject(req.bodyText()).getString("collection")))
             what == "lookup" && m == "POST" -> {
@@ -157,7 +189,7 @@ class ZoteroApi(private val context: Context) {
             .put("date", d.optString("date")).put("abstract", d.optString("abstractNote"))
         o.put("bib", runCatching { Zotero.bib(context, key, style) }.getOrElse { "" })
         o.put("style", style.name)
-        Zotero.docFor(key)?.let { (id, ch) -> docs.firstOrNull { it.id == id }?.let { o.put("linkedDoc", JSONObject().put("id", it.id).put("title", it.title).put("author", it.author).apply { ch?.let { c -> put("chapter", c) } }) } }
+        Zotero.docFor(key)?.let { (id, ch) -> docs.firstOrNull { it.id == id }?.let { o.put("linkedDoc", JSONObject().put("id", it.id).put("title", it.title).put("author", it.author).put("placeholder", ZoteroPlaceholders.isPlaceholder(it)).put("synced", ZoteroPlaceholders.isSynced(context, it.id)).apply { ch?.let { c -> put("chapter", c) } }) } }
         o.put("suggestions", JSONArray().apply {
             Zotero.suggestDocs(d, docs).filter { s -> Zotero.linkOf(s.document.id) == null }.forEach { s ->
                 put(JSONObject().put("id", s.document.id).put("title", s.document.title).put("author", s.document.author).put("reason", s.reason).put("strength", s.strength))
@@ -172,6 +204,7 @@ class ZoteroApi(private val context: Context) {
         val rec = BibStore.get(doc.id)
         val o = JSONObject().put("connected", Zotero.account(context) != null).put("canWrite", Zotero.account(context)?.canWrite == true)
             .put("style", style.name).put("styleLabel", style.label)
+            .put("placeholder", ZoteroPlaceholders.isPlaceholder(doc)).put("synced", ZoteroPlaceholders.isSynced(context, doc.id))
         val vol = EditedVolumes.get(context, doc.id)?.takeIf { it.enabled }
         // The app's side: the book, or one chapter as a book section.
         val (mine, mineRec) = if (chapter != null && vol != null && chapter in vol.chapters.indices) EditedVolumes.chapterAsDocument(doc, vol, chapter) else doc to rec

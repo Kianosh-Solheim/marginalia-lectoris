@@ -159,7 +159,13 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                     else -> HttpResponse.json(hlJson(h).toString())
                 }
             }
-            s.size >= 2 && s[0] == "doc" -> return docRoute(req, s[1].toLong(), s.drop(2))
+            s.size >= 2 && s[0] == "doc" -> {
+                val id = s[1].toLong()
+                val r = docRoute(req, id, s.drop(2))
+                // A book kept in step with Zotero: its changed details are sent there.
+                if (m != "GET" && s.getOrNull(2) != "attach-file") com.example.reader.ZoteroPlaceholders.pushSoon(context, id)
+                return r
+            }
         }
         throw NoSuchElementException("Unknown address.")
     }
@@ -231,7 +237,22 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             }
             what == "cover" && m == "DELETE" -> HttpResponse.json(detail(CoverChanger.reset(context, ops, doc)).toString())
             what == "cover" -> cover(doc)
+            what == "attach-file" && m == "POST" -> {
+                val name = File(req.query["name"].orEmpty()).name.ifBlank { "document" }
+                val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                require(ext in LibraryImporter.supportedExtensions) { "“$name” is not a PDF, EPUB, DAISY (.zip), HTML, Markdown or text file." }
+                require(req.contentLength > 0) { "The file is empty." }
+                val tmpDir = File(context.cacheDir, "web-uploads").apply { mkdirs() }
+                val tmp = File(tmpDir, "${System.nanoTime()}.$ext")
+                try {
+                    tmp.outputStream().use { out -> req.body.copyTo(out, 256 * 1024) }
+                    require(tmp.length() == req.contentLength) { "The upload was interrupted." }
+                    val updated = com.example.reader.ZoteroPlaceholders.attach(context, doc.id, tmp, name)
+                    HttpResponse.json(detail(updated).toString())
+                } finally { tmp.delete() }
+            }
             what == "file" -> {
+                if (com.example.reader.ZoteroPlaceholders.isPlaceholder(doc)) throw NoSuchElementException("This book has no file on the tablet yet.")
                 val f = File(doc.filePath)
                 if (!f.isFile) throw NoSuchElementException("The book file is missing on the tablet.")
                 if (req.query["download"] == "1") {
@@ -387,6 +408,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             .put("coverVersion", (cover?.lastModified() ?: 0L) + d.title.hashCode())
             .put("editedVolume", !FolderBooks.isFolder(d) && runCatching { EditedVolumes.isEditedVolume(context, d) }.getOrDefault(false))
             .put("folder", FolderBooks.isFolder(d))
+            .put("placeholder", com.example.reader.ZoteroPlaceholders.isPlaceholder(d))
+            .put("zoteroSynced", com.example.reader.ZoteroPlaceholders.isSynced(context, d.id))
             .apply {
                 if (FolderBooks.isFolder(d)) put("partCount", FolderBooks.partsOf(d.id).size)
                 FolderBooks.folderOf(d.id)?.let { put("inFolder", it) }
@@ -880,8 +903,21 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
 
     private suspend fun addHighlight(doc: DocumentEntity, b: JSONObject): HighlightEntity {
         val text = b.optString("text").trim()
-        require(text.isNotBlank()) { "Select some text first." }
         val color = b.optString("colorHex").ifBlank { "#FFEB3B" }
+        if (com.example.reader.ZoteroPlaceholders.isPlaceholder(doc)) {
+            // No file to select from: a note of the reader's own, with a quote and page typed in if wanted.
+            require(text.isNotBlank() || b.optString("userNotes").isNotBlank() || b.optString("title").isNotBlank()) { "Write the note first." }
+            val page = b.optInt("page", 1).coerceAtLeast(1)
+            val label = b.optString("pageLabel").trim()
+            return ops.addHighlight(
+                documentId = doc.id, title = b.optString("title"), highlightedText = text,
+                userNotes = b.optString("userNotes"), pageNumber = page, printedPageLabel = label,
+                chapterTitle = b.optString("chapter").trim(), colorHex = color, tags = b.optString("tags"),
+                paragraphCitation = if (label.isNotBlank()) (if (label.contains('–') || label.contains('-')) "pp. " else "p. ") + label else "",
+                pageEquivalent = label
+            )
+        }
+        require(text.isNotBlank()) { "Select some text first." }
         return if (isPdf(doc)) {
             val page = b.optInt("page", 1).coerceAtLeast(1)
             val endPage = b.optInt("endPage", page).coerceAtLeast(page)

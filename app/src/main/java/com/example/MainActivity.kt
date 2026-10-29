@@ -291,6 +291,7 @@ fun ReadMarkApp(
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val openFromLibrary: (com.example.data.local.DocumentEntity) -> Unit = { doc ->
         when {
+            com.example.reader.ZoteroPlaceholders.isPlaceholder(doc) -> com.example.ui.placeholderOpen.value = doc.id
             com.example.reader.FolderBooks.isFolder(doc) -> folderDocId = doc.id
             com.example.reader.EditedVolumes.isEditedVolume(context, doc) -> volumeDocId = doc.id
             else -> viewModel.openDocument(doc)

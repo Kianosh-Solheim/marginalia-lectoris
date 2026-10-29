@@ -651,7 +651,7 @@ object StorageManager {
 
         for (doc in sortedDocs) {
             // Folder books have no book file of their own; never merge them with anything.
-            if (doc.fileType.equals("FOLDER", ignoreCase = true)) { keptDocs.add(doc); continue }
+            if (doc.fileType.equals("FOLDER", ignoreCase = true) || doc.fileType.equals("ZOTERO", ignoreCase = true)) { keptDocs.add(doc); continue }
             val file = File(doc.filePath)
             val canonPath = runCatching { file.canonicalPath.lowercase(Locale.ROOT) }
                 .getOrDefault(doc.filePath.lowercase(Locale.ROOT))
@@ -755,10 +755,12 @@ object StorageManager {
             val f = File(doc.filePath)
             runCatching { canonPathMap[f.canonicalPath] = doc }
             runCatching { f.parentFile?.canonicalPath?.let { parentCanonMap[it] = doc } }
-            runCatching {
+            // Folder books and Zotero placeholders live in folders of their own, never in "<Title>".
+            if (!doc.fileType.equals("FOLDER", true) && !doc.fileType.equals("ZOTERO", true)) runCatching {
                 val expectedFolder = getDocumentFolder(context, doc.category, doc.title, customPath, storageType)
                 parentCanonMap[expectedFolder.canonicalPath] = doc
             }
+            if (doc.fileType.equals("ZOTERO", true)) return
             titleMap[doc.title.trim().lowercase(Locale.ROOT)] = doc
             sanitizedTitleMap[sanitizeName(doc.title).lowercase(Locale.ROOT)] = doc
             computeFileContentSignature(f)?.let { sig ->

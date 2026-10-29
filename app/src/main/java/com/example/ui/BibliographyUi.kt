@@ -643,6 +643,7 @@ fun BibliographyEditorDialog(document: DocumentEntity, onDismiss: () -> Unit) {
                 if (summary.trim() != document.summary.trim()) {
                     scope.launch(Dispatchers.IO) { AppDatabase.getInstance(context).documentDao().updateSummary(document.id, summary.trim()) }
                 }
+                com.example.reader.ZoteroPlaceholders.pushSoon(context, document.id)
                 Toast.makeText(context, "Bibliographic details saved", Toast.LENGTH_SHORT).show()
                 onDismiss()
             }) { Text("Save", color = Color.Black, fontWeight = FontWeight.Bold) }
