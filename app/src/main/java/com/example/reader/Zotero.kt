@@ -528,6 +528,22 @@ object Zotero {
 
     /** Creates a Zotero item from a book on the tablet and links them. Returns its key. */
     fun create(ctx: Context, doc: DocumentEntity, rec: BibRecord, collection: String? = null): String {
+        val author = if (FolderBooks.isFolder(doc)) "" else doc.author
+        val editors = if (FolderBooks.isFolder(doc)) EditedVolumes.editors(doc) else ""
+        val newKey = createItem(ctx, doc, rec, author, editors, listOfNotNull(collection))
+        link(ctx, doc.id, newKey)
+        return newKey
+    }
+
+    /** The collections a book's Zotero item is in (for new book sections of its chapters). */
+    @Synchronized fun collectionsOf(itemKey: String?): List<String> =
+        itemKey?.let { items[it] }?.optJSONArray("collections")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } }.orEmpty()
+
+    /**
+     * Creates a Zotero item from [doc]/[rec] without linking it. [author] and [editors] are
+     * "Name Nameson; Other Person". The app's citation key is written as Zotero's.
+     */
+    fun createItem(ctx: Context, doc: DocumentEntity, rec: BibRecord, author: String, editors: String, collections: List<String>): String {
         init(ctx)
         ensureWrite(ctx)
         val type = itemType(rec.entryType, doc.category)
@@ -535,13 +551,13 @@ object Zotero {
         base.put("creators", JSONArray())
         val changes = LinkedHashMap<String, String>()
         changes["TITLE"] = listOf(rec[BibField.TITLE].ifBlank { doc.title }, rec[BibField.SUBTITLE]).filter { it.isNotBlank() }.joinToString(": ")
-        if (doc.author.isNotBlank() && !FolderBooks.isFolder(doc)) changes["AUTHOR"] = doc.author
+        if (author.isNotBlank()) changes["AUTHOR"] = author
         BibField.entries.filter { it != BibField.TITLE && it != BibField.SUBTITLE }.forEach { f -> rec[f].takeIf { it.isNotBlank() }?.let { changes[f.name] = it } }
-        if (FolderBooks.isFolder(doc)) EditedVolumes.editors(doc).takeIf { it.isNotBlank() }?.let { changes["EDITOR"] = it }
+        if (editors.isNotBlank()) changes["EDITOR"] = editors
         if (doc.summary.isNotBlank()) changes["ABSTRACT"] = doc.summary
         changes["CITEKEY"] = Citations.citeKey(doc, rec)
         val (item, _) = applyChanges(base, changes)
-        if (collection != null) item.put("collections", JSONArray().put(collection))
+        if (collections.isNotEmpty()) item.put("collections", JSONArray(collections.distinct()))
         val tags = NoteSuggestionEngine.parseTagsList(doc.tags)
         if (tags.isNotEmpty()) item.put("tags", JSONArray(tags.map { JSONObject().put("tag", it) }))
         val acct = account(ctx)!!
@@ -558,7 +574,6 @@ object Zotero {
                 ?: throw IllegalStateException(o.optJSONObject("failed")?.optJSONObject("0")?.optString("message") ?: "Zotero did not create the item.")
         }
         refresh(ctx, newKey)
-        link(ctx, doc.id, newKey)
         return newKey
     }
 

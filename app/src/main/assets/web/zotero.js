@@ -470,4 +470,54 @@ function placeholderUpload(d, onDone) {
   input.click();
 }
 
+let zoteroStatusPromise = null;
+/** Is Zotero connected? Asked of the tablet once per page load (Zotero itself is not contacted). */
+function zoteroConnected() {
+  if (!zoteroStatusPromise) zoteroStatusPromise = api('zotero/status').then(s => !!s.connected).catch(() => false);
+  return zoteroStatusPromise;
+}
+
+/**
+ * A chapter's Zotero button in a chapter list: “+ Zotero” makes it a book section of its own in Zotero
+ * (in the book's collections, linked and kept in step); once there, “Zotero ✓” opens the citation check.
+ * [target] is {doc, chapter} for an edited volume's chapter or {part} for a folder book's chapter file.
+ */
+function zoteroSectionButton(book, target, linkedKey, onDone) {
+  const slot = h('span');
+  zoteroConnected().then(ok => {
+    if (!ok) return;
+    if (linkedKey) {
+      slot.append(h('button', { class: 'btn quiet', title: 'This chapter is a book section in Zotero — check its citation', onclick: () =>
+        target.part ? zoteroCheckDialog(target.part, null, onDone) : zoteroCheckDialog(book.id, target.chapter, onDone) }, 'Zotero ✓'));
+      return;
+    }
+    const b = h('button', { class: 'btn quiet', title: 'Create a book section for this chapter in Zotero (in the book’s collections)', onclick: async () => {
+      b.disabled = true; b.textContent = 'Creating…';
+      try {
+        const r = await api('zotero/sections', { method: 'POST', json: target.part ? { doc: book.id, parts: [target.part] } : { doc: book.id, chapters: [target.chapter] }, timeout: 120000 });
+        toast(r.message); onDone();
+      } catch (e) { fail(e); b.disabled = false; b.textContent = '+ Zotero'; }
+    } }, '+ Zotero');
+    slot.append(b);
+  });
+  return slot;
+}
+
+/** “Create book sections for all” in a chapter list's heading (only the chapters not yet in Zotero). */
+function zoteroAllSectionsButton(book, missing, onDone) {
+  const slot = h('span');
+  if (!missing) return slot;
+  zoteroConnected().then(ok => {
+    if (!ok) return;
+    const b = h('button', { class: 'btn', title: 'Each chapter not yet in Zotero becomes a book section there, in the book’s collections', onclick: () =>
+      confirmBox('Create book sections in Zotero?', `${missing} chapter${missing === 1 ? '' : 's'} not yet in Zotero will each get a book section there, with the book’s details, in the same collections as the book. They stay in step with the chapters here.`, 'Create', async () => {
+        b.disabled = true; b.textContent = 'Creating…';
+        try { const r = await api('zotero/sections', { method: 'POST', json: { doc: book.id }, timeout: 600000 }); toast(r.message, 6000); onDone(); }
+        catch (e) { fail(e); b.disabled = false; b.textContent = 'Book sections in Zotero…'; }
+      }) }, 'Book sections in Zotero…');
+    slot.append(b);
+  });
+  return slot;
+}
+
 const STYLE_NAMES = { CHICAGO_AUTHOR_DATE: 'Chicago author-date', APA7: 'APA 7', CHICAGO_NOTES: 'Chicago notes', HARVARD: 'Harvard', MLA9: 'MLA 9' };

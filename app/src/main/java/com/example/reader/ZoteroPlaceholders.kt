@@ -40,6 +40,8 @@ object ZoteroPlaceholders {
     private data class Entry(val key: String, val snapshot: Map<String, String>, val tags: Set<String>, val localOnly: Set<String>)
 
     private val entries = HashMap<Long, Entry>()
+    /** Chapters of edited volumes linked to their own Zotero book section: "docId:index" → entry. */
+    private val chapterEntries = HashMap<String, Entry>()
     @Volatile private var loaded = false
     private val mutex = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -67,7 +69,16 @@ object ZoteroPlaceholders {
         if (!f.exists()) return
         runCatching {
             val root = JSONObject(f.readText())
+            root.optJSONObject("_chapters")?.let { ch ->
+                ch.keys().forEach { k ->
+                    val o = ch.getJSONObject(k)
+                    val snap = o.optJSONObject("snapshot")?.let { s -> s.keys().asSequence().associateWith { s.optString(it) } }.orEmpty()
+                    chapterEntries[k] = Entry(o.optString("key"), snap, emptySet(),
+                        o.optJSONArray("localOnly")?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() }.orEmpty())
+                }
+            }
             root.keys().forEach { id ->
+                if (id.startsWith("_")) return@forEach
                 val o = root.getJSONObject(id)
                 val snap = o.optJSONObject("snapshot")?.let { s -> s.keys().asSequence().associateWith { s.optString(it) } }.orEmpty()
                 fun set(name: String) = o.optJSONArray(name)?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() }.orEmpty()
@@ -82,6 +93,9 @@ object ZoteroPlaceholders {
             root.put(id.toString(), JSONObject().put("key", e.key).put("snapshot", JSONObject(e.snapshot))
                 .put("tags", JSONArray(e.tags.toList())).put("localOnly", JSONArray(e.localOnly.toList())))
         }
+        if (chapterEntries.isNotEmpty()) root.put("_chapters", JSONObject().apply {
+            chapterEntries.forEach { (k, e) -> put(k, JSONObject().put("key", e.key).put("snapshot", JSONObject(e.snapshot)).put("localOnly", JSONArray(e.localOnly.toList()))) }
+        })
         val f = File(ctx.applicationContext.filesDir, FILE)
         val tmp = File(f.parentFile, "$FILE.tmp")
         tmp.writeText(root.toString(2))
@@ -91,10 +105,22 @@ object ZoteroPlaceholders {
     /** Is this book's information kept in step with Zotero (a placeholder, or one that got its file from one)? */
     fun isSynced(ctx: Context, docId: Long): Boolean { ensure(ctx); return synchronized(this) { docId in entries } }
 
-    /** Stops keeping the book in step with Zotero (when it is unlinked). */
-    fun forget(ctx: Context, docId: Long) {
+    /** Stops keeping the book (or one chapter of it) in step with Zotero (when it is unlinked). */
+    fun forget(ctx: Context, docId: Long, chapter: Int? = null) {
         ensure(ctx)
-        synchronized(this) { if (entries.remove(docId) != null) save(ctx) }
+        synchronized(this) {
+            val removed = if (chapter == null) entries.remove(docId) else chapterEntries.remove("$docId:$chapter")
+            if (removed != null) save(ctx)
+        }
+    }
+
+    fun isChapterSynced(ctx: Context, docId: Long, chapter: Int): Boolean { ensure(ctx); return synchronized(this) { "$docId:$chapter" in chapterEntries } }
+
+    /** Starts keeping an already linked book in step with Zotero, from what both now have. */
+    fun track(ctx: Context, docId: Long, itemKey: String) {
+        ensure(ctx)
+        val d = Zotero.item(itemKey) ?: return
+        synchronized(this) { entries[docId] = Entry(itemKey, zoteroValues(d), zoteroTags(d), emptySet()); save(ctx) }
     }
 
     private fun dao(ctx: Context) = AppDatabase.getInstance(ctx).documentDao()
@@ -244,6 +270,11 @@ object ZoteroPlaceholders {
             val r = runCatching { syncOne(ctx, id) }.getOrElse { Log.w(TAG, "Sync of $id failed", it); failed++; null }
             if (r != null) { updated += r.updated; sent += r.sent; failed += r.failed }
         }
+        val books = synchronized(this@ZoteroPlaceholders) { chapterEntries.keys.map { it.substringBefore(':').toLong() }.distinct() }
+        books.forEach { id ->
+            val r = runCatching { syncChapters(ctx, id) }.getOrElse { Log.w(TAG, "Chapter sync of $id failed", it); failed++; null }
+            if (r != null) { updated += r.updated; sent += r.sent; failed += r.failed }
+        }
         SyncResult(updated, sent, failed)
     }
 
@@ -297,15 +328,153 @@ object ZoteroPlaceholders {
     /** After a change in the app: sends it to Zotero shortly after (several quick edits go together). */
     fun pushSoon(ctx: Context, docId: Long) {
         ensure(ctx)
-        if (!isSynced(ctx, docId)) return
+        val chapters = synchronized(this) { chapterEntries.keys.any { it.startsWith("$docId:") } }
+        if (!isSynced(ctx, docId) && !chapters) return
         val app = ctx.applicationContext
         synchronized(pending) {
             pending[docId]?.cancel()
             pending[docId] = scope.launch {
                 delay(1500)
                 runCatching { syncOne(app, docId) }.onFailure { Log.w(TAG, "Sending to Zotero failed", it) }
+                if (chapters) runCatching { syncChapters(app, docId) }.onFailure { Log.w(TAG, "Sending chapters to Zotero failed", it) }
                 synchronized(pending) { pending.remove(docId) }
             }
+        }
+    }
+
+    // ------------------------------------------------------------------ chapters as Zotero book sections
+
+    private fun chapterValues(c: VolumeChapter): Map<String, String> = linkedMapOf(
+        "TITLE" to c.title.trim(), "AUTHOR" to people(c.authors), "PAGES" to c.printedPages.trim(), "DOI" to c.doi.trim(), "ABSTRACT" to c.abstract.trim())
+
+    private fun zoteroChapterValues(d: JSONObject): Map<String, String> {
+        val f = Zotero.toFound(d)
+        return linkedMapOf("TITLE" to d.optString("title").trim(), "AUTHOR" to people(f.authors), "PAGES" to f.record[BibField.PAGES],
+            "DOI" to f.record[BibField.DOI], "ABSTRACT" to f.abstract.trim())
+    }
+
+    data class SectionResult(val created: Int, val already: Int, val failed: List<String>)
+
+    /**
+     * Creates a Zotero book section for each chapter: [chapters] are indexes in edited volume [docId]
+     * (null = every chapter not yet in Zotero), or, for a folder book, the chapter files' ids. Each new
+     * section goes into the collections of the book's own Zotero item, is linked to its chapter and
+     * kept in step with it.
+     */
+    suspend fun createSections(ctx: Context, docId: Long, chapters: List<Int>?, parts: List<Long>? = null): SectionResult = withContext(Dispatchers.IO) {
+        ensure(ctx)
+        Zotero.init(ctx)
+        BibStore.init(ctx)
+        EditedVolumes.init(ctx)
+        FolderBooks.init(ctx)
+        val book = dao(ctx).getDocumentById(docId) ?: throw NoSuchElementException("This book is no longer in the library.")
+        var created = 0; var already = 0
+        val failed = ArrayList<String>()
+        mutex.withLock {
+            if (FolderBooks.isFolder(book)) {
+                val collections = Zotero.collectionsOf(Zotero.linkOf(book.id))
+                val ids = FolderBooks.partsOf(book.id).let { all -> if (parts == null) all else all.filter { it in parts } }
+                for (pid in ids) {
+                    if (Zotero.linkOf(pid) != null) { already++; continue }
+                    val part = dao(ctx).getDocumentById(pid) ?: continue
+                    runCatching {
+                        var rec = BibStore.get(pid)
+                        if (rec.entryType.isBlank() || rec.entryType == "book") rec = rec.copy(entryType = "incollection")
+                        if (rec[BibField.BOOKTITLE].isBlank()) rec = rec.with(BibField.BOOKTITLE, book.title)
+                        if (rec[BibField.EDITOR].isBlank()) rec = rec.with(BibField.EDITOR, EditedVolumes.editors(book))
+                        val key = Zotero.createItem(ctx, part, rec, part.author.takeUnless { it.equals("Unknown Author", true) }.orEmpty(), "", collections)
+                        Zotero.link(ctx, pid, key)
+                        if (BibStore.get(pid)[BibField.CITEKEY].isBlank()) BibStore.put(pid, BibStore.get(pid).with(BibField.CITEKEY, Citations.citeKey(part, rec)))
+                        track(ctx, pid, key)
+                        created++
+                    }.onFailure { failed += "${part.title}: ${it.message}" }
+                }
+            } else {
+                val vol = EditedVolumes.get(ctx, book.id)?.takeIf { it.enabled && it.chapters.isNotEmpty() }
+                    ?: throw IllegalArgumentException("This book has no chapter list.")
+                val collections = Zotero.collectionsOf(Zotero.linkOf(book.id))
+                val idx = (chapters ?: vol.chapters.indices.filter { vol.chapters[it].isArticle }).filter { it in vol.chapters.indices }
+                for (i in idx) {
+                    if (Zotero.chapterLinkOf(book.id, i) != null) { already++; continue }
+                    val c = vol.chapters[i]
+                    runCatching {
+                        val (chDoc, rec) = EditedVolumes.chapterAsDocument(book, vol, i)
+                        val key = Zotero.createItem(ctx, chDoc.copy(summary = c.abstract, tags = c.tags), rec, c.authors, "", collections)
+                        Zotero.link(ctx, book.id, key, i)
+                        Zotero.item(key)?.let { d -> synchronized(this@ZoteroPlaceholders) { chapterEntries["${book.id}:$i"] = Entry(key, zoteroChapterValues(d), emptySet(), emptySet()); save(ctx) } }
+                        created++
+                    }.onFailure { failed += "${c.title}: ${it.message}" }
+                }
+            }
+        }
+        SectionResult(created, already, failed)
+    }
+
+    /** Three-way merge of an edited volume's chapters with their Zotero book sections. */
+    suspend fun syncChapters(ctx: Context, docId: Long): SyncResult = withContext(Dispatchers.IO) {
+        ensure(ctx)
+        Zotero.init(ctx)
+        EditedVolumes.init(ctx)
+        mutex.withLock {
+            val mine = synchronized(this@ZoteroPlaceholders) { chapterEntries.filterKeys { it.startsWith("$docId:") } }
+            if (mine.isEmpty()) return@withLock SyncResult(0, 0, 0)
+            var vol = EditedVolumes.get(ctx, docId)
+            if (vol == null || dao(ctx).getDocumentById(docId) == null) {
+                synchronized(this@ZoteroPlaceholders) { mine.keys.forEach { chapterEntries.remove(it) }; save(ctx) }
+                return@withLock SyncResult(0, 0, 0)
+            }
+            var updated = 0; var sent = 0; var failed = 0
+            var changedVol = false
+            mine.forEach { (k, e) ->
+                val i = k.substringAfter(':').toInt()
+                if (Zotero.chapterLinkOf(docId, i) != e.key || i !in vol!!.chapters.indices) {
+                    synchronized(this@ZoteroPlaceholders) { chapterEntries.remove(k); save(ctx) }
+                    return@forEach
+                }
+                val d = Zotero.item(e.key) ?: return@forEach
+                val c = vol!!.chapters[i]
+                val z = zoteroChapterValues(d)
+                val a = chapterValues(c)
+                val fromZotero = ArrayList<String>()
+                val toZotero = LinkedHashMap<String, String>()
+                z.keys.forEach { f ->
+                    val sv = e.snapshot[f]
+                    when {
+                        !same(z[f], sv) -> if (!same(a[f], z[f])) fromZotero += f
+                        !same(a[f], sv) && f !in e.localOnly -> toZotero[f] = a[f].orEmpty()
+                    }
+                }
+                var item = d
+                var ok = true
+                var skipped = emptyList<String>()
+                if (toZotero.isNotEmpty()) {
+                    if (Zotero.account(ctx)?.canWrite == true) runCatching { skipped = Zotero.push(ctx, e.key, toZotero); item = Zotero.item(e.key) ?: d; sent++ }
+                        .onFailure { ok = false; failed++; Log.w(TAG, "Sending chapter $k failed", it) }
+                    else { ok = false; failed++ }
+                }
+                if (fromZotero.isNotEmpty()) {
+                    var n = c
+                    fromZotero.forEach { f ->
+                        val v = z[f].orEmpty()
+                        n = when (f) {
+                            "TITLE" -> n.copy(title = v.ifBlank { n.title }, isManual = true)
+                            "AUTHOR" -> n.copy(authors = v, authorSource = "user", isManual = true)
+                            "PAGES" -> n.copy(printedPages = v, isManual = true)
+                            "DOI" -> n.copy(doi = v, isManual = true)
+                            else -> n.copy(abstract = v, isManual = true)
+                        }
+                    }
+                    vol = vol!!.copy(chapters = vol!!.chapters.toMutableList().also { it[i] = n })
+                    changedVol = true
+                    updated++
+                }
+                val agreed = zoteroChapterValues(item).toMutableMap()
+                if (!ok) toZotero.keys.forEach { f -> e.snapshot[f]?.let { agreed[f] = it } }
+                skipped.forEach { f -> agreed[f] = z[f].orEmpty() }
+                synchronized(this@ZoteroPlaceholders) { chapterEntries[k] = Entry(e.key, agreed, emptySet(), e.localOnly + skipped); save(ctx) }
+            }
+            if (changedVol) EditedVolumes.put(ctx, docId, vol!!)
+            SyncResult(updated, sent, failed)
         }
     }
 

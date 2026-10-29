@@ -1664,6 +1664,7 @@ function renderFolder(main, d) {
         canRead(p) ? h('button', { class: 'btn quiet', onclick: () => { location.hash = `#/read/${p.id}`; } }, 'Read') : null,
         h('button', { class: 'btn quiet', title: 'Details, notes and exports of this chapter', onclick: () => { location.hash = `#/book/${p.id}`; } }, 'Open'),
         h('button', { class: 'btn quiet', title: 'Cite this chapter as a book section', onclick: () => citePart(d, p) }, 'Cite'),
+        zoteroSectionButton(d, { part: p.id }, p.zoteroKey, reload),
         partExportMenu(p),
         h('button', { class: 'btn quiet', title: 'Move up', disabled: i === 0, onclick: () => partAction(`doc/${d.id}/parts/${p.id}/move`, { method: 'POST', json: { delta: -1 } }) }, '↑'),
         h('button', { class: 'btn quiet', title: 'Move down', disabled: i === parts.length - 1, onclick: () => partAction(`doc/${d.id}/parts/${p.id}/move`, { method: 'POST', json: { delta: 1 } }) }, '↓'),
@@ -1704,7 +1705,8 @@ function renderFolder(main, d) {
         try { await api(`doc/${d.id}`, { method: 'DELETE' }); toast('Deleted'); location.hash = '#/'; } catch (e) { fail(e); }
       }) }, 'Delete')),
     d.summary ? h('div', { class: 'section' }, h('h2', null, 'Abstract'), h('div', { class: 'summary' }, d.summary)) : null,
-    h('div', { class: 'section' }, h('h2', null, 'Chapters', h('span', { class: 'count' }, parts.length)), list),
+    h('div', { class: 'section' }, h('h2', null, 'Chapters', h('span', { class: 'count' }, parts.length), h('span', { class: 'spacer' }),
+      zoteroAllSectionsButton(d, parts.filter(p => !p.zoteroKey).length, reload)), list),
     h('div', { class: 'section' }, h('h2', null, 'Notes', h('span', { class: 'count' }, d.highlights)), notesBox),
     bibSection(d, main));
   main.append(h('div', { class: 'book' }, left, right));
@@ -1887,6 +1889,7 @@ function chaptersSection(d) {
         c.kind === 'chapter' ? h('div', { class: 'row', style: { gap: '2px' } },
           h('button', { class: 'btn quiet', onclick: go }, 'Read'),
           h('button', { class: 'btn quiet', title: 'Cite this chapter as a book section', onclick: () => citeChapter(d, c) }, 'Cite'),
+          zoteroSectionButton(d, { chapter: c.index }, c.zoteroKey, () => showBook(d.id)),
           chapterExportMenu(d, c)) : h('div')));
     });
   };
@@ -1894,6 +1897,7 @@ function chaptersSection(d) {
   return h('div', { class: 'section' },
     h('h2', null, 'Chapters', h('span', { class: 'count' }, d.chapters.filter(c => c.kind === 'chapter').length),
       h('span', { class: 'spacer' }),
+      zoteroAllSectionsButton(d, d.chapters.filter(c => c.kind === 'chapter' && !c.zoteroKey).length, () => showBook(d.id)),
       h('button', { class: 'chip' + (showSections ? ' on' : ''), onclick: e => { showSections = !showSections; localSet('ml.sections', showSections ? '1' : '0'); e.target.classList.toggle('on', showSections); draw(); } }, 'Sections')),
     list);
 }

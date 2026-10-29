@@ -96,6 +96,22 @@ fun FolderBookScreen(
     var editing by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var citingPart by remember { mutableStateOf<DocumentEntity?>(null) }
+    // Zotero: each chapter file can be a book section of its own there.
+    var zVersion by remember { mutableIntStateOf(0) }
+    val zConnected = remember { com.example.reader.Zotero.init(context); com.example.reader.Zotero.account(context) != null }
+    var zChecking by remember { mutableStateOf<Pair<Long, String>?>(null) }
+    var zAskAll by remember { mutableStateOf(false) }
+    fun makeSections(ids: List<Long>?) {
+        busy = "Creating book sections in Zotero…"
+        scope.launch {
+            val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { com.example.reader.ZoteroPlaceholders.createSections(context, folder.id, null, ids) } }
+            busy = ""
+            Toast.makeText(context, r.fold({ x -> (if (x.created == 0) "No book section created" else "${x.created} book section${if (x.created == 1) "" else "s"} created in Zotero") +
+                (if (x.already > 0) " · ${x.already} already there" else "") + (if (x.failed.isNotEmpty()) " · ${x.failed.size} failed: ${x.failed.first()}" else "") },
+                { "Couldn't create in Zotero: ${it.message}" }), Toast.LENGTH_LONG).show()
+            zVersion++
+        }
+    }
     fun exportPart(p: DocumentEntity, kind: com.example.reader.SectionExports.Kind) {
         busy = "Exporting “${p.title.take(40)}” · ${kind.label}…"
         scope.launch {
@@ -145,6 +161,7 @@ fun FolderBookScreen(
                     }
                     InkButton("Add files", icon = Icons.Default.Add, enabled = busy.isEmpty(), onClick = { picker.launch(arrayOf("application/pdf", "application/epub+zip", "*/*")) })
                     InkButton("Add from library", icon = Icons.Default.LibraryAdd, enabled = busy.isEmpty(), onClick = { picking = true })
+                    if (zConnected && parts.isNotEmpty()) InkButton("Book sections in Zotero…", enabled = busy.isEmpty(), onClick = { zAskAll = true })
                     if (parts.isNotEmpty()) InkButton("Export all chapters", icon = Icons.Default.IosShare, enabled = busy.isEmpty(), onClick = {
                         busy = "Exporting…"
                         scope.launch {
@@ -190,6 +207,8 @@ fun FolderBookScreen(
                                     .filter { it.isNotBlank() }.joinToString(" · "),
                                 fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = FbGrey
                             )
+                            val zKey = remember(zVersion, p.id) { if (zConnected) com.example.reader.Zotero.linkOf(p.id) else null }
+                            if (zKey != null) Text("Zotero ✓", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = FbGrey)
                             if (reading?.partId == p.id) Text("◆ Reading now", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                         }
                         Box {
@@ -197,6 +216,13 @@ fun FolderBookScreen(
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, modifier = Modifier.background(Color.White)) {
                                 DropdownMenuItem(text = { Text("Read") }, onClick = { menu = false; onOpenPart(p) })
                                 DropdownMenuItem(text = { Text("Copy as citation") }, onClick = { menu = false; citingPart = p })
+                                if (zConnected) {
+                                    val k = com.example.reader.Zotero.linkOf(p.id)
+                                    DropdownMenuItem(text = { Text(if (k == null) "Create book section in Zotero" else "Zotero: check citation") }, onClick = {
+                                        menu = false
+                                        if (k != null) zChecking = p.id to k else makeSections(listOf(p.id))
+                                    })
+                                }
                                 DropdownMenuItem(text = { Text("Export…") }, onClick = { menu = false; exportMenu = true })
                                 if (i > 0) DropdownMenuItem(text = { Text("Move up") }, onClick = { menu = false; scope.launch { FolderBooks.move(context, folder.id, p.id, -1) } })
                                 if (i < parts.size - 1) DropdownMenuItem(text = { Text("Move down") }, onClick = { menu = false; scope.launch { FolderBooks.move(context, folder.id, p.id, +1) } })
@@ -227,6 +253,15 @@ fun FolderBookScreen(
 
     citingPart?.let { p ->
         CiteDialog(document = p, quote = "", page = "", onDismiss = { citingPart = null })
+    }
+    zChecking?.let { (pid, k) -> ZoteroCheckDialog(pid, null, k, onDismiss = { zChecking = null; zVersion++ }) }
+    if (zAskAll) {
+        val missing = parts.count { com.example.reader.Zotero.linkOf(it.id) == null }
+        AlertDialog(onDismissRequest = { zAskAll = false }, containerColor = Color.White, shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+            title = { Text("Create book sections in Zotero?", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) },
+            text = { Text(if (missing == 0) "Every chapter is in Zotero already." else "$missing chapter${if (missing == 1) "" else "s"} not yet in Zotero will each get a book section there, with the book's details, in the same collections as the book. They stay in step with the chapters here.") },
+            confirmButton = { if (missing > 0) TextButton(onClick = { zAskAll = false; makeSections(null) }) { Text("Create", color = Color.Black, fontWeight = FontWeight.Bold) } },
+            dismissButton = { TextButton(onClick = { zAskAll = false }) { Text(if (missing == 0) "Close" else "Cancel", color = FbGrey) } })
     }
 
     if (picking) {

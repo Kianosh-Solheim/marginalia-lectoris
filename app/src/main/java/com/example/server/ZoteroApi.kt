@@ -32,6 +32,7 @@ import org.json.JSONObject
  *   POST   chapter-apply {doc, chapter, fields}
  *   POST   import {collection}        link what matches, add collection tags, list the rest
  *   POST   lookup {identifier}        DOI, ISBN, PMID, arXiv or ISSN
+ *   POST   sections {doc, chapters?|parts?}  Zotero book sections for chapters (all missing when neither is given)
  *   POST   placeholder {keys}         add Zotero items to the library without a file
  *   GET    attachments?doc=id         the PDF/EPUB files Zotero has for a book's item
  *   POST   fetch-file {doc, attachment?}  take Zotero's file into a placeholder
@@ -90,7 +91,7 @@ class ZoteroApi(private val context: Context) {
                 val b = JSONObject(req.bodyText())
                 val chapter = if (b.has("chapter") && !b.isNull("chapter")) b.getInt("chapter") else null
                 Zotero.unlink(context, b.getLong("doc"), chapter)
-                if (chapter == null) ZoteroPlaceholders.forget(context, b.getLong("doc"))
+                ZoteroPlaceholders.forget(context, b.getLong("doc"), chapter)
                 ok(JSONObject().put("ok", true))
             }
             what == "push" && m == "POST" -> {
@@ -133,6 +134,17 @@ class ZoteroApi(private val context: Context) {
                 ok(JSONObject()
                     .put("created", JSONArray().apply { res.mapNotNull { it.doc }.forEach { d -> put(JSONObject().put("id", d.id).put("title", d.title).put("author", d.author)) } })
                     .put("skipped", JSONArray().apply { res.filter { it.doc == null }.forEach { put(JSONObject().put("key", it.key).put("reason", it.skipped)) } }))
+            }
+            what == "sections" && m == "POST" -> {
+                val b = JSONObject(req.bodyText())
+                fun ints(n: String) = b.optJSONArray(n)?.let { a -> (0 until a.length()).map { a.getLong(it) } }
+                val r = ZoteroPlaceholders.createSections(context, b.getLong("doc"), ints("chapters")?.map { it.toInt() }, ints("parts"))
+                val msg = buildString {
+                    append(if (r.created == 0) "No book section created" else "${r.created} book section${if (r.created == 1) "" else "s"} created in Zotero")
+                    if (r.already > 0) append(" · ${r.already} already in Zotero")
+                    if (r.failed.isNotEmpty()) append(" · ${r.failed.size} failed: ${r.failed.first()}")
+                }
+                ok(JSONObject().put("created", r.created).put("already", r.already).put("failed", JSONArray(r.failed)).put("message", msg))
             }
             what == "attachments" -> {
                 val docId = req.query["doc"]?.toLongOrNull() ?: throw IllegalArgumentException("Which book?")
@@ -204,7 +216,8 @@ class ZoteroApi(private val context: Context) {
         val rec = BibStore.get(doc.id)
         val o = JSONObject().put("connected", Zotero.account(context) != null).put("canWrite", Zotero.account(context)?.canWrite == true)
             .put("style", style.name).put("styleLabel", style.label)
-            .put("placeholder", ZoteroPlaceholders.isPlaceholder(doc)).put("synced", ZoteroPlaceholders.isSynced(context, doc.id))
+            .put("placeholder", ZoteroPlaceholders.isPlaceholder(doc))
+            .put("synced", if (chapter == null) ZoteroPlaceholders.isSynced(context, doc.id) else ZoteroPlaceholders.isChapterSynced(context, doc.id, chapter))
         val vol = EditedVolumes.get(context, doc.id)?.takeIf { it.enabled }
         // The app's side: the book, or one chapter as a book section.
         val (mine, mineRec) = if (chapter != null && vol != null && chapter in vol.chapters.indices) EditedVolumes.chapterAsDocument(doc, vol, chapter) else doc to rec

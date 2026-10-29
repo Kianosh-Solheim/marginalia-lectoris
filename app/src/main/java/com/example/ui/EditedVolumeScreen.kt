@@ -73,7 +73,24 @@ fun EditedVolumeScreen(
     val isPdf = document.fileType.equals("PDF", true)
     val editors = remember(document.id, document.author) { BibStore.init(context); EditedVolumes.editors(document) }
 
-    fun save(v: EditedVolume) { EditedVolumes.put(context, document.id, v); volume = v }
+    fun save(v: EditedVolume) { EditedVolumes.put(context, document.id, v); volume = v; com.example.reader.ZoteroPlaceholders.pushSoon(context, document.id) }
+
+    // Zotero: each chapter can be a book section of its own there.
+    var zVersion by remember { mutableIntStateOf(0) }
+    val zConnected = remember { com.example.reader.Zotero.init(context); com.example.reader.Zotero.account(context) != null }
+    var zChecking by remember { mutableStateOf<Pair<Int, String>?>(null) }
+    var zAskAll by remember { mutableStateOf(false) }
+    fun makeSections(idx: List<Int>?) {
+        busy = "Creating book sections in Zotero…"; status = ""
+        scope.launch {
+            val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { com.example.reader.ZoteroPlaceholders.createSections(context, document.id, idx) } }
+            busy = ""
+            status = r.fold({ x -> (if (x.created == 0) "No book section created" else "${x.created} book section${if (x.created == 1) "" else "s"} created in Zotero") +
+                (if (x.already > 0) " · ${x.already} already there" else "") + (if (x.failed.isNotEmpty()) " · ${x.failed.size} failed: ${x.failed.first()}" else "") },
+                { "Couldn't create in Zotero: ${it.message}" })
+            zVersion++
+        }
+    }
 
     fun detect(keepEdits: Boolean) {
         busy = "Reading the table of contents…"; status = ""
@@ -138,6 +155,7 @@ fun EditedVolumeScreen(
                     } else {
                         InkButton("Read from the start", icon = Icons.AutoMirrored.Filled.MenuBook, filled = true, onClick = onContinue)
                     }
+                    if (zConnected) InkButton("Book sections in Zotero…", enabled = busy.isBlank() && chapters.any { it.isArticle }, onClick = { zAskAll = true })
                     InkButton("Fill from Crossref", icon = Icons.Default.Refresh, enabled = busy.isBlank() && chapters.any { it.isArticle }, onClick = {
                         val vol = volume ?: return@InkButton
                         busy = "Looking up the chapters on Crossref…"; status = ""
@@ -226,6 +244,11 @@ fun EditedVolumeScreen(
                             onOpen = { onOpenAtPage(c.startPage) },
                             onEdit = { editing = i },
                             onCite = { citing = i },
+                            zotero = if (!zConnected) null else remember(zVersion, i) { com.example.reader.Zotero.chapterLinkOf(document.id, i).orEmpty() },
+                            onZotero = {
+                                val k = com.example.reader.Zotero.chapterLinkOf(document.id, i)
+                                if (k != null) zChecking = i to k else makeSections(listOf(i))
+                            },
                             onExport = { kind ->
                                 val vol = volume ?: return@ChapterRow
                                 busy = "Exporting “${c.title.take(40)}” · ${kind.label}…"; status = ""
@@ -280,6 +303,16 @@ fun EditedVolumeScreen(
         )
     }
 
+    zChecking?.let { (i, k) -> ZoteroCheckDialog(document.id, i, k, onDismiss = { zChecking = null; volume = EditedVolumes.get(context, document.id); zVersion++ }) }
+    if (zAskAll) {
+        val missing = chapters.indices.count { chapters[it].isArticle && com.example.reader.Zotero.chapterLinkOf(document.id, it) == null }
+        AlertDialog(onDismissRequest = { zAskAll = false }, containerColor = Color.White, shape = RoundedCornerShape(4.dp),
+            title = { Text("Create book sections in Zotero?", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) },
+            text = { Text(if (missing == 0) "Every chapter is in Zotero already." else "$missing chapter${if (missing == 1) "" else "s"} not yet in Zotero will each get a book section there, with the book's details, in the same collections as the book. They stay in step with the chapters here.") },
+            confirmButton = { if (missing > 0) TextButton(onClick = { zAskAll = false; makeSections(null) }) { Text("Create", color = Color.Black, fontWeight = FontWeight.Bold) } },
+            dismissButton = { TextButton(onClick = { zAskAll = false }) { Text(if (missing == 0) "Close" else "Cancel", color = VolGrey) } })
+    }
+
     citing?.let { idx ->
         val c = chapters.getOrNull(idx)
         if (c != null) {
@@ -307,6 +340,8 @@ private fun ChapterRow(
     onOpen: () -> Unit,
     onEdit: () -> Unit,
     onCite: () -> Unit,
+    zotero: String? = null,          // null: Zotero not connected · "": not in Zotero yet · else its item key
+    onZotero: () -> Unit = {},
     onExport: (com.example.reader.SectionExports.Kind) -> Unit
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -347,7 +382,8 @@ private fun ChapterRow(
                         progress > 0.01f -> "${(progress * 100).toInt()}% read"
                         else -> null
                     }
-                    val meta = listOfNotNull(pages.takeIf { it.isNotBlank() }, read, if (notes > 0) "$notes note${if (notes == 1) "" else "s"}" else null).joinToString(" · ")
+                    val meta = listOfNotNull(pages.takeIf { it.isNotBlank() }, read, if (notes > 0) "$notes note${if (notes == 1) "" else "s"}" else null,
+                        if (!zotero.isNullOrBlank()) "Zotero ✓" else null).joinToString(" · ")
                     if (meta.isNotBlank()) Text(meta, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = VolGrey)
                 }
             }
@@ -357,6 +393,9 @@ private fun ChapterRow(
                     DropdownMenuItem(text = { Text("Read this chapter") }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.MenuBook, null) }, onClick = { menu = false; onOpen() })
                     DropdownMenuItem(text = { Text("Edit title, author, pages") }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { menu = false; onEdit() })
                     DropdownMenuItem(text = { Text("Copy as citation") }, leadingIcon = { Icon(Icons.Default.FormatQuote, null) }, onClick = { menu = false; onCite() })
+                    if (zotero != null) DropdownMenuItem(
+                        text = { Text(if (zotero.isBlank()) "Create book section in Zotero" else "Zotero: check citation") },
+                        leadingIcon = { Icon(Icons.Default.FormatQuote, null) }, onClick = { menu = false; onZotero() })
                     DropdownMenuItem(
                         text = { Text("Export…") },
                         leadingIcon = { Icon(Icons.Default.IosShare, null) }, onClick = { menu = false; exportMenu = true }
