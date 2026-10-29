@@ -73,23 +73,28 @@ class AiPreferences(context: Context) {
         }.generateKey()
     }
     private fun keys() = if (keyFile.exists()) JSONObject(keyFile.readText()) else JSONObject()
-    fun hasKey(provider: AiProvider) = runCatching { keys().has(provider.name) }.getOrDefault(false)
-    fun readKey(provider: AiProvider): String {
-        val encoded = keys().optString(provider.name)
+    fun hasKey(provider: AiProvider) = hasSecret(provider.name)
+    fun readKey(provider: AiProvider): String = readSecret(provider.name)
+    fun saveKey(provider: AiProvider, value: String) = saveSecret(provider.name, value)
+
+    /** Other credentials (the Zotero API key) kept the same way: encrypted, never in backups. */
+    fun hasSecret(name: String) = runCatching { keys().has(name) }.getOrDefault(false)
+    fun readSecret(name: String): String {
+        val encoded = keys().optString(name)
         if (encoded.isBlank()) return ""
         return try {
             val parts = encoded.split(":")
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secret(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
             String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), Charsets.UTF_8)
-        } catch (_: Exception) { throw IllegalStateException("Saved key is unavailable. Enter it again in Settings → AI.") }
+        } catch (_: Exception) { throw IllegalStateException("Saved key is unavailable. Enter it again in Settings.") }
     }
-    fun saveKey(provider: AiProvider, value: String) {
+    fun saveSecret(name: String, value: String) {
         val data = keys()
-        if (value.isBlank()) data.remove(provider.name) else {
+        if (value.isBlank()) data.remove(name) else {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, secret())
-            data.put(provider.name, Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
+            data.put(name, Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
                 Base64.encodeToString(cipher.doFinal(value.trim().toByteArray(Charsets.UTF_8)), Base64.NO_WRAP))
         }
         val atomic = android.util.AtomicFile(keyFile)

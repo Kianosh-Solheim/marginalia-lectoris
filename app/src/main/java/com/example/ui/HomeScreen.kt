@@ -67,6 +67,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material.icons.filled.Slideshow
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -196,6 +197,7 @@ fun HomeScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
     PresentationsHost()
+    ZoteroHost()
     var tileScalePref by remember { mutableStateOf(TileScalePreference.AUTO) }
     var libraryViewMode by remember {
         val saved = uiPrefs.getString("library_view_mode", LibraryViewMode.GRID.name)
@@ -392,6 +394,24 @@ fun HomeScreen(
                     onClick = {
                         coroutineScope.launch { drawerState.close() }
                         onOpenAllHighlights()
+                    },
+                    shape = RoundedCornerShape(0.dp),
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.White,
+                        unselectedTextColor = Color.Black
+                    ),
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 3.dp)
+                        .border(1.dp, Color.Black)
+                )
+
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.MenuBook, contentDescription = null, tint = Color.Black) },
+                    label = { Text("Zotero", fontWeight = FontWeight.Medium) },
+                    selected = false,
+                    onClick = {
+                        coroutineScope.launch { drawerState.close() }
+                        zoteroOpen.value = true
                     },
                     shape = RoundedCornerShape(0.dp),
                     colors = NavigationDrawerItemDefaults.colors(

@@ -118,7 +118,76 @@ object MetadataLookup {
 
     // ------------------------------------------------------------------------- Crossref
 
+    /** Crossref first; DOIs Crossref does not know (datasets, theses, many reports) are tried at DataCite, as Zotero does. */
     fun byDoi(doi: String): Found? = get("https://api.crossref.org/works/${enc(doi)}")?.optJSONObject("message")?.let { crossrefItem(it) }
+        ?: runCatching { dataCite(doi) }.getOrNull()
+
+    fun dataCite(doi: String): Found? {
+        val a = get("https://api.datacite.org/dois/${enc(doi)}")?.optJSONObject("data")?.optJSONObject("attributes") ?: return null
+        var r = BibRecord().with(BibField.DOI, doi)
+        fun put(f: BibField, v: String?) { if (!v.isNullOrBlank()) r = r.with(f, stripTags(v)) }
+        put(BibField.TITLE, a.optJSONArray("titles")?.optJSONObject(0)?.optString("title"))
+        put(BibField.PUBLISHER, a.opt("publisher").let { if (it is JSONObject) it.optString("name") else it?.toString() })
+        put(BibField.YEAR, a.optInt("publicationYear").takeIf { it > 0 }?.toString())
+        put(BibField.URL, a.optString("url"))
+        put(BibField.LANGUAGE, a.optString("language"))
+        val creators = a.optJSONArray("creators")?.let { c -> (0 until c.length()).mapNotNull { c.optJSONObject(it) }.map { p ->
+            "${p.optString("givenName")} ${p.optString("familyName")}".trim().ifBlank { p.optString("name") } } }.orEmpty().filter { it.isNotBlank() }.joinToString("; ")
+        val kind = a.optJSONObject("types")?.optString("resourceTypeGeneral").orEmpty()
+        r = r.copy(entryType = when (kind) { "JournalArticle" -> "article"; "Book" -> "book"; "BookChapter" -> "incollection"; "Dissertation" -> "phdthesis"; "Report" -> "techreport"; else -> "misc" })
+        val abs = a.optJSONArray("descriptions")?.optJSONObject(0)?.optString("description").orEmpty()
+        return Found(r, creators, stripTags(abs), listOf("DataCite"))
+    }
+
+    /** PubMed by PMID (NCBI E-utilities). */
+    fun byPmid(pmid: String): Found? {
+        val root = get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=${enc(pmid)}") ?: return null
+        val m = root.optJSONObject("result")?.optJSONObject(pmid) ?: return null
+        var r = BibRecord(entryType = "article")
+        fun put(f: BibField, v: String?) { if (!v.isNullOrBlank()) r = r.with(f, v.trim().trimEnd('.')) }
+        put(BibField.TITLE, m.optString("title"))
+        put(BibField.JOURNAL, m.optString("fulljournalname").ifBlank { m.optString("source") })
+        put(BibField.VOLUME, m.optString("volume"))
+        put(BibField.ISSUE, m.optString("issue"))
+        put(BibField.PAGES, m.optString("pages").replace("-", "–"))
+        put(BibField.YEAR, BibFieldCleaner.clean(BibField.YEAR, m.optString("pubdate")))
+        put(BibField.ISSN, m.optString("issn").ifBlank { m.optString("essn") })
+        m.optJSONArray("articleids")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) }.firstOrNull { it.optString("idtype") == "doi" }?.optString("value") }?.let { put(BibField.DOI, it) }
+        val authors = m.optJSONArray("authors")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("name") } }.orEmpty()
+            .map { n -> val parts = n.trim().split(' '); if (parts.size >= 2) parts.last() + " " + parts.dropLast(1).joinToString(" ") else n }
+            .filter { it.isNotBlank() }.joinToString("; ")
+        return Found(r, authors, "", listOf("PubMed"))
+    }
+
+    /** arXiv by its identifier (e.g. 2101.01234). */
+    fun byArxiv(id: String): Found? {
+        val req = Request.Builder().url("https://export.arxiv.org/api/query?id_list=${enc(id)}").header("User-Agent", UA).build()
+        val xml = client.newCall(req).execute().use { resp -> if (!resp.isSuccessful) return null; resp.body?.string().orEmpty() }
+        val entry = Regex("<entry>(.*?)</entry>", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.get(1) ?: return null
+        fun tag(n: String) = Regex("<$n[^>]*>(.*?)</$n>", RegexOption.DOT_MATCHES_ALL).find(entry)?.groupValues?.get(1)?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+        val title = tag("title")
+        if (title.isBlank() || title == "Error") return null
+        var r = BibRecord(entryType = "misc").with(BibField.TITLE, title).with(BibField.PUBLISHER, "arXiv").with(BibField.URL, "https://arxiv.org/abs/$id")
+        BibFieldCleaner.clean(BibField.YEAR, tag("published")).takeIf { it.isNotBlank() }?.let { r = r.with(BibField.YEAR, it) }
+        Regex("<arxiv:doi[^>]*>(.*?)</arxiv:doi>").find(entry)?.groupValues?.get(1)?.let { r = r.with(BibField.DOI, it.trim()) }
+        val authors = Regex("<author>\\s*<name>(.*?)</name>", RegexOption.DOT_MATCHES_ALL).findAll(entry).map { it.groupValues[1].trim() }.joinToString("; ")
+        return Found(r, authors, tag("summary"), listOf("arXiv"))
+    }
+
+    /** Any identifier typed or pasted: a DOI (or doi.org link), ISBN, PMID, arXiv ID, or ISSN. */
+    fun byIdentifier(raw: String): Found? {
+        val s = raw.trim()
+        BibFieldCleaner.clean(BibField.DOI, s).takeIf { it.isNotBlank() }?.let { return byDoi(it) }
+        Regex("(?:arxiv[:/ ]|abs/)?(\\d{4}\\.\\d{4,5})(?:v\\d+)?", RegexOption.IGNORE_CASE).find(s)?.takeIf { s.contains("arxiv", true) || Regex("^\\d{4}\\.\\d{4,5}(v\\d+)?$").matches(s) }
+            ?.let { return byArxiv(it.groupValues[1]) }
+        Regex("^(?:pmid[: ]*)?(\\d{5,9})$", RegexOption.IGNORE_CASE).find(s)?.takeIf { s.lowercase(Locale.ROOT).startsWith("pmid") || s.length in 5..8 }?.let { return byPmid(it.groupValues[1]) }
+        BibFieldCleaner.clean(BibField.ISBN, s).takeIf { it.isNotBlank() }?.let { isbn ->
+            val parts = listOfNotNull(runCatching { openLibrary(isbn) }.getOrNull(), runCatching { googleBooks(isbn) }.getOrNull())
+            return if (parts.isEmpty()) null else merge(parts)
+        }
+        BibFieldCleaner.clean(BibField.ISSN, s).takeIf { it.isNotBlank() }?.let { return byIssn(it) }
+        return null
+    }
 
     fun byIssn(issn: String): Found? {
         val m = get("https://api.crossref.org/journals/${enc(issn)}")?.optJSONObject("message") ?: return null

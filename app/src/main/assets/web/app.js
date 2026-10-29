@@ -171,6 +171,7 @@ function route() {
   if (parts[0] === 'notes') { state.tab = 'notes'; return showNotes(); }
   if (parts[0] === 'settings') { state.tab = 'settings'; return showSettings(); }
   if (parts[0] === 'presentations') { state.tab = 'presentations'; return showPresentations(); }
+  if (parts[0] === 'zotero') { state.tab = 'zotero'; return showZotero(); }
   if (parts[0] === 'presenter' && parts[1]) return showPresenter(decodeURIComponent(parts[1]), params);
   if (parts[0] === 'audience') return showAudience();
   state.tab = ['books', 'articles'].includes(parts[0]) ? parts[0] : 'all';
@@ -207,7 +208,7 @@ function showLogin() {
 // ------------------------------------------------------------------ header
 
 function header() {
-  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['presentations', 'Presentations', '#/presentations'], ['settings', 'Settings', '#/settings']];
+  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero'], ['settings', 'Settings', '#/settings']];
   const search = h('input', { type: 'search', class: 'search', placeholder: 'Search title, author, tag…', value: state.query });
   search.addEventListener('input', () => {
     state.query = search.value;
@@ -456,7 +457,7 @@ function peopleInput(value, opts = {}) {
 
 function infoPanel(ctx) {
   const box = h('div', { class: 'info' });
-  const open = JSON.parse(localGet('ml.infoOpen', '{"info":true,"abstract":true,"tags":true,"cite":true,"chapter":true,"file":false}'));
+  const open = Object.assign({ zotero: true }, JSON.parse(localGet('ml.infoOpen', '{"info":true,"abstract":true,"tags":true,"cite":true,"chapter":true,"file":false}')));
   const sec = (key, title, body, extra) => {
     const content = h('div', { class: 'info-body', hidden: !open[key] });
     const head = h('button', { class: 'info-head', onclick: () => { open[key] = content.hidden; content.hidden = !content.hidden; head.classList.toggle('closed', content.hidden); localSet('ml.infoOpen', JSON.stringify(open)); } },
@@ -466,6 +467,7 @@ function infoPanel(ctx) {
     return h('section', { class: 'info-sec' }, head, content);
   };
   const reload = async () => { try { const fresh = await api(`doc/${ctx.d.id}`); Object.assign(ctx.d, fresh); draw(); } catch (e) { fail(e); } };
+  ctx.reloadInfo = reload;
   const saveDoc = async patch => { await api(`doc/${ctx.d.id}`, { method: 'PATCH', json: patch }); toast('Saved'); await reload(); };
   const saveBib = async patch => { await api(`doc/${ctx.d.id}/bib`, { method: 'PUT', json: patch }); toast('Saved'); await reload(); };
 
@@ -603,7 +605,7 @@ function infoPanel(ctx) {
       clear(chBox);
       const c = chapterNow();
       if (!c) { chBox.append(h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Not inside a chapter of the chapter list.')); return; }
-      chBox.append(
+      chBox.append(...[
         h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Chapter'), h('div', { class: 'info-val' }, [c.number, c.title].filter(Boolean).join('. '))),
         h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Author(s)'), h('div', { class: 'info-val' + (c.authors ? '' : ' unknown') }, c.authors ? c.authors.split(';').map(s => s.trim()).join(', ') : 'Unknown author')),
         c.printedPages ? h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, 'Pages'), h('div', { class: 'info-val' }, c.printedPages)) : null,
@@ -612,7 +614,7 @@ function infoPanel(ctx) {
         h('div', { class: 'row', style: { marginTop: '6px', gap: '4px' } },
           h('button', { class: 'btn', onclick: () => citeChapter(d, c) }, 'Cite this chapter'),
           chapterExportMenu(d, c)),
-        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '6px' } }, 'To change it, select text in the book and use Set as ▸ This chapter.'));
+        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '6px' } }, 'To change it, select text in the book and use Set as ▸ This chapter.')].filter(Boolean));
       chBox.dataset.key = c.index;
     };
     if (d.editedVolume && d.chapters) drawChapter();
@@ -627,6 +629,7 @@ function infoPanel(ctx) {
       sec('abstract', 'Abstract', abs),
       sec('tags', 'Tags', tagBox, h('span', { class: 'info-count' }, tagList.length || '')),
       sec('cite', 'Citation', citeBox, styleSelect(bib, v => { style = v; drawCite(); })),
+      sec('zotero', 'Zotero', zoteroInfoSection(ctx, (() => { const c = d.editedVolume && d.chapters ? chapterNow() : null; return c ? c.index : null; })())),
       d.editedVolume && d.chapters ? sec('chapter', 'Chapter', chBox) : null,
       sec('file', 'File', fileRows));
     box._drawChapter = d.editedVolume && d.chapters ? () => { const c = chapterNow(); if (!c || String(c.index) !== chBox.dataset.key) drawChapter(); } : null;
@@ -973,6 +976,7 @@ function renderSettings(main, data) {
   };
   const nav = h('nav', { class: 'set-nav' }, data.groups.map(g =>
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById(settingsSlug(g.name)).scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, g.name)),
+    h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-zotero').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Zotero'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-storage').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Storage & backup'));
   const body = h('div', { class: 'set-body' });
   data.groups.forEach(g => {
@@ -981,6 +985,7 @@ function renderSettings(main, data) {
     g.fields.forEach(f => sec.appendChild(settingRow(f, data, main, save)));
     body.appendChild(sec);
   });
+  body.appendChild(zoteroSettingsSection());
   body.appendChild(storageSection(data.info));
   main.append(h('div', { class: 'set-head' }, h('h1', null, 'Settings'),
     h('p', { class: 'muted' }, 'The same settings as on the tablet. Changes are saved there straight away.')),
@@ -2098,9 +2103,29 @@ function lookupPanel(ctx) {
   const out = h('div');
   const btn = h('button', { class: 'btn fill', type: 'button' }, 'Look up details');
   const byTitle = h('button', { class: 'btn', type: 'button' }, 'Search by title');
+  const ident = h('input', { type: 'text', placeholder: 'DOI, ISBN, PMID or arXiv ID', style: { width: '220px' } });
+  const byIdent = h('button', { class: 'btn', type: 'button' }, 'Look up this ID');
+  const fromZotero = h('button', { class: 'btn', type: 'button', title: 'Compare with the linked Zotero item' }, 'From Zotero');
+  byIdent.addEventListener('click', async () => {
+    if (!ident.value.trim()) { ident.focus(); return; }
+    byIdent.disabled = true; clear(out); status.textContent = 'Looking up…';
+    try { const r = await api('zotero/lookup', { method: 'POST', json: { identifier: ident.value.trim() }, timeout: 60000 }); status.textContent = ''; compareView(r.found); }
+    catch (e) { status.textContent = e.message || String(e); }
+    byIdent.disabled = false;
+  });
+  ident.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); byIdent.click(); } });
+  fromZotero.addEventListener('click', async () => {
+    clear(out); status.textContent = 'Reading the Zotero item…';
+    try {
+      const c = await api(`zotero/doc/${ctx.d.id}`);
+      if (!c.connected) { status.textContent = 'Zotero is not connected (Settings ▸ Zotero).'; return; }
+      if (!c.linked || !c.item) { status.textContent = 'Not linked to a Zotero item yet — link it in the Info side panel or the Zotero tab.'; return; }
+      status.textContent = ''; compareView(c.item.found);
+    } catch (e) { status.textContent = e.message || String(e); }
+  });
   const hint = () => {
     const ids = ['DOI', 'ISBN', 'ISSN'].filter(k => ctx.inputs[k] && ctx.inputs[k].value.trim());
-    return ids.length ? `Uses the ${ids.join(', ')} — Crossref, Open Library and Google Books` : 'No DOI, ISBN or ISSN yet: searches by title and author';
+    return ids.length ? `Uses the ${ids.join(', ')} — Crossref, DataCite, Open Library and Google Books` : 'No DOI, ISBN or ISSN yet: searches by title and author';
   };
   const sub = h('span', { class: 'muted', style: { fontSize: '12px' } }, hint());
   Object.values(ctx.inputs).forEach(i => i.addEventListener('input', () => { sub.textContent = hint(); }));
@@ -2175,7 +2200,8 @@ function lookupPanel(ctx) {
   };
 
   panel.append(h('div', { class: 'label' }, 'Look up online — DOI, ISBN, ISSN or title'),
-    h('div', { class: 'row' }, btn, byTitle, sub), status, out);
+    h('div', { class: 'row' }, btn, byTitle, sub),
+    h('div', { class: 'row', style: { marginTop: '6px' } }, ident, byIdent, fromZotero), status, out);
   return panel;
 }
 

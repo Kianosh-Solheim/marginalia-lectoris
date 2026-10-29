@@ -553,3 +553,41 @@ canvas.ink.active { pointer-events: auto; cursor: crosshair; }
 .person-x:hover { color: #b91c1c; }
 .person-add { align-self: flex-start; border: 0; background: none; cursor: pointer; color: var(--soft); font: inherit; font-size: 12px; padding: 1px 2px; }
 .person-add:hover { color: var(--ink); text-decoration: underline; }
+
+/* Zotero */
+main.zotero { max-width: none; padding: 0 16px 16px; }
+.ztool { display: flex; align-items: center; gap: 10px; padding: 12px 0; flex-wrap: wrap; }
+.ztool h1 { font-family: var(--serif); margin: 0; font-size: 22px; }
+.ztool input[type=search] { width: 260px; }
+.zgrid { display: grid; grid-template-columns: 240px minmax(260px, 1fr) minmax(320px, 1.2fr); gap: 0; border: 1px solid var(--rule); height: calc(100vh - 150px); min-height: 420px; background: var(--paper); }
+.zcols, .zitems, .zdetail { overflow: auto; min-height: 0; }
+.zcols { border-right: 1px solid var(--rule); padding: 6px 0; }
+.zitems { border-right: 1px solid var(--rule); }
+.zdetail { padding: 14px 16px; }
+.zdetail h2 { font-family: var(--serif); margin: 0 0 8px; font-size: 19px; }
+.zcol { display: flex; justify-content: space-between; gap: 8px; width: 100%; border: 0; background: none; text-align: left; padding: 5px 10px; cursor: pointer; font: inherit; font-size: 13px; }
+.zcol:hover { background: var(--wash); }
+.zcol.on { background: var(--ink); color: var(--paper); }
+.zcol.on .muted { color: var(--paper); opacity: .7; }
+.zcol.lib { font-weight: 700; }
+.zitem { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--rule); background: none; padding: 8px 10px; cursor: pointer; font: inherit; }
+.zitem:hover { background: var(--wash); }
+.zitem.on { background: var(--wash); box-shadow: inset 3px 0 0 var(--ink); }
+.zitem .zt { font-family: var(--serif); font-size: 14px; }
+.zitem .muted { font-size: 12px; }
+.zlinked { font-size: 12px; }
+.zbib { font-family: var(--serif); font-size: 14px; line-height: 1.45; }
+.zbib .csl-entry { padding-left: 1.5em; text-indent: -1.5em; }
+.zsug { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.zsug .muted { font-size: 12px; }
+.zlinkbox { border: 1px solid var(--rule); padding: 10px; margin: 4px 0 8px; display: flex; flex-direction: column; gap: 6px; }
+.zstate { font-size: 13px; font-weight: 700; }
+.zstate.ok { color: #15803d; }
+.zstate.bad { color: #b45309; }
+.zpick { max-height: 50vh; overflow: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.zrefs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; border-top: 1px solid var(--rule); padding-top: 10px; }
+.zcmp .fnd.blank { color: var(--soft); }
+.zimp { margin: 10px 0; }
+.zref { margin-top: 8px; }
+.zinfo .btn { font-size: 11px; padding: 5px 8px; }
+@media (max-width: 900px) { .zgrid { grid-template-columns: 1fr; height: auto; } .zrefs { grid-template-columns: 1fr; } }
