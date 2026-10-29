@@ -394,7 +394,7 @@ private fun ZoteroCheckDialog(docId: Long, chapter: Int?, itemKey: String, onDis
                                     val v = com.example.reader.EditedVolumes.get(context, d0.id)
                                     val c = v?.chapters?.getOrNull(chapter)
                                     if (v != null && c != null) {
-                                        var n = c
+                                        var n: com.example.reader.VolumeChapter = c
                                         use.forEach { r -> n = when (r.key) {
                                             "TITLE" -> n.copy(title = r.theirs, isManual = true)
                                             "AUTHOR" -> n.copy(authors = People.join(People.split(r.theirs)), authorSource = "user", isManual = true)
