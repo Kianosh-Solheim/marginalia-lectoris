@@ -295,7 +295,7 @@ fun FolderBookDetailsDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("One book made of several files, one per chapter (for example an edited volume).", fontSize = 13.sp, color = FbGrey)
                 OutlinedTextField(title, { title = it }, label = { Text("Title") }, singleLine = true, colors = colors, shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(editors, { editors = it }, label = { Text("Editor(s) — separate with ;") }, singleLine = true, colors = colors, shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth())
+                PeopleField(value = editors, onValueChange = { editors = it }, label = "Editor(s)", addLabel = "Add editor")
                 OutlinedTextField(tags, { tags = it }, label = { Text("Tags (comma separated)") }, singleLine = true, colors = colors, shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth())
                 PreviousTagsPicker(selected = com.example.reader.NoteSuggestionEngine.parseTagsList(tags), typed = "") { picked ->
                     tags = com.example.reader.NoteSuggestionEngine.joinTagsList(com.example.reader.NoteSuggestionEngine.parseTagsList(tags) + picked)

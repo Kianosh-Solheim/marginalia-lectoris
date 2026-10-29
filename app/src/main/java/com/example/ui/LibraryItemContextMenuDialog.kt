@@ -2586,59 +2586,18 @@ fun EditDocumentInfoDialog(
                     )
                 )
 
-                // 3. Author(s) Field
-                OutlinedTextField(
-                    value = authorInput,
-                    onValueChange = { authorInput = it },
-                    label = { Text("Author(s)") },
-                    placeholder = { Text("e.g. Albert Camus, Jean-Paul Sartre") },
-                    supportingText = {
-                        val parsedAuthors = MarkdownExporter.parseAuthorNamesList(authorInput)
-                        val previewText = if (parsedAuthors.isNotEmpty()) {
-                            "Exported as: ${parsedAuthors.joinToString(", ") { "\"[[$it]]\"" }}"
-                        } else {
-                            "Separate multiple authors with commas (,)"
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = previewText,
-                                color = Color(0xFF71717A),
-                                fontSize = 11.sp,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(
-                                text = "Normalise Capitalisation",
-                                color = Color.Black,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier
-                                    .clickable {
-                                        val list = DocumentMetadataHelper.parseAuthors(authorInput)
-                                        authorInput = if (list.isNotEmpty()) {
-                                            list.joinToString(", ") { DocumentMetadataHelper.normalizeAuthorName(it) }
-                                        } else {
-                                            DocumentMetadataHelper.normalizeAuthorName(authorInput)
-                                        }
-                                    }
-                                    .padding(start = 8.dp)
-                                    .testTag("edit_doc_normalise_author_btn")
-                            )
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("edit_doc_author_input"),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.Black,
-                        unfocusedBorderColor = Color(0xFFD4D4D8),
-                        focusedLabelColor = Color.Black
-                    )
-                )
+                // 3. Author(s): one field per person, + to add another
+                PeopleField(value = authorInput, onValueChange = { authorInput = it }, label = "Author(s)", addLabel = "Add author",
+                    modifier = Modifier.testTag("edit_doc_author_input"))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    val parsedAuthors = MarkdownExporter.parseAuthorNamesList(authorInput)
+                    Text(if (parsedAuthors.isNotEmpty()) "Exported as: ${parsedAuthors.joinToString(", ") { "\"[[$it]]\"" }}" else "",
+                        color = Color(0xFF71717A), fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    Text("Normalise Capitalisation", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable {
+                            authorInput = com.example.reader.People.join(com.example.reader.People.split(authorInput).map { DocumentMetadataHelper.normalizeAuthorName(it) })
+                        }.padding(start = 8.dp).testTag("edit_doc_normalise_author_btn"))
+                }
 
                 // 3b. Abstract / Summary Field
                 OutlinedTextField(

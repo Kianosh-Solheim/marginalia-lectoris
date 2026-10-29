@@ -76,6 +76,9 @@ fun SetAsDialog(selection: String, document: DocumentEntity, onDismiss: () -> Un
     var tagList by remember { mutableStateOf<List<String>>(emptyList()) }
     var tagOff by remember { mutableStateOf<Set<String>>(emptySet()) }
     var tagsToChapter by remember { mutableStateOf(false) }
+    // The document's own author(s): added to the list, or replacing it.
+    var docAuthor by remember { mutableStateOf(false) }
+    var addAuthor by remember { mutableStateOf(true) }
     val fields = BibField.entries.filter { it != BibField.CITEKEY && it != BibField.EDITOR }
     val isBook = !document.category.equals("ARTICLE", true)
     val current = remember(document.id, pageNumber, chapterTitle, refresh) {
@@ -86,13 +89,20 @@ fun SetAsDialog(selection: String, document: DocumentEntity, onDismiss: () -> Un
     }
     val editors = remember(document.id, refresh) { BibStore.get(document.id)[BibField.EDITOR] }
 
+    fun pickDocAuthor() {
+        tagMode = false; field = null; chapterField = null; docAuthor = true
+        value = ChapterAuthorGuesser.nameLine(selection) ?: selection.trim().removePrefix("by ").trim()
+        addAuthor = document.author.isNotBlank()
+    }
+
     fun pickTags() {
+        docAuthor = false
         field = null; chapterField = null; tagMode = true
         tagList = TagSplitter.split(selection); tagOff = emptySet(); value = tagList.joinToString(", ")
     }
 
     fun pickChapter(kind: String) {
-        tagMode = false
+        tagMode = false; docAuthor = false
         field = null; chapterField = kind
         value = if (kind == "author") ChapterAuthorGuesser.nameLine(selection) ?: selection.trim().removePrefix("by ").trim()
         else selection.replace(Regex("\\s+"), " ").trim().trimEnd('.')
@@ -137,10 +147,11 @@ fun SetAsDialog(selection: String, document: DocumentEntity, onDismiss: () -> Un
                     Text("Bibliographic details", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Grey)
                 }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    InkChip(if (isBook) "Author of the book" else "Author", docAuthor, { pickDocAuthor() })
                     InkChip("Tags", tagMode, { pickTags() })
                     fields.forEach { f ->
                         InkChip(f.label, field == f, {
-                            tagMode = false
+                            tagMode = false; docAuthor = false
                             chapterField = null
                             field = f
                             value = BibFieldCleaner.clean(f, selection)
@@ -176,7 +187,17 @@ fun SetAsDialog(selection: String, document: DocumentEntity, onDismiss: () -> Un
                     if (existing.isNotBlank()) Text("Already: ${existing}", fontSize = 12.sp, color = Grey)
                 }
                 val label = when (chapterField) { "title" -> "Chapter title"; "author" -> "Chapter author(s)"; "abstract" -> "Chapter abstract"; else -> field?.let { if (it == BibField.EDITOR && isBook) "Book editor(s)" else it.label } }
-                if (label != null && !tagMode) {
+                if (docAuthor) {
+                    PeopleField(value = value, onValueChange = { value = it }, label = if (isBook) "Author(s) of the book" else "Author(s)", addLabel = "Add author")
+                    if (document.author.isNotBlank()) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            InkChip("Add to the authors", addAuthor, { addAuthor = true })
+                            InkChip("Replace the authors", !addAuthor, { addAuthor = false })
+                        }
+                        Text((if (addAuthor) "Adds to: " else "Replaces: ") + com.example.reader.People.split(document.author).joinToString(", "), fontSize = 12.sp, color = Grey)
+                    }
+                }
+                if (label != null && !tagMode && !docAuthor) {
                     OutlinedTextField(
                         value = value,
                         onValueChange = { value = it },
@@ -206,7 +227,25 @@ fun SetAsDialog(selection: String, document: DocumentEntity, onDismiss: () -> Un
             }
         },
         confirmButton = {
-            TextButton(enabled = !busy && (field != null || chapterField != null || (tagMode && tagList.any { it !in tagOff })) && value.isNotBlank(), onClick = {
+            TextButton(enabled = !busy && (docAuthor || field != null || chapterField != null || (tagMode && tagList.any { it !in tagOff })) && value.isNotBlank(), onClick = {
+                if (docAuthor) {
+                    busy = true
+                    scope.launch {
+                        val msg = runCatching {
+                            withContext(Dispatchers.IO) {
+                                val dao = AppDatabase.getInstance(context).documentDao()
+                                val fresh = dao.getDocumentById(document.id) ?: document
+                                val next = if (addAuthor) com.example.reader.People.add(fresh.author, value) else com.example.reader.People.join(com.example.reader.People.split(value))
+                                dao.updateAuthor(document.id, next)
+                                if (addAuthor && fresh.author.isNotBlank()) "Author added" else "Author saved"
+                            }
+                        }.getOrElse { "Couldn't save: ${it.message}" }
+                        busy = false
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        onDismiss()
+                    }
+                    return@TextButton
+                }
                 if (tagMode) {
                     val chosen = tagList.filter { it !in tagOff }
                     busy = true
@@ -572,13 +611,13 @@ fun BibliographyEditorDialog(document: DocumentEntity, onDismiss: () -> Unit) {
                     Text("Importing replaces fields that are already filled", fontSize = 12.sp, color = Color.Black)
                 }
                 if (status.isNotBlank()) Text(status, fontSize = 12.sp, color = Grey)
-                OutlinedTextField(
-                    value = author, onValueChange = { author = it },
-                    label = { Text("Author(s)") },
-                    supportingText = { Text("Separate several authors with ;", color = Grey) },
-                    shape = RoundedCornerShape(4.dp), colors = bibFieldColors(), modifier = Modifier.fillMaxWidth()
-                )
+                PeopleField(value = author, onValueChange = { author = it }, label = "Author(s)", addLabel = "Add author")
                 visible.forEach { f ->
+                    if (f == BibField.EDITOR || f == BibField.TRANSLATOR) {
+                        PeopleField(value = record[f], onValueChange = { record = record.with(f, it) }, label = if (f == BibField.EDITOR) "Editor(s)" else "Translator(s)",
+                            addLabel = if (f == BibField.EDITOR) "Add editor" else "Add translator")
+                        return@forEach
+                    }
                     OutlinedTextField(
                         value = record[f],
                         onValueChange = { record = record.with(f, it) },

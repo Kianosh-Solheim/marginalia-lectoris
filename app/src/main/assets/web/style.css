@@ -534,3 +534,22 @@ canvas.ink.active { pointer-events: auto; cursor: crosshair; }
 .info .tag-x { border: 0; background: none; cursor: pointer; padding: 0 2px; color: var(--soft); }
 .info .cite .ref { font-size: 13px; }
 @media (max-width: 900px) { .lside { position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; box-shadow: 4px 0 0 rgba(0,0,0,.15); } .rbody { position: relative; } }
+
+/* Several people (authors, editors, translators) */
+.people { display: flex; flex-direction: column; gap: 6px; }
+.people-row { display: flex; gap: 4px; align-items: center; }
+.people-row input { flex: 1; min-width: 0; }
+.people-x { padding: 4px 8px; font-size: 14px; }
+.people-add { align-self: flex-start; }
+.people.justfilled input { background: #fef9c3; }
+.people-cell { display: flex; flex-direction: column; gap: 4px; }
+.info-people { display: flex; flex-direction: column; gap: 2px; cursor: default; }
+.person { display: flex; align-items: center; gap: 4px; min-height: 22px; }
+.person input { flex: 1; min-width: 0; font: inherit; padding: 2px 4px; }
+.person-name { cursor: text; flex: 1; border-radius: 2px; padding: 1px 2px; }
+.person-name:hover, .person-name:focus { background: var(--wash); outline: none; }
+.person-x { border: 0; background: none; cursor: pointer; color: var(--soft); font-size: 15px; line-height: 1; padding: 0 4px; opacity: .35; }
+.person:hover .person-x, .person-x:focus { opacity: 1; }
+.person-x:hover { color: #b91c1c; }
+.person-add { align-self: flex-start; border: 0; background: none; cursor: pointer; color: var(--soft); font: inherit; font-size: 12px; padding: 1px 2px; }
+.person-add:hover { color: var(--ink); text-decoration: underline; }

@@ -427,11 +427,7 @@ private fun ChapterEditDialog(
                 if (kind == 0) {
                     OutlinedTextField(label, { label = it.trim() }, label = { Text("Chapter number (as printed)") }, singleLine = true,
                         colors = fieldColors, shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(
-                        authors, { authors = it }, label = { Text("Author(s)") },
-                        supportingText = { Text("Several authors: separate with ; (e.g. Iris Marion Young; Nancy Fraser)") },
-                        colors = fieldColors, shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth()
-                    )
+                    PeopleField(value = authors, onValueChange = { authors = it }, label = "Chapter author(s)", addLabel = "Add author")
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(start, { start = it.filter(Char::isDigit) }, label = { Text(if (isPdf) "First PDF page" else "Start position") }, singleLine = true,

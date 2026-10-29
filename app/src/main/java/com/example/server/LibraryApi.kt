@@ -794,8 +794,11 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         val msg = when {
             target == "chapter:new" -> EditedVolumes.startChapterAt(context, doc, page, value)
             target == "author" -> {
-                db.documentDao().updateAuthor(doc.id, value.replace(Regex("\\s+"), " "))
-                if (doc.category.equals("ARTICLE", true)) "Author saved" else "Author of the book saved"
+                val clean = value.replace(Regex("[ \\t]+"), " ")
+                val fresh = db.documentDao().getDocumentById(doc.id) ?: doc
+                val add = b.optString("mode") == "add" && fresh.author.isNotBlank()
+                db.documentDao().updateAuthor(doc.id, if (add) com.example.reader.People.add(fresh.author, clean) else com.example.reader.People.join(com.example.reader.People.split(clean)).ifBlank { clean.trim() })
+                if (add) "Author added" else if (doc.category.equals("ARTICLE", true)) "Author saved" else "Author of the book saved"
             }
             target == "abstract" -> {
                 db.documentDao().updateSummary(doc.id, value.replace(Regex("\\s+"), " ").removePrefix("Abstract").trimStart(':', '.', ' ', '—', '–'))

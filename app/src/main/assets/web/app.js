@@ -398,6 +398,62 @@ const INFO_LABELS = { SUBTITLE: 'Subtitle', EDITOR: 'Editor(s)', TRANSLATOR: 'Tr
   PLACE: 'Place', YEAR: 'Date', EDITION: 'Edition', VOLUME: 'Volume', ISSUE: 'Issue', PAGES: 'Pages', SERIES: 'Series', LANGUAGE: 'Language', DOI: 'DOI', ISBN: 'ISBN', ISSN: 'ISSN', URL: 'URL', CITEKEY: 'Citation key' };
 const INFO_TYPES = [['book', 'Book'], ['article', 'Journal article'], ['incollection', 'Book section'], ['inbook', 'Book chapter'], ['phdthesis', 'Thesis'], ['techreport', 'Report'], ['misc', 'Other']];
 
+// ------------------------------------------------------------------ people (authors, editors, translators)
+
+/** A stored or typed list of people: split at ; or new lines; a single entry also at "and", "&", "og", or at commas between full names. */
+function splitPeople(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return [];
+  let parts = s.split(/\s*[;\n]\s*/);
+  if (parts.length === 1) {
+    if (/\s(?:and|&|og)\s/i.test(s)) parts = s.split(/\s*,?\s+(?:and|og)\s+|\s*&\s*/i);
+    else if (s.includes(',')) { const c = s.split(/\s*,\s*/); if (c.length > 2 || c.every(x => x.trim().includes(' '))) parts = c; }
+  }
+  return parts.map(x => x.trim().replace(/^[,.]+|[,.]+$/g, '').trim()).filter(Boolean);
+}
+const joinPeople = list => { const seen = new Set(); return list.map(x => x.trim()).filter(x => { const k = x.toLowerCase(); if (!x || seen.has(k)) return false; seen.add(k); return true; }).join('; '); };
+
+/**
+ * An input for several people: one field per person, × to remove, ↑ to move up and "+ Add author".
+ * Returns a hidden input whose value is "Name One; Name Two" (set it to refill the fields); the
+ * fields are in `._widget`.
+ */
+function peopleInput(value, opts = {}) {
+  const hidden = h('input', { type: 'hidden' });
+  const box = h('div', { class: 'people' });
+  let rows = splitPeople(value);
+  if (!rows.length) rows = [''];
+  const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  const sync = () => { desc.set.call(hidden, joinPeople(rows)); hidden.dispatchEvent(new Event('input')); };
+  const draw = focusIdx => {
+    let toFocus = null;
+    clear(box);
+    rows.forEach((name, i) => {
+      const inp = h('input', { value: name, placeholder: i === 0 ? (opts.placeholder || 'Name Nameson') : 'Another person' });
+      inp.addEventListener('input', () => {
+        if (/[;\n]/.test(inp.value)) { const more = splitPeople(inp.value); rows.splice(i, 1, ...(more.length ? more : [''])); sync(); draw(i + more.length - 1); return; }
+        rows[i] = inp.value; sync();
+      });
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter' && opts.enterAdds !== false) { e.preventDefault(); rows.splice(i + 1, 0, ''); draw(i + 1); } });
+      box.append(h('div', { class: 'people-row' }, inp,
+        i > 0 ? h('button', { class: 'btn quiet people-x', type: 'button', title: 'Move up', onclick: () => { [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; sync(); draw(i - 1); } }, '↑') : null,
+        h('button', { class: 'btn quiet people-x', type: 'button', title: 'Remove', onclick: () => { rows.splice(i, 1); if (!rows.length) rows = ['']; sync(); draw(Math.max(0, i - 1)); } }, '×')));
+      if (i === focusIdx) toFocus = inp;
+    });
+    box.append(h('button', { class: 'btn people-add', type: 'button', onclick: () => { rows.push(''); draw(rows.length - 1); } }, '+ ' + (opts.add || 'Add author')));
+    if (toFocus) { if (toFocus.isConnected) toFocus.focus(); else setTimeout(() => toFocus.focus(), 0); }
+  };
+  Object.defineProperty(hidden, 'value', { get: () => desc.get.call(hidden), set: v => { rows = splitPeople(v); if (!rows.length) rows = ['']; desc.set.call(hidden, joinPeople(rows)); draw(); } });
+  desc.set.call(hidden, joinPeople(rows));
+  draw();
+  hidden._widget = box;
+  hidden.classList.add('people-value');
+  // Marks (just filled) show on the fields.
+  hidden.classList.add = (...c) => box.classList.add(...c);
+  hidden.classList.remove = (...c) => box.classList.remove(...c);
+  return hidden;
+}
+
 function infoPanel(ctx) {
   const box = h('div', { class: 'info' });
   const open = JSON.parse(localGet('ml.infoOpen', '{"info":true,"abstract":true,"tags":true,"cite":true,"chapter":true,"file":false}'));
@@ -442,6 +498,42 @@ function infoPanel(ctx) {
     return h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, label), val);
   };
 
+  /** Several people in the panel: each a line with ×; "+ Add" for another; click a name to change it. */
+  const peopleRow = (label, value, onSave, addLabel) => {
+    const val = h('div', { class: 'info-val info-people' });
+    let list = splitPeople(value);
+    const save = async next => { val.classList.add('saving'); try { await onSave(joinPeople(next)); } catch (e) { fail(e); draw(); } val.classList.remove('saving'); };
+    const editor = (initial, onDone) => {
+      const inp = h('input', { type: 'text', value: initial || '', placeholder: 'Name Nameson' });
+      let done = false;
+      const finish = ok => { if (done) return; done = true; onDone(ok ? inp.value.trim() : null); };
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } });
+      inp.addEventListener('blur', () => finish(true));
+      setTimeout(() => { if (document.activeElement !== inp) { inp.focus(); inp.select(); } }, 0);
+      return inp;
+    };
+    const draw = () => {
+      clear(val);
+      list.forEach((name, i) => {
+        const nm = h('span', { class: 'person-name', tabindex: 0, title: 'Click to edit' }, name);
+        const line = h('div', { class: 'person' }, nm,
+          h('button', { class: 'person-x', title: 'Remove ' + name, onclick: () => save(list.filter((_, k) => k !== i)) }, '×'));
+        const edit = () => { const ed = editor(name, v => {
+          if (v === null || v === name) { draw(); return; }
+          const next = list.slice(); next.splice(i, 1, ...splitPeople(v)); save(next);
+        }); line.replaceWith(h('div', { class: 'person' }, ed)); ed.focus(); ed.select(); };
+        nm.addEventListener('click', edit);
+        nm.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); edit(); } });
+        val.append(line);
+      });
+      const add = h('button', { class: 'person-add', title: addLabel }, '+ ' + addLabel);
+      add.addEventListener('click', () => { const ed = editor('', v => { if (!v) { draw(); return; } save(list.concat(splitPeople(v))); }); add.replaceWith(h('div', { class: 'person' }, ed)); ed.focus(); });
+      val.append(add);
+    };
+    draw();
+    return h('div', { class: 'info-row' }, h('div', { class: 'info-lab' }, label), val);
+  };
+
   function chapterNow() {
     const d = ctx.d;
     if (!d.chapters || !ctx.place) return null;
@@ -465,11 +557,12 @@ function infoPanel(ctx) {
     INFO_ORDER.forEach(k => {
       if (k === 'TITLE') { rows.push(row('Title', d.title, v => saveDoc({ title: v }), { long: true, rows: 2 })); return; }
       if (k === '@AUTHOR') {
-        rows.push(row(d.folder ? 'Editor(s)' : 'Author(s)', d.author, v => saveDoc({ author: v })));
+        rows.push(peopleRow(d.folder ? 'Editor(s)' : 'Author(s)', d.author, v => saveDoc({ author: v }), d.folder ? 'Add editor' : 'Add author'));
         return;
       }
       if (isArticle && k === 'BOOKTITLE' && !f[k]) return;
       if (!isArticle && (k === 'JOURNAL' || k === 'ISSUE') && !f[k]) return;
+      if ((k === 'EDITOR' && !d.folder) || k === 'TRANSLATOR') { rows.push(peopleRow(k === 'EDITOR' ? 'Editor(s)' : 'Translator(s)', f[k] || '', v => saveBib({ [k]: v }), k === 'EDITOR' ? 'Add editor' : 'Add translator')); return; }
       const label = INFO_LABELS[k] ? (k === 'JOURNAL' && !isArticle ? 'Container' : INFO_LABELS[k]) : (L[k] || k);
       rows.push(row(label, f[k] || '', v => saveBib({ [k]: v }), {
         link: k === 'DOI' ? v => 'https://doi.org/' + v.replace(/^https?:\/\/(dx\.)?doi\.org\//, '') : k === 'URL' ? v => v : null
@@ -1455,7 +1548,7 @@ function tagInput(initial, forNotes) {
 function folderDetailsDialog(title, init, onSave) {
   modal((box, close) => {
     const t = h('input', { value: init.title || '', placeholder: 'Ethical Theory and Ontology' });
-    const e = h('input', { value: init.editors || '', placeholder: 'Name Nameson; Other Person' });
+    const e = peopleInput(init.editors || '', { add: 'Add editor' });
     const g = tagInput(init.tags || '', false);
     const s = h('textarea', { rows: 4 }, init.summary || '');
     const save = async () => {
@@ -1465,7 +1558,7 @@ function folderDetailsDialog(title, init, onSave) {
     box.append(h('h2', null, title), h('p', { class: 'muted', style: { marginTop: 0 } }, 'One book made of several files, one per chapter — for example an edited volume.'),
       h('div', { class: 'fields' },
         h('label', null, h('span', { class: 'label' }, 'Title'), t),
-        h('label', null, h('span', { class: 'label' }, 'Editor(s) — separate with ;'), e),
+        h('div', { class: 'people-cell' }, h('span', { class: 'label' }, 'Editor(s)'), e._widget),
         h('div', { class: 'tagwrap' }, h('span', { class: 'label' }, 'Tags'), g._widget),
         h('label', null, h('span', { class: 'label' }, 'Abstract (optional)'), s)),
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
@@ -1618,7 +1711,7 @@ function editAll(d, focus) {
     box.style.width = '860px';
     const folder = !!d.folder;
     const t = h('input', { value: d.title });
-    const a = h('input', { value: folder ? (d.editors || d.author || '') : d.author, placeholder: folder ? 'Name Nameson; Other Person' : '' });
+    const a = peopleInput(folder ? (d.editors || d.author || '') : d.author, { add: folder ? 'Add editor' : 'Add author' });
     const g = tagInput(d.tags || '', false);
     const s = h('textarea', { rows: 5 }, d.summary || '');
     const reset = h('input', { type: 'checkbox' });
@@ -1632,6 +1725,12 @@ function editAll(d, focus) {
     const grid = h('div', { class: 'bibgrid' });
     Object.keys(bib.labels || {}).forEach(k => {
       if (k === 'TITLE' || k === 'CITEKEY' || (folder && k === 'EDITOR')) return;   // title and editors are the ones above
+      if (k === 'EDITOR' || k === 'TRANSLATOR') {
+        const pi = peopleInput(f[k] || '', { add: k === 'EDITOR' ? 'Add editor' : 'Add translator' });
+        inputs[k] = pi;
+        grid.append(h('div', { class: 'people-cell' }, h('span', { class: 'label' }, bib.labels[k]), pi._widget));
+        return;
+      }
       const i = h('input', { value: f[k] || '' });
       inputs[k] = i;
       grid.append(h('label', null, h('span', { class: 'label' }, bib.labels[k]), i));
@@ -1718,7 +1817,7 @@ function editAll(d, focus) {
       h('div', { class: 'row', style: { margin: '4px 0 10px' } }, h('span', { class: 'label' }, folder ? 'Folder book · shelf' : 'Shelf'), catBox),
       h('div', { class: 'fields' },
         h('label', null, h('span', { class: 'label' }, 'Title'), t),
-        h('label', null, h('span', { class: 'label' }, folder ? 'Editor(s) — separate with ;' : 'Author(s)'), a),
+        h('div', { class: 'people-cell' }, h('span', { class: 'label' }, folder ? 'Editor(s)' : 'Author(s)'), a._widget),
         h('div', { class: 'tagwrap' }, h('span', { class: 'label' }, 'Tags'), g._widget),
         h('label', null, h('span', { class: 'label' }, 'Abstract'), s),
         folder ? null : h('label', { class: 'row', style: { flexDirection: 'row' } }, reset, h('span', null, 'Make the cover again from the file'))),
@@ -2579,12 +2678,23 @@ function setAsConfirm(ctx, sel, pv, opt, onDone) {
     };
     if (opt.tags) { input.addEventListener('input', drawTags); drawTags(); }
     const cur = (opt.current || '').trim();
-    const note = opt.tags ? (cur ? `Already: ${cur}` : '') : cur ? `${opt.adds ? 'Adds to' : 'Replaces'}: ${cur.split(';').map(x => x.trim()).join(', ')}` : '';
+    const people = opt.target === 'author';
+    let addMode = people && !!cur;
+    const modeBox = h('div', { class: 'row', style: { gap: '4px', marginTop: '8px' } });
+    const noteEl = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } });
+    const drawMode = () => {
+      clear(modeBox).append(
+        h('button', { class: 'chip' + (addMode ? ' on' : ''), type: 'button', onclick: () => { addMode = true; drawMode(); } }, '+ Add to the authors'),
+        h('button', { class: 'chip' + (addMode ? '' : ' on'), type: 'button', onclick: () => { addMode = false; drawMode(); } }, 'Replace the authors'));
+      noteEl.textContent = `${addMode ? 'Adds to' : 'Replaces'}: ${splitPeople(cur).join(', ')}`;
+    };
+    if (people && cur) drawMode();
+    const note = people ? '' : opt.tags ? (cur ? `Already: ${cur}` : '') : cur ? `${opt.adds ? 'Adds to' : 'Replaces'}: ${cur.split(';').map(x => x.trim()).join(', ')}` : '';
     const save = async () => {
       const value = opt.tags ? tagList().filter(t => !off.has(t)).join(', ') : input.value.trim();
       if (!value) { input.focus(); return; }
       try {
-        const r = await api(`doc/${ctx.d.id}/set-as`, { method: 'POST', json: Object.assign({ target: opt.target, value, text: sel.text }, sel.loc || {}) });
+        const r = await api(`doc/${ctx.d.id}/set-as`, { method: 'POST', json: Object.assign({ target: opt.target, value, text: sel.text, mode: addMode ? 'add' : 'replace' }, sel.loc || {}) });
         close(); toast(r.message || 'Saved'); tagCache = null; onDone(true);
       } catch (e) { fail(e); }
     };
@@ -2595,6 +2705,7 @@ function setAsConfirm(ctx, sel, pv, opt, onDone) {
       h('label', { class: 'fields', style: { marginTop: '10px' } }, h('span', { class: 'label' }, opt.label), input),
       opt.tags ? h('div', { style: { marginTop: '8px' } }, h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '4px' } }, 'Click a tag to leave it out'), tagBox) : null,
       note ? h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } }, note) : null,
+      people && cur ? modeBox : null, people && cur ? noteEl : null,
       !opt.value && !opt.tags ? h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px' } }, 'Could not find it in the selection — type it here.') : null,
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save'))].filter(Boolean));
   });
