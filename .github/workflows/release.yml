@@ -78,6 +78,7 @@ jobs:
           gradle --no-configuration-cache :app:assembleRelease 2>&1 | tee build.log || {
             # Compiler errors as annotations, so they can be read without the full log.
             grep -E '^e: |error:|What went wrong' -A2 build.log | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+            grep -E 'Could not (resolve|find|get|download)|> Failed|Required by|Searched in' -A3 build.log | head -40 | while IFS= read -r line; do echo "::warning::${line}"; done
             exit 1
           }
 
