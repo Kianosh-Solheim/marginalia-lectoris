@@ -26,6 +26,12 @@ dependencyResolutionManagement {
       isAllowInsecureProtocol = true
       content { includeGroupByRegex("com\\.onyx.*") }
     }
+    // Old libraries the BOOX SDK needs that are no longer on Maven Central (served by BOOX's proxy).
+    maven {
+      url = uri("http://repo.boox.com/repository/proxy-public/")
+      isAllowInsecureProtocol = true
+      content { includeGroup("com.tencent"); includeGroup("pub.devrel") }
+    }
   }
 }
 
