@@ -30,7 +30,6 @@ dependencyResolutionManagement {
     maven {
       url = uri("http://repo.boox.com/repository/proxy-public/")
       isAllowInsecureProtocol = true
-      content { includeGroup("com.tencent"); includeGroup("pub.devrel") }
     }
   }
 }
