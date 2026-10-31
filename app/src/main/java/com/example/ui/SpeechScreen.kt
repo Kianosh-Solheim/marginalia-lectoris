@@ -60,9 +60,10 @@ fun SpeechHost() {
 }
 
 /**
- * Speech mode: the script on one side (read or edit, any size), a page to write on with the pen on
- * the other, and the speech timer on top. Handwriting converts to text into the script; Markdown,
- * text, Word, HTML and PDF files load as the script; the script saves as Markdown.
+ * Speech mode: one page with the script and room to write on it with the pen (over the text, in the
+ * margins, or on the ruled space below), and the speech timer on top. Handwriting converts to text into
+ * the script where it was written; Markdown, text, Word, HTML and PDF files load as the script; the
+ * script saves as Markdown.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -71,43 +72,45 @@ fun SpeechScreen(onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     var speech by remember { mutableStateOf(Speeches.last(context)) }
     var script by remember(speech.id) { mutableStateOf(TextFieldValue(speech.script)) }
-    var pages by remember(speech.id) { mutableStateOf(speech.pages) }
-    var page by remember(speech.id) { mutableIntStateOf(0) }
-    var editing by remember(speech.id) { mutableStateOf(speech.script.isBlank()) }
+    // All writing of the speech on one page (older speeches had several pages: they are put one below the other).
+    var ink by remember(speech.id) { mutableStateOf(mergePages(speech.pages)) }
+    var editing by remember(speech.id) { mutableStateOf(false) }
     var dirty by remember { mutableIntStateOf(0) }
     var inkVersion by remember { mutableIntStateOf(0) }
     var eraser by remember { mutableStateOf(false) }
+    var showInk by remember { mutableStateOf(true) }
+    var showText by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf("") }
-    var converted by remember { mutableStateOf<String?>(null) }
+    var converted by remember { mutableStateOf<Pair<Speeches.Recognised, List<Speeches.Stroke>>?>(null) }
     var showTimerSettings by remember { mutableStateOf(false) }
     var showOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var cue by remember { mutableStateOf<SpeechTimer.Cue?>(null) }
     val timer by SpeechTimer.state.collectAsState()
     val inkView = remember { InkCanvasView(context) }
-    // Text already recognised per page and line, filled in while writing.
-    val lineCaches = remember(speech.id) { HashMap<Int, Speeches.LineCache>() }
-    fun cacheFor(p: Int) = lineCaches.getOrPut(p) { Speeches.LineCache() }
+    // Text already recognised per line of writing, filled in while writing.
+    val lineCache = remember(speech.id) { Speeches.LineCache() }
     val hostView = LocalView.current
 
     LaunchedEffect(speech.id) { Speeches.remember(context, speech.id) }
     LaunchedEffect(speech.id, speech.durationSec, speech.warningsSec, speech.silent, speech.vibrate) {
         SpeechTimer.configure(context, speech.durationSec, speech.warningsSec, speech.silent, speech.vibrate)
     }
-    // Pen page: load the current page, and keep what is written.
-    LaunchedEffect(speech.id, page) {
+    LaunchedEffect(speech.id) {
         inkView.fingerDraws = speech.fingerDraws
-        inkView.setStrokes(pages.getOrNull(page).orEmpty())
+        inkView.setStrokes(ink)
+        inkView.scrollToTop()
         inkVersion++
     }
+    LaunchedEffect(script.text, speech.fontSize) { inkView.setScript(script.text, speech.fontSize) }
     DisposableEffect(inkView) {
-        inkView.onChanged = {
-            pages = pages.toMutableList().also { l -> while (l.size <= page) l.add(emptyList()); l[page] = inkView.strokes() }
-            inkVersion++; dirty++
-        }
+        inkView.onChanged = { ink = inkView.strokes(); inkVersion++; dirty++ }
         onDispose { inkView.onChanged = null }
     }
     LaunchedEffect(eraser) { inkView.eraser = eraser }
+    LaunchedEffect(showInk) { inkView.showInk = showInk }
+    LaunchedEffect(showText) { inkView.showText = showText }
+    LaunchedEffect(speech.fingerDraws) { inkView.fingerDraws = speech.fingerDraws }
     // Load the handwriting model as soon as Speech mode opens (when it is already downloaded).
     LaunchedEffect(speech.norwegian) { withContext(Dispatchers.Default) { Speeches.warmUp(speech.norwegian) } }
     // Convert while writing: a moment after the pen stops, the lines that changed are recognised in the background.
@@ -115,14 +118,13 @@ fun SpeechScreen(onClose: () -> Unit) {
         delay(700)
         val strokes = inkView.strokes()
         if (strokes.isEmpty() || !Speeches.isReady(speech.norwegian) || inkView.width <= 0) return@LaunchedEffect
-        runCatching { Speeches.recognise(strokes, inkView.lineHeight, inkView.width.toFloat(), speech.norwegian, cacheFor(page)) }
+        runCatching { Speeches.recognise(strokes, inkView.width.toFloat(), speech.norwegian, lineCache) }
     }
-    LaunchedEffect(speech.fingerDraws) { inkView.fingerDraws = speech.fingerDraws }
     // Saved shortly after each change.
     LaunchedEffect(dirty) {
         if (dirty == 0) return@LaunchedEffect
         delay(800)
-        val s = speech.copy(script = script.text, pages = pages)
+        val s = speech.copy(script = script.text, pages = listOf(ink))
         withContext(Dispatchers.IO) { Speeches.save(context, s) }
     }
     // Cues from the timer: flash the edge for a few seconds.
@@ -136,9 +138,20 @@ fun SpeechScreen(onClose: () -> Unit) {
     }
 
     fun update(s: Speeches.Speech) { speech = s; dirty++ }
-    fun flush() { val s = speech.copy(script = script.text, pages = pages); speech = s; Speeches.save(context, s) }
+    fun flush() { val s = speech.copy(script = script.text, pages = listOf(ink)); speech = s; Speeches.save(context, s) }
     fun close() { flush(); onClose() }
-    BackHandler { close() }
+    BackHandler { if (editing) editing = false else close() }
+
+    /** Puts [text] into the script at [offset] (in the Markdown source) as its own paragraph. */
+    fun insertParagraph(offset: Int, text: String) {
+        val cur = script.text
+        val at = offset.coerceIn(0, cur.length)
+        val before = cur.substring(0, at).trimEnd('\n', ' ')
+        val after = cur.substring(at).trimStart('\n', ' ')
+        val joined = listOf(before, text.trim(), after).filter { it.isNotBlank() }.joinToString("\n\n")
+        script = TextFieldValue(joined, TextRange((if (before.isBlank()) 0 else before.length + 2) + text.trim().length))
+        dirty++
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -159,8 +172,8 @@ fun SpeechScreen(onClose: () -> Unit) {
         }
     }
 
-    // Dialogs over the page: let the pen reach them instead of the page.
-    SideEffect { inkView.paused = converted != null || showTimerSettings || showOpen || renaming }
+    // Dialogs over the page, or the text editor: let the pen reach them instead of the page.
+    SideEffect { inkView.paused = converted != null || showTimerSettings || showOpen || renaming || editing }
 
     val edgeWidth = if (cue != null) 10.dp else 0.dp
     Box(Modifier.fillMaxSize().background(Color.White).border(edgeWidth, Color.Black)) {
@@ -213,89 +226,75 @@ fun SpeechScreen(onClose: () -> Unit) {
             }
             HorizontalDivider(color = Color.Black, thickness = 1.5.dp)
 
-            // ---------------------------------------------------------------- script and pen page
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val wide = maxWidth >= 760.dp
-                val scriptPane: @Composable (Modifier) -> Unit = { m ->
-                    Column(m, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("SCRIPT", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SGrey, modifier = Modifier.weight(1f))
-                            InkChip("Read", !editing, { editing = false })
-                            InkChip("Edit", editing, { editing = true })
-                            InkChip("A−", false, { update(speech.copy(fontSize = (speech.fontSize - 2).coerceAtLeast(12))) })
-                            InkChip("A+", false, { update(speech.copy(fontSize = (speech.fontSize + 2).coerceAtMost(64))) })
-                        }
-                        val style = TextStyle(fontFamily = FontFamily.Serif, fontSize = speech.fontSize.sp, lineHeight = (speech.fontSize * 1.45f).sp, color = Color.Black)
-                        Box(Modifier.fillMaxSize().border(1.dp, SRule).padding(12.dp)) {
-                            if (editing) {
-                                BasicTextField(script, { script = it; dirty++ }, textStyle = style, cursorBrush = SolidColor(Color.Black),
-                                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
-                                if (script.text.isEmpty()) Text("Type the speech, load a file, or write with the pen and convert it.", style = style.copy(color = Color(0xFF9CA3AF)))
-                            } else {
-                                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                                    if (script.text.isBlank()) Text("No script yet. Tap Edit, load a file, or convert your handwriting.", style = style.copy(color = Color(0xFF9CA3AF)))
-                                    else scriptParagraphs(script.text).forEach { (kind, text) ->
-                                        when (kind) {
-                                            1 -> Text(text, style = style.copy(fontWeight = FontWeight.Bold, fontSize = (speech.fontSize * 1.3f).sp), modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
-                                            2 -> Text("•  $text", style = style, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp))
-                                            else -> Text(text, style = style, modifier = Modifier.padding(bottom = 12.dp))
-                                        }
-                                    }
-                                }
-                            }
-                        }
+            // ---------------------------------------------------------------- page tools
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                InkChip("Read", !editing, { editing = false })
+                InkChip("Edit text", editing, { editing = true })
+                InkChip("A−", false, { update(speech.copy(fontSize = (speech.fontSize - 2).coerceAtLeast(12))) })
+                InkChip("A+", false, { update(speech.copy(fontSize = (speech.fontSize + 2).coerceAtMost(64))) })
+                ToolGap()
+                InkChip("Pen", !eraser && !editing, { eraser = false; editing = false })
+                InkChip("Eraser", eraser && !editing, { eraser = true; editing = false })
+                key(inkVersion) {
+                    InkChip("Undo", false, { inkView.undo() })
+                    InkChip("Clear writing", false, { inkView.clear() })
+                }
+                InkChip(if (showInk) "Hide writing" else "Show writing", !showInk, { showInk = !showInk })
+                InkChip(if (showText) "Hide text" else "Show text", !showText, { showText = !showText })
+                InkChip("Finger draws", speech.fingerDraws, { update(speech.copy(fingerDraws = !speech.fingerDraws)) })
+                ToolGap()
+                // The handwriting language, clearly shown: the active one is filled.
+                Text("HANDWRITING", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black,
+                    modifier = Modifier.align(Alignment.CenterVertically))
+                Row(Modifier.border(1.5.dp, Color.Black, RoundedCornerShape(4.dp))) {
+                    listOf(true to "Norsk", false to "English").forEach { (no, label) ->
+                        val on = speech.norwegian == no
+                        Text((if (on) "✓ " else "") + label, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = if (on) Color.White else Color.Black,
+                            modifier = Modifier.background(if (on) Color.Black else Color.White).clickable { if (!on) update(speech.copy(norwegian = no)) }
+                                .padding(horizontal = 12.dp, vertical = 6.dp))
                     }
                 }
-                val penPane: @Composable (Modifier) -> Unit = { m ->
-                    Column(m, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("PEN · PAGE ${page + 1}/${pages.size.coerceAtLeast(1)}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SGrey,
-                                modifier = Modifier.align(Alignment.CenterVertically))
-                            InkChip("Pen", !eraser, { eraser = false })
-                            InkChip("Eraser", eraser, { eraser = true })
-                            key(inkVersion) {
-                                InkChip("Undo", false, { inkView.undo() })
-                                InkChip("Clear", false, { inkView.clear() })
-                            }
-                            InkChip("◀", false, { if (page > 0) page-- })
-                            InkChip("▶", false, { if (page < pages.size - 1) page++ })
-                            InkChip("+ Page", false, { pages = pages + listOf(emptyList()); page = pages.size - 1; dirty++ })
-                            InkChip("Finger draws", speech.fingerDraws, { update(speech.copy(fingerDraws = !speech.fingerDraws)) })
-                            InkChip(if (speech.norwegian) "Norsk" else "English", false, { update(speech.copy(norwegian = !speech.norwegian)) })
-                            InkButton(if (busy.startsWith("Convert")) "Converting…" else "Convert to text", filled = true, enabled = busy.isBlank(), onClick = {
-                                val strokes = inkView.strokes()
-                                if (strokes.isEmpty()) { Toast.makeText(context, "Write something on the page first.", Toast.LENGTH_SHORT).show(); return@InkButton }
-                                busy = "Converting the handwriting…"
-                                scope.launch {
-                                    runCatching { Speeches.recognise(strokes, inkView.lineHeight, inkView.width.toFloat().coerceAtLeast(1f), speech.norwegian, cacheFor(page)) { busy = it } }
-                                        .onSuccess { t -> if (t.isBlank()) Toast.makeText(context, "No text was recognised.", Toast.LENGTH_LONG).show() else converted = t }
-                                        .onFailure { Toast.makeText(context, "Couldn't convert: ${it.message ?: "recogniser unavailable"}", Toast.LENGTH_LONG).show() }
-                                    busy = ""
-                                }
-                            })
-                        }
-                        AndroidView(factory = { (inkView.parent as? android.view.ViewGroup)?.removeView(inkView); inkView }, modifier = Modifier.fillMaxSize().border(1.dp, Color.Black))
+                InkButton(if (busy.startsWith("Convert")) "Converting…" else "Convert to text", filled = true, enabled = busy.isBlank(), onClick = {
+                    val strokes = inkView.strokes()
+                    if (strokes.isEmpty()) { Toast.makeText(context, "Write something on the page first.", Toast.LENGTH_SHORT).show(); return@InkButton }
+                    busy = "Converting the handwriting…"
+                    scope.launch {
+                        runCatching { Speeches.recognise(strokes, inkView.width.toFloat().coerceAtLeast(1f), speech.norwegian, lineCache) { busy = it } }
+                            .onSuccess { r -> if (r.text.isBlank()) Toast.makeText(context, "No text was recognised.", Toast.LENGTH_LONG).show() else converted = r to strokes }
+                            .onFailure { Toast.makeText(context, "Couldn't convert: ${it.message ?: "recogniser unavailable"}", Toast.LENGTH_LONG).show() }
+                        busy = ""
                     }
-                }
-                if (wide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    scriptPane(Modifier.weight(1f).fillMaxHeight())
-                    penPane(Modifier.weight(1f).fillMaxHeight())
-                } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    scriptPane(Modifier.weight(1f).fillMaxWidth())
-                    penPane(Modifier.weight(1f).fillMaxWidth())
+                })
+            }
+
+            // ---------------------------------------------------------------- the page: script and writing together
+            val style = TextStyle(fontFamily = FontFamily.Serif, fontSize = speech.fontSize.sp, lineHeight = (speech.fontSize * 1.45f).sp, color = Color.Black)
+            Box(Modifier.fillMaxSize().border(1.dp, Color.Black)) {
+                AndroidView(
+                    factory = { (inkView.parent as? android.view.ViewGroup)?.removeView(inkView); inkView },
+                    update = { v -> v.visibility = if (editing) android.view.View.INVISIBLE else android.view.View.VISIBLE },
+                    modifier = Modifier.fillMaxSize()
+                )
+                if (editing) {
+                    Box(Modifier.fillMaxSize().background(Color.White).padding(16.dp)) {
+                        BasicTextField(script, { script = it; dirty++ }, textStyle = style, cursorBrush = SolidColor(Color.Black),
+                            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
+                        if (script.text.isEmpty()) Text("Type the speech here. Markdown works: # heading, - list.", style = style.copy(color = Color(0xFF9CA3AF)))
+                    }
                 }
             }
         }
     }
 
     // ---------------------------------------------------------------- dialogs
-    converted?.let { text ->
-        var t by remember(text) { mutableStateOf(text) }
+    converted?.let { (r, used) ->
+        var t by remember(r) { mutableStateOf(r.text) }
         AlertDialog(onDismissRequest = { converted = null }, containerColor = Color.White, shape = RoundedCornerShape(4.dp),
             title = { Text("Converted handwriting", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Correct anything that was misread, then add it to the script.", fontSize = 13.sp, color = SGrey)
+                    Text("Correct anything that was misread. It goes into the script where you wrote it" +
+                        " (after the paragraph next to it, or at the end).", fontSize = 13.sp, color = SGrey)
                     OutlinedTextField(t, { t = it }, minLines = 4, modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.Black, unfocusedBorderColor = SRule))
                 }
@@ -303,20 +302,12 @@ fun SpeechScreen(onClose: () -> Unit) {
             confirmButton = {
                 Row {
                     TextButton(onClick = {
-                        // At the cursor when editing, otherwise at the end.
-                        val cur = script
-                        val at = if (editing) cur.selection.end.coerceIn(0, cur.text.length) else cur.text.length
-                        val before = cur.text.substring(0, at); val after = cur.text.substring(at)
-                        val sep = if (before.isBlank()) "" else if (before.endsWith("\n\n")) "" else if (before.endsWith("\n")) "\n" else "\n\n"
-                        val ins = sep + t.trim() + if (after.isNotEmpty() && !after.startsWith("\n")) "\n\n" else ""
-                        script = TextFieldValue(before + ins + after, TextRange(before.length + ins.length))
-                        dirty++; converted = null
+                        insertParagraph(inkView.sourceOffsetAt(r.top), t)
+                        inkView.remove(used); converted = null
                     }) { Text("Add to script", color = Color.Black, fontWeight = FontWeight.Bold) }
                     TextButton(onClick = {
-                        val cur = script
-                        script = TextFieldValue(cur.text.trimEnd().let { if (it.isBlank()) t.trim() else it + "\n\n" + t.trim() }); dirty++
-                        inkView.clear(); converted = null
-                    }) { Text("Add and clear page", color = Color.Black) }
+                        insertParagraph(inkView.sourceOffsetAt(r.top), t); converted = null
+                    }) { Text("Add, keep writing", color = Color.Black) }
                 }
             },
             dismissButton = { TextButton(onClick = { converted = null }) { Text("Cancel", color = SGrey) } })
@@ -367,6 +358,28 @@ fun SpeechScreen(onClose: () -> Unit) {
                 }
             })
     }
+}
+
+/** A small gap between groups of tools. */
+@Composable
+private fun ToolGap() { Spacer(Modifier.width(10.dp)) }
+
+/** Older speeches kept writing on separate pages: put them one below the other on the single page. */
+private fun mergePages(pages: List<List<Speeches.Stroke>>): List<Speeches.Stroke> {
+    if (pages.size <= 1) return pages.firstOrNull().orEmpty()
+    val out = ArrayList<Speeches.Stroke>()
+    var offset = 0f
+    pages.forEach { pg ->
+        if (pg.isEmpty()) return@forEach
+        val shift = offset
+        pg.forEach { s ->
+            val p = s.points.copyOf()
+            for (i in 0 until s.count) p[i * 4 + 1] += shift
+            out += Speeches.Stroke(p, s.width, s.start)
+        }
+        offset = (out.maxOfOrNull { it.maxY() } ?: offset) + 0.2f
+    }
+    return out
 }
 
 /** Paragraphs of a Markdown script for reading: 1 = heading, 2 = list item, 0 = paragraph. */

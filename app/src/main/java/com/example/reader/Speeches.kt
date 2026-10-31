@@ -36,18 +36,25 @@ import kotlin.coroutines.resumeWithException
  */
 object Speeches {
 
-    /** One pen stroke. Points are x, y, pressure, time (ms from the stroke's start); x and y in page widths. */
-    class Stroke(val points: FloatArray, val width: Float = 1f) {
+    /**
+     * One pen stroke. Points are x, y, pressure, time (ms from the stroke's start); x and y in page
+     * widths, y from the top of the speech. [start] is when it was written (ms since 1970, 0 if unknown).
+     */
+    class Stroke(val points: FloatArray, val width: Float = 1f, val start: Long = 0L) {
+        fun minY(): Float { var m = Float.MAX_VALUE; for (i in 0 until count) if (y(i) < m) m = y(i); return m }
+        fun maxY(): Float { var m = -Float.MAX_VALUE; for (i in 0 until count) if (y(i) > m) m = y(i); return m }
+        fun minX(): Float { var m = Float.MAX_VALUE; for (i in 0 until count) if (x(i) < m) m = x(i); return m }
+        fun maxX(): Float { var m = -Float.MAX_VALUE; for (i in 0 until count) if (x(i) > m) m = x(i); return m }
         val count get() = points.size / 4
         fun x(i: Int) = points[i * 4]
         fun y(i: Int) = points[i * 4 + 1]
         fun p(i: Int) = points[i * 4 + 2]
         fun t(i: Int) = points[i * 4 + 3]
-        fun toJson(): JSONObject = JSONObject().put("w", width.toDouble()).put("p", JSONArray().apply { points.forEach { put(Math.round(it * 10000) / 10000.0) } })
+        fun toJson(): JSONObject = JSONObject().put("w", width.toDouble()).put("s", start).put("p", JSONArray().apply { points.forEach { put(Math.round(it * 10000) / 10000.0) } })
         companion object {
             fun from(o: JSONObject): Stroke {
                 val a = o.optJSONArray("p") ?: JSONArray()
-                return Stroke(FloatArray(a.length()) { a.optDouble(it).toFloat() }, o.optDouble("w", 1.0).toFloat())
+                return Stroke(FloatArray(a.length()) { a.optDouble(it).toFloat() }, o.optDouble("w", 1.0).toFloat(), o.optLong("s", 0L))
             }
         }
     }
@@ -261,52 +268,94 @@ object Speeches {
         }
     }
 
-    /** Text already recognised for each line of a page: line → (which strokes, text). */
-    class LineCache { internal val lines = HashMap<Int, Pair<List<Int>, String>>() ; internal var norwegian: Boolean? = null }
+    /** Text already recognised per line of writing (keyed by which strokes make up the line). */
+    class LineCache { internal val lines = HashMap<List<Int>, String>(); internal var norwegian: Boolean? = null }
+
+    /** Recognised writing: the text, and where it starts (y in page widths, for putting it in the script there). */
+    data class Recognised(val text: String, val top: Float)
+
+    private class Line(var center: Float, val members: ArrayList<Stroke> = ArrayList())
 
     /**
-     * Converts a page of handwriting to text, line by line ([lineHeight] in page widths, as the ruled
-     * lines on the page). Lines whose strokes have not changed since the last time come from [cache],
-     * so converting while writing makes the final conversion almost instant. The model downloads once
+     * Groups strokes into lines of writing by height on the page rather than by ruled lines: each stroke
+     * joins the line whose middle it is near (dots and accents join the nearest line), so letters
+     * that dip below or reach above a line still stay with their word.
+     */
+    private fun lines(strokes: List<Stroke>): List<Line> {
+        val list = strokes.filter { it.count > 0 }
+        if (list.isEmpty()) return emptyList()
+        val heights = list.map { it.maxY() - it.minY() }.filter { it > 0f }.sorted()
+        val h = (heights.getOrNull(heights.size / 2) ?: 0.02f).coerceAtLeast(0.008f)
+        val ordered = list.withIndex().sortedWith(compareBy({ if (it.value.start > 0) it.value.start else Long.MAX_VALUE }, { it.index })).map { it.value }
+        val out = ArrayList<Line>()
+        for (s in ordered) {
+            val mid = (s.minY() + s.maxY()) / 2f
+            val tall = (s.maxY() - s.minY()) >= h * 0.35f
+            val best = out.minByOrNull { kotlin.math.abs(it.center - mid) }
+            val limit = if (tall) h * 0.75f else h * 1.1f
+            if (best != null && kotlin.math.abs(best.center - mid) <= limit) {
+                best.members += s
+                if (tall) {
+                    val talls = best.members.filter { (it.maxY() - it.minY()) >= h * 0.35f }
+                    best.center = talls.map { (it.minY() + it.maxY()) / 2f }.average().toFloat()
+                }
+            } else out += Line(mid, arrayListOf(s))
+        }
+        return out.sortedBy { it.center }
+    }
+
+    /**
+     * Converts handwriting to text, line by line. Lines are put together into paragraphs (a larger gap
+     * starts a new one). Lines whose strokes have not changed since last time come from [cache], so
+     * converting while writing makes the final conversion almost instant. The model downloads once
      * (needs internet), then works offline.
      */
-    suspend fun recognise(strokes: List<Stroke>, lineHeight: Float, pageWidthPx: Float, norwegian: Boolean, cache: LineCache = LineCache(), onStatus: (String) -> Unit = {}): String =
-        recogniseLock.withLock { recogniseLocked(strokes, lineHeight, pageWidthPx, norwegian, cache, onStatus) }
+    suspend fun recognise(strokes: List<Stroke>, pageWidthPx: Float, norwegian: Boolean, cache: LineCache = LineCache(), onStatus: (String) -> Unit = {}): Recognised =
+        recogniseLock.withLock { recogniseLocked(strokes, pageWidthPx, norwegian, cache, onStatus) }
 
-    private suspend fun recogniseLocked(strokes: List<Stroke>, lineHeight: Float, pageWidthPx: Float, norwegian: Boolean, cache: LineCache, onStatus: (String) -> Unit): String {
-        if (strokes.isEmpty()) return ""
+    private suspend fun recogniseLocked(strokes: List<Stroke>, pageWidthPx: Float, norwegian: Boolean, cache: LineCache, onStatus: (String) -> Unit): Recognised {
+        val lines = lines(strokes)
+        if (lines.isEmpty()) return Recognised("", 0f)
         if (cache.norwegian != norwegian) { cache.lines.clear(); cache.norwegian = norwegian }
         val recognizer = recognizer(norwegian, onStatus)
-        fun midY(s: Stroke): Float { var a = 0f; for (i in 0 until s.count) a += s.y(i); return a / s.count.coerceAtLeast(1) }
-        val rows = strokes.withIndex().filter { it.value.count > 0 }.groupBy { (midY(it.value) / lineHeight).toInt() }.toSortedMap()
-        cache.lines.keys.retainAll(rows.keys)
-        val out = StringBuilder()
+        val keep = HashSet<List<Int>>()
+        val texts = ArrayList<Pair<Line, String>>()
         var pre = ""
-        var lastRow = -10
-        for ((row, list) in rows) {
-            val ordered = list.sortedBy { it.index }.map { it.value }
-            val sig = ordered.map { System.identityHashCode(it) }
-            val text = cache.lines[row]?.takeIf { it.first == sig }?.second ?: run {
-                val ink = Ink.builder()
+        for (line in lines) {
+            val sig = line.members.map { System.identityHashCode(it) }
+            keep += sig
+            val text = cache.lines[sig] ?: run {
+                val minX = line.members.minOf { it.minX() }; val maxX = line.members.maxOf { it.maxX() }
+                val minY = line.members.minOf { it.minY() }; val maxY = line.members.maxOf { it.maxY() }
+                // Real writing times (gaps between words help the recogniser); made-up times for old strokes.
+                val t0 = line.members.firstOrNull { it.start > 0 }?.start ?: 0L
                 var clock = 0L
-                ordered.forEach { s ->
+                val ink = Ink.builder()
+                line.members.forEach { s ->
+                    val base = if (s.start > 0 && t0 > 0) (s.start - t0).coerceAtLeast(clock) else clock
                     val sb = Ink.Stroke.builder()
-                    for (i in 0 until s.count) sb.addPoint(Ink.Point.create(s.x(i) * pageWidthPx, s.y(i) * pageWidthPx, clock + s.t(i).toLong()))
-                    clock += (s.t(s.count - 1).toLong() + 50L)
+                    for (i in 0 until s.count) sb.addPoint(Ink.Point.create((s.x(i) - minX) * pageWidthPx, (s.y(i) - minY) * pageWidthPx, base + s.t(i).toLong()))
+                    clock = base + s.t(s.count - 1).toLong() + 30L
                     ink.addStroke(sb.build())
                 }
                 val ctx = RecognitionContext.builder().setPreContext(pre.takeLast(20))
-                    .setWritingArea(WritingArea(pageWidthPx, lineHeight * pageWidthPx * 1.6f)).build()
+                    .setWritingArea(WritingArea(((maxX - minX) * pageWidthPx).coerceAtLeast(1f), ((maxY - minY) * pageWidthPx).coerceAtLeast(1f))).build()
                 val t = recognizer.recognize(ink.build(), ctx).await().candidates.firstOrNull()?.text.orEmpty().trim()
-                cache.lines[row] = sig to t
+                cache.lines[sig] = t
                 t
             }
-            if (text.isBlank()) continue
-            if (out.isNotEmpty()) out.append(if (row - lastRow > 1) "\n\n" else "\n")
-            out.append(text)
-            pre = text
-            lastRow = row
+            if (text.isNotBlank()) { texts += line to text; pre = text }
         }
-        return out.toString()
+        cache.lines.keys.retainAll(keep)
+        if (texts.isEmpty()) return Recognised("", lines.first().center)
+        // Paragraphs: a gap clearly larger than the usual line distance starts a new one.
+        val gaps = texts.zipWithNext { a, b -> b.first.center - a.first.center }.sorted()
+        val usual = gaps.getOrNull(gaps.size / 2) ?: 0f
+        val out = StringBuilder(texts.first().second)
+        for (i in 1 until texts.size) {
+            val gap = texts[i].first.center - texts[i - 1].first.center
+            out.append(if (usual > 0f && gap > usual * 1.7f) "\n\n" else " ").append(texts[i].second)
+        }
+        return Recognised(out.toString(), texts.first().first.members.minOf { it.minY() })
     }
 }
