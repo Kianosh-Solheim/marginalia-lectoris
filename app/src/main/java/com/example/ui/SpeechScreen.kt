@@ -85,6 +85,9 @@ fun SpeechScreen(onClose: () -> Unit) {
     var cue by remember { mutableStateOf<SpeechTimer.Cue?>(null) }
     val timer by SpeechTimer.state.collectAsState()
     val inkView = remember { InkCanvasView(context) }
+    // Text already recognised per page and line, filled in while writing.
+    val lineCaches = remember(speech.id) { HashMap<Int, Speeches.LineCache>() }
+    fun cacheFor(p: Int) = lineCaches.getOrPut(p) { Speeches.LineCache() }
     val hostView = LocalView.current
 
     LaunchedEffect(speech.id) { Speeches.remember(context, speech.id) }
@@ -105,6 +108,15 @@ fun SpeechScreen(onClose: () -> Unit) {
         onDispose { inkView.onChanged = null }
     }
     LaunchedEffect(eraser) { inkView.eraser = eraser }
+    // Load the handwriting model as soon as Speech mode opens (when it is already downloaded).
+    LaunchedEffect(speech.norwegian) { withContext(Dispatchers.Default) { Speeches.warmUp(speech.norwegian) } }
+    // Convert while writing: a moment after the pen stops, the lines that changed are recognised in the background.
+    LaunchedEffect(inkVersion, speech.norwegian) {
+        delay(700)
+        val strokes = inkView.strokes()
+        if (strokes.isEmpty() || !Speeches.isReady(speech.norwegian) || inkView.width <= 0) return@LaunchedEffect
+        runCatching { Speeches.recognise(strokes, inkView.lineHeight, inkView.width.toFloat(), speech.norwegian, cacheFor(page)) }
+    }
     LaunchedEffect(speech.fingerDraws) { inkView.fingerDraws = speech.fingerDraws }
     // Saved shortly after each change.
     LaunchedEffect(dirty) {
@@ -146,6 +158,9 @@ fun SpeechScreen(onClose: () -> Unit) {
             busy = ""
         }
     }
+
+    // Dialogs over the page: let the pen reach them instead of the page.
+    SideEffect { inkView.paused = converted != null || showTimerSettings || showOpen || renaming }
 
     val edgeWidth = if (cue != null) 10.dp else 0.dp
     Box(Modifier.fillMaxSize().background(Color.White).border(edgeWidth, Color.Black)) {
@@ -252,7 +267,7 @@ fun SpeechScreen(onClose: () -> Unit) {
                                 if (strokes.isEmpty()) { Toast.makeText(context, "Write something on the page first.", Toast.LENGTH_SHORT).show(); return@InkButton }
                                 busy = "Converting the handwriting…"
                                 scope.launch {
-                                    runCatching { Speeches.recognise(strokes, inkView.lineHeight, inkView.width.toFloat().coerceAtLeast(1f), speech.norwegian) { busy = it } }
+                                    runCatching { Speeches.recognise(strokes, inkView.lineHeight, inkView.width.toFloat().coerceAtLeast(1f), speech.norwegian, cacheFor(page)) { busy = it } }
                                         .onSuccess { t -> if (t.isBlank()) Toast.makeText(context, "No text was recognised.", Toast.LENGTH_LONG).show() else converted = t }
                                         .onFailure { Toast.makeText(context, "Couldn't convert: ${it.message ?: "recogniser unavailable"}", Toast.LENGTH_LONG).show() }
                                     busy = ""

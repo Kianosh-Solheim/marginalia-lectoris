@@ -19,6 +19,13 @@ dependencyResolutionManagement {
   repositories {
     google()
     mavenCentral()
+    maven { url = uri("https://jitpack.io"); content { includeGroupByRegex("com\\.github.*") } }
+    // BOOX pen SDK (fast pen drawing on BOOX e-ink tablets). Only Onyx's own groups are taken from it.
+    maven {
+      url = uri("http://repo.boox.com/repository/maven-public/")
+      isAllowInsecureProtocol = true
+      content { includeGroupByRegex("com\\.onyx.*") }
+    }
   }
 }
 

@@ -31,6 +31,46 @@ class InkCanvasView(context: Context) : View(context) {
     var onChanged: (() -> Unit)? = null
     var fingerDraws = false
     var eraser = false
+        set(v) { field = v; updatePen() }
+    /** True while something covers the page (a dialog): the BOOX pen engine then lets the pen through. */
+    var paused = false
+        set(v) { field = v; updatePen() }
+
+    // BOOX pen engine (null elsewhere): draws the ink on the e-ink screen itself, almost without delay.
+    private var onyx: OnyxPen? = null
+    private val penListener = object : OnyxPen.Listener {
+        override fun onStroke(points: FloatArray) {
+            val w = width.toFloat().takeIf { it > 0 } ?: return
+            val norm = FloatArray(points.size)
+            for (k in 0 until points.size / 4) { norm[k * 4] = points[k * 4] / w; norm[k * 4 + 1] = points[k * 4 + 1] / w; norm[k * 4 + 2] = points[k * 4 + 2]; norm[k * 4 + 3] = points[k * 4 + 3] }
+            val st = Speeches.Stroke(norm)
+            strokes.add(st); history.add(Action.Add(st))
+            bmpCanvas?.let { drawStroke(it, st, w) }
+            onChanged?.invoke()
+        }
+        override fun onErase(points: FloatArray) {
+            var any = false
+            for (k in 0 until points.size / 2) if (eraseAt(points[k * 2], points[k * 2 + 1], refresh = false)) any = true
+            if (any) { redrawAll(); onChanged?.invoke() }
+            onyx?.refresh()
+        }
+        override fun onPenUp() { invalidate() }
+    }
+    /** Whether the fast BOOX pen engine is in use. */
+    val hardwarePen get() = onyx != null
+
+    private fun updatePen() { onyx?.setEnabled(!eraser && !paused) }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (onyx == null) onyx = OnyxPen.create(this, penListener)
+        if (width > 0 && height > 0) post { onyx?.open(width, height, baseWidth); updatePen() }
+    }
+
+    override fun onDetachedFromWindow() {
+        onyx?.close(); onyx = null
+        super.onDetachedFromWindow()
+    }
     /** Ruled line distance in page widths (also used to split lines when converting to text). */
     val lineHeight get() = if (width > 0) lineSpacingPx / width else 0.06f
     private val lineSpacingPx get() = 48f * resources.displayMetrics.density
@@ -56,7 +96,7 @@ class InkCanvasView(context: Context) : View(context) {
 
     fun setStrokes(list: List<Speeches.Stroke>) {
         strokes.clear(); strokes.addAll(list); history.clear()
-        redrawAll()
+        redrawAll(); onyx?.refresh()
     }
 
     fun strokes(): List<Speeches.Stroke> = strokes.toList()
@@ -68,13 +108,13 @@ class InkCanvasView(context: Context) : View(context) {
             is Action.Add -> strokes.remove(a.s)
             is Action.Erase -> a.items.sortedBy { it.first }.forEach { (i, s) -> strokes.add(i.coerceAtMost(strokes.size), s) }
         }
-        redrawAll(); onChanged?.invoke()
+        redrawAll(); onyx?.refresh(); onChanged?.invoke()
     }
 
     fun clear() {
         if (strokes.isEmpty()) return
         history.add(Action.Erase(strokes.mapIndexed { i, s -> i to s }))
-        strokes.clear(); redrawAll(); onChanged?.invoke()
+        strokes.clear(); redrawAll(); onyx?.refresh(); onChanged?.invoke()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -83,6 +123,7 @@ class InkCanvasView(context: Context) : View(context) {
         bmp?.recycle()
         bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmpCanvas = Canvas(it) }
         redrawAll()
+        post { onyx?.open(w, h, baseWidth); updatePen() }
     }
 
     private fun widthFor(pressure: Float, scale: Float) = baseWidth * scale * (0.55f + 0.9f * pressure.coerceIn(0f, 1f))
@@ -160,21 +201,26 @@ class InkCanvasView(context: Context) : View(context) {
             if (i >= 2) pts[(i - 2) * 4] else Float.NaN, if (i >= 2) pts[(i - 2) * 4 + 1] else Float.NaN, pts[i * 4 + 2], 1f, dirty)
     }
 
-    private fun eraseAt(x: Float, y: Float) {
-        val w = width.toFloat().takeIf { it > 0 } ?: return
+    private fun eraseAt(x: Float, y: Float, refresh: Boolean = true): Boolean {
+        val w = width.toFloat().takeIf { it > 0 } ?: return false
         val r = 14f * resources.displayMetrics.density
         val hit = ArrayList<Pair<Int, Speeches.Stroke>>()
         strokes.forEachIndexed { idx, s ->
             for (k in 0 until s.count) if (hypot(s.x(k) * w - x, s.y(k) * w - y) <= r) { hit += idx to s; break }
         }
-        if (hit.isEmpty()) return
+        if (hit.isEmpty()) return false
         history.add(Action.Erase(hit))
         strokes.removeAll(hit.map { it.second }.toSet())
-        redrawAll(); onChanged?.invoke()
+        if (refresh) { redrawAll(); onyx?.refresh(); onChanged?.invoke() }
+        return true
     }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (paused) return false
+        // The BOOX engine already takes the pen (unless the on-screen eraser is on): ignore the pen's ordinary events.
+        if (onyx != null && !eraser && activeId < 0 && e.actionMasked == MotionEvent.ACTION_DOWN && e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) return true
+        if (onyx != null && !eraser && activeId < 0 && e.actionMasked != MotionEvent.ACTION_DOWN && e.getToolType(e.actionIndex.coerceAtMost(e.pointerCount - 1)) == MotionEvent.TOOL_TYPE_STYLUS) return true
         val idx = if (activeId >= 0) e.findPointerIndex(activeId) else e.actionIndex
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {

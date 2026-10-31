@@ -18,6 +18,7 @@ import com.google.mlkit.vision.digitalink.WritingArea
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -224,30 +225,71 @@ object Speeches {
         return null
     }
 
+    // A recogniser per language is kept ready, so converting does not wait for the model to load.
+    private val recognizers = HashMap<Boolean, com.google.mlkit.vision.digitalink.DigitalInkRecognizer>()
+    private val downloaded = HashSet<Boolean>()
+    private val recogniseLock = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun recognizer(norwegian: Boolean, onStatus: (String) -> Unit): com.google.mlkit.vision.digitalink.DigitalInkRecognizer {
+        synchronized(recognizers) { recognizers[norwegian] }?.let { return it }
+        val model = modelFor(norwegian) ?: error(if (norwegian) "Norwegian handwriting isn't supported by the recogniser." else "The English handwriting model is unavailable.")
+        if (norwegian !in downloaded) {
+            val manager = RemoteModelManager.getInstance()
+            if (!manager.isModelDownloaded(model).await()) {
+                onStatus("Downloading the handwriting model (once, needs internet)…")
+                manager.download(model, DownloadConditions.Builder().build()).await()
+            }
+            downloaded += norwegian
+        }
+        val r = DigitalInkRecognition.getClient(DigitalInkRecognizerOptions.builder(model).build())
+        synchronized(recognizers) { recognizers[norwegian] = r }
+        return r
+    }
+
+    /** True when a recogniser for this language is loaded (so converting in the background costs no download). */
+    fun isReady(norwegian: Boolean): Boolean = synchronized(recognizers) { norwegian in recognizers }
+
+    /** Loads the handwriting model in the background (when Speech mode opens), if it is already downloaded. */
+    suspend fun warmUp(norwegian: Boolean) {
+        runCatching {
+            val model = modelFor(norwegian) ?: return
+            if (!RemoteModelManager.getInstance().isModelDownloaded(model).await()) return
+            val r = recognizer(norwegian) {}
+            // A tiny first recognition makes the recogniser load its model now rather than on the first real line.
+            val ink = Ink.builder().addStroke(Ink.Stroke.builder().addPoint(Ink.Point.create(0f, 0f, 0L)).addPoint(Ink.Point.create(10f, 10f, 30L)).build()).build()
+            r.recognize(ink).await()
+        }
+    }
+
+    /** Text already recognised for each line of a page: line → (which strokes, text). */
+    class LineCache { internal val lines = HashMap<Int, Pair<List<Int>, String>>() ; internal var norwegian: Boolean? = null }
+
     /**
      * Converts a page of handwriting to text, line by line ([lineHeight] in page widths, as the ruled
-     * lines on the page). The model downloads once (needs internet), then works offline.
+     * lines on the page). Lines whose strokes have not changed since the last time come from [cache],
+     * so converting while writing makes the final conversion almost instant. The model downloads once
+     * (needs internet), then works offline.
      */
-    suspend fun recognise(strokes: List<Stroke>, lineHeight: Float, pageWidthPx: Float, norwegian: Boolean, onStatus: (String) -> Unit = {}): String {
+    suspend fun recognise(strokes: List<Stroke>, lineHeight: Float, pageWidthPx: Float, norwegian: Boolean, cache: LineCache = LineCache(), onStatus: (String) -> Unit = {}): String =
+        recogniseLock.withLock { recogniseLocked(strokes, lineHeight, pageWidthPx, norwegian, cache, onStatus) }
+
+    private suspend fun recogniseLocked(strokes: List<Stroke>, lineHeight: Float, pageWidthPx: Float, norwegian: Boolean, cache: LineCache, onStatus: (String) -> Unit): String {
         if (strokes.isEmpty()) return ""
-        val model = modelFor(norwegian) ?: error(if (norwegian) "Norwegian handwriting isn't supported by the recogniser." else "The English handwriting model is unavailable.")
-        val manager = RemoteModelManager.getInstance()
-        if (!manager.isModelDownloaded(model).await()) {
-            onStatus("Downloading the handwriting model (once, needs internet)…")
-            manager.download(model, DownloadConditions.Builder().build()).await()
-        }
-        val recognizer = DigitalInkRecognition.getClient(DigitalInkRecognizerOptions.builder(model).build())
-        try {
-            // Group the strokes into lines by the ruled line their middle falls on; keep writing order inside a line.
-            fun midY(s: Stroke): Float { var a = 0f; for (i in 0 until s.count) a += s.y(i); return a / s.count.coerceAtLeast(1) }
-            val rows = strokes.withIndex().filter { it.value.count > 0 }.groupBy { (midY(it.value) / lineHeight).toInt() }.toSortedMap()
-            val out = StringBuilder()
-            var pre = ""
-            var lastRow = -10
-            var clock = 0L
-            for ((row, list) in rows) {
+        if (cache.norwegian != norwegian) { cache.lines.clear(); cache.norwegian = norwegian }
+        val recognizer = recognizer(norwegian, onStatus)
+        fun midY(s: Stroke): Float { var a = 0f; for (i in 0 until s.count) a += s.y(i); return a / s.count.coerceAtLeast(1) }
+        val rows = strokes.withIndex().filter { it.value.count > 0 }.groupBy { (midY(it.value) / lineHeight).toInt() }.toSortedMap()
+        cache.lines.keys.retainAll(rows.keys)
+        val out = StringBuilder()
+        var pre = ""
+        var lastRow = -10
+        for ((row, list) in rows) {
+            val ordered = list.sortedBy { it.index }.map { it.value }
+            val sig = ordered.map { System.identityHashCode(it) }
+            val text = cache.lines[row]?.takeIf { it.first == sig }?.second ?: run {
                 val ink = Ink.builder()
-                list.sortedBy { it.index }.forEach { (_, s) ->
+                var clock = 0L
+                ordered.forEach { s ->
                     val sb = Ink.Stroke.builder()
                     for (i in 0 until s.count) sb.addPoint(Ink.Point.create(s.x(i) * pageWidthPx, s.y(i) * pageWidthPx, clock + s.t(i).toLong()))
                     clock += (s.t(s.count - 1).toLong() + 50L)
@@ -255,16 +297,16 @@ object Speeches {
                 }
                 val ctx = RecognitionContext.builder().setPreContext(pre.takeLast(20))
                     .setWritingArea(WritingArea(pageWidthPx, lineHeight * pageWidthPx * 1.6f)).build()
-                val text = recognizer.recognize(ink.build(), ctx).await().candidates.firstOrNull()?.text.orEmpty().trim()
-                if (text.isBlank()) continue
-                if (out.isNotEmpty()) out.append(if (row - lastRow > 1) "\n\n" else "\n")
-                out.append(text)
-                pre = text
-                lastRow = row
+                val t = recognizer.recognize(ink.build(), ctx).await().candidates.firstOrNull()?.text.orEmpty().trim()
+                cache.lines[row] = sig to t
+                t
             }
-            return out.toString()
-        } finally {
-            recognizer.close()
+            if (text.isBlank()) continue
+            if (out.isNotEmpty()) out.append(if (row - lastRow > 1) "\n\n" else "\n")
+            out.append(text)
+            pre = text
+            lastRow = row
         }
+        return out.toString()
     }
 }

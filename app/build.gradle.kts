@@ -16,7 +16,7 @@ android {
 
   defaultConfig {
     applicationId = "com.aistudio.readmark.kxpv"
-    minSdk = 24
+    minSdk = 26
     targetSdk = 36
     // GitHub builds set these (see .github/workflows/release.yml); local builds stay 1 / "1.0".
     versionCode = (System.getenv("APP_VERSION_CODE") ?: "1").toInt()
@@ -79,6 +79,10 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  packaging {
+    jniLibs { pickFirsts += "lib/*/libc++_shared.so" }
+    resources { excludes += setOf("META-INF/DEPENDENCIES", "META-INF/ASL2.0", "META-INF/NOTICE*", "META-INF/LICENSE*") }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -141,6 +145,9 @@ dependencies {
   implementation(libs.jsoup)
   implementation(libs.work.runtime.ktx)
   implementation(libs.mlkit.digital.ink)
+  // BOOX pen SDK: near-paper pen latency on BOOX e-ink tablets (Speech mode's pen page).
+  implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.4.4")
+  implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
   implementation(libs.readium.streamer)
   implementation(libs.readium.navigator)
   implementation("com.squareup.retrofit2:converter-kotlinx-serialization:2.11.0")
