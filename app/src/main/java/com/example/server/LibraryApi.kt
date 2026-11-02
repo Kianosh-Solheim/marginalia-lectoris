@@ -111,8 +111,6 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s == listOf("upload") && m == "POST" -> return upload(req)
             s.firstOrNull() == "zotero" -> return zoteroApi.route(req, s.drop(1))
             s.firstOrNull() == "bulk" && s.size >= 2 -> return bulk(req, s[1])
-            s.firstOrNull() == "bulk" -> return bulk(req, s.drop(1))
-            s.firstOrNull() == "collections" -> return collectionsRoute(req, s.drop(1))
             s.firstOrNull() == "presentations" -> return presentationsRoute(req, s.drop(1))
             s.firstOrNull() == "live" -> return liveRoute(req, s.drop(1))
             s == listOf("settings") && m == "GET" -> return HttpResponse.json(settingsApi.get().toString()).header("Cache-Control", "no-store")
@@ -1050,78 +1048,6 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             }
             else -> throw NoSuchElementException("Unknown export.")
         }
-    }
-
-    // ------------------------------------------------------------------------------- several items at once
-
-    private fun idsOf(req: HttpRequest, body: JSONObject?): List<Long> {
-        val q = req.query["ids"]?.split(',')?.mapNotNull { it.trim().toLongOrNull() }
-        val b = body?.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.getLong(it) } }
-        return (q ?: b).orEmpty().also { require(it.isNotEmpty()) { "Choose some items first." } }
-    }
-
-    /**
-     * /api/bulk/…: files (zip), notes (zip), combined?format=md|pdf, bib?format=references|intext|bibtex|ris|keys,
-     * POST edit {ids, addTags, removeTags, category, entryType, folder}, POST remove {ids},
-     * POST zotero-add {ids, collection?}, POST zotero-files {ids}.
-     */
-    private suspend fun bulk(req: HttpRequest, s: List<String>): HttpResponse {
-        val body = if (req.method == "POST") JSONObject(req.bodyText()) else null
-        val ids = idsOf(req, body)
-        val B = com.example.reader.BulkActions
-        fun strings(n: String) = body?.optJSONArray(n)?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
-        return when (s.firstOrNull()) {
-            "files" -> B.filesZip(context, ids).let { HttpResponse.FileBody(it.file, "application/zip", it.file.name) }
-            "notes" -> B.notesZip(context, ids).let { HttpResponse.FileBody(it.file, "application/zip", it.file.name) }
-            "combined" -> if (req.query["format"] == "pdf") B.combinedPdf(context, ids).let { HttpResponse.FileBody(it, "application/pdf", it.name) }
-                else B.combinedMarkdownFile(context, ids).let { HttpResponse.FileBody(it, "text/markdown; charset=utf-8", it.name) }
-            "bib" -> {
-                val style = req.query["style"]?.let { st -> runCatching { CitationStyle.valueOf(st) }.getOrNull() } ?: Citations.defaultStyle(context)
-                val text = B.bibliography(context, ids, req.query["format"].orEmpty(), style)
-                if (req.query["download"] == "1") {
-                    val ext = when (req.query["format"]) { "bibtex" -> "bib"; "ris" -> "ris"; else -> "txt" }
-                    val f = File(File(context.cacheDir, "exports/bulk").apply { mkdirs() }, "References.$ext").also { it.writeText(text) }
-                    HttpResponse.FileBody(f, "text/plain; charset=utf-8", f.name)
-                } else HttpResponse.json(JSONObject().put("text", text).toString())
-            }
-            "edit" -> {
-                val b = body ?: JSONObject()
-                val n = B.edit(context, ids, com.example.reader.BulkActions.Edit(
-                    addTags = strings("addTags"), removeTags = strings("removeTags"),
-                    category = b.optString("category").takeIf { it.isNotBlank() }, entryType = b.optString("entryType").takeIf { it.isNotBlank() },
-                    folder = b.optLong("folder", 0L).takeIf { it > 0 }))
-                HttpResponse.json(JSONObject().put("changed", n).toString())
-            }
-            "remove" -> HttpResponse.json(JSONObject().put("removed", B.remove(context, ids)).toString())
-            "zotero-add" -> B.addToZotero(context, ids, body?.optString("collection")?.takeIf { it.isNotBlank() }).let { r ->
-                HttpResponse.json(JSONObject().put("done", r.done).put("skipped", r.skipped).put("failed", JSONArray(r.failed)).toString())
-            }
-            "zotero-files" -> B.filesFromZotero(context, ids).let { r ->
-                HttpResponse.json(JSONObject().put("done", r.done).put("skipped", r.skipped).put("failed", JSONArray(r.failed)).toString())
-            }
-            else -> throw NoSuchElementException("Unknown address.")
-        }
-    }
-
-    /** /api/collections: GET all · POST {name, ids} adds · POST {name, ids, remove:true} takes out · POST {from, to} renames · DELETE ?name= */
-    private fun collectionsRoute(req: HttpRequest, s: List<String>): HttpResponse {
-        val B = com.example.reader.BulkActions
-        when (req.method) {
-            "POST" -> {
-                val b = JSONObject(req.bodyText())
-                when {
-                    b.has("from") -> B.renameCollection(context, b.getString("from"), b.optString("to"))
-                    else -> {
-                        val ids = b.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.getLong(it) } }.orEmpty()
-                        if (b.optBoolean("remove")) B.removeFromCollection(context, b.getString("name"), ids) else B.addToCollection(context, b.optString("name"), ids)
-                    }
-                }
-            }
-            "DELETE" -> B.deleteCollection(context, req.query["name"].orEmpty())
-        }
-        val o = JSONObject()
-        B.collections(context).forEach { (k, v) -> o.put(k, JSONArray(v)) }
-        return HttpResponse.json(JSONObject().put("collections", o).toString())
     }
 
     // ------------------------------------------------------------------------------- several items at once
