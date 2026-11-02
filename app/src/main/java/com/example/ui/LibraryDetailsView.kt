@@ -148,6 +148,7 @@ fun LibraryDetailsView(
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 880.dp
+        val fullWidth = maxWidth
         val tableWidth = 28.dp + cols.fold(0.dp) { a, c -> a + c.width }
         Row(Modifier.fillMaxSize().border(1.dp, Color.Black)) {
             // ---------------------------------------------------------------- table
@@ -157,7 +158,7 @@ fun LibraryDetailsView(
                     InkChip("Columns…", false, { choosing = true })
                 }
                 Box(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
-                    Column(Modifier.width(maxOf(tableWidth, if (wide) maxWidth - 420.dp else maxWidth))) {
+                    Column(Modifier.width(maxOf(tableWidth, if (wide) fullWidth - 420.dp else fullWidth))) {
                         // Header
                         Row(Modifier.fillMaxWidth().border(width = 0.dp, color = Color.Transparent).background(Color.White)) {
                             Spacer(Modifier.width(28.dp))
