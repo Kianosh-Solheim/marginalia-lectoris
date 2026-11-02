@@ -76,8 +76,8 @@ function renderDetailsTable(shelf, docs) {
     order.forEach(d => {
       const isOpen = dt.open.has(d.id);
       const canOpen = d.highlights > 0 || d.folder || d.editedVolume;
-      const tr = h('tr', { class: 'dtrow' + (dt.selected === d.id ? ' sel' : ''), 'data-id': d.id,
-        onclick: () => select(d.id),
+      const tr = h('tr', { class: 'dtrow' + (dt.selected === d.id ? ' sel' : '') + (sel.ids.has(d.id) ? ' picked' : ''), 'data-id': d.id, 'data-pick': d.id,
+        onclick: e => { if (selectionClick(e, d.id, order.map(x => x.id))) return; setSelection([d.id]); sel.anchor = d.id; select(d.id); },
         ondblclick: () => { location.hash = canRead(d) ? `#/read/${d.id}` : `#/book/${d.id}`; } },
         h('td', { class: 'dttw' }, canOpen ? h('button', { class: 'dttwist', title: isOpen ? 'Close' : 'Show chapters and notes', onclick: e => { e.stopPropagation(); toggle(d.id); } }, isOpen ? '▾' : '▸') : ''),
         ...cs.map(c => { const v = c.get(d); return h('td', { class: (c.num ? 'num ' : '') + 'c-' + c.key, title: c.key === 'title' ? v : null }, c.show ? c.show(v) : String(v)); }));
@@ -86,6 +86,7 @@ function renderDetailsTable(shelf, docs) {
       if (isOpen) childRows(d, cs.length + 1).forEach(r => body.append(r));
     });
     table.append(colgroup, h('thead', null, head), body);
+    sel.order = order.map(x => x.id);
     clear(tableBox).append(
       h('div', { class: 'dtbar' }, h('span', { class: 'muted mono', style: { fontSize: '12px' } }, `${docs.length} item${docs.length === 1 ? '' : 's'}`),
         h('span', { style: { flex: 1 } }),
@@ -180,8 +181,25 @@ function renderDetailsTable(shelf, docs) {
   };
   document.addEventListener('keydown', onKey);
 
+  // Several selected: the panel shows what they have in common and what can be done with them.
+  window.onSelectionChanged = () => {
+    if (!document.body.contains(panel)) return;
+    if (sel.ids.size > 1) {
+      const ds = docs.filter(d => sel.ids.has(d.id));
+      const notes = ds.reduce((a, d) => a + (d.highlights || 0), 0);
+      const noFile = ds.filter(d => d.placeholder).length;
+      const inZotero = ds.filter(d => d.zoteroKey).length;
+      clear(panel).append(h('div', { class: 'dthead' }, h('div', { class: 'dttitle' }, `${ds.length} items selected`),
+        h('div', { class: 'muted' }, `${notes} notes · ${inZotero} in Zotero${noFile ? ` · ${noFile} without a file` : ''}`)),
+        h('div', { class: 'dtsecbody', style: { paddingTop: '10px' } }, ...ds.slice(0, 40).map(d => h('div', { class: 'dtnote', onclick: () => { setSelection([d.id]); select(d.id); } },
+          h('b', null, d.title), h('div', { class: 'muted' }, [shortCreator(d), d.year].filter(Boolean).join(' · ')))),
+          ds.length > 40 ? h('div', { class: 'muted' }, `… and ${ds.length - 40} more`) : null,
+          h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Use the bar at the bottom for what to do with them.')));
+    } else if (sel.ids.size === 1 && dt.selected !== [...sel.ids][0]) select([...sel.ids][0]);
+  };
   dt.scrolled = false;
   draw();
+  if (dt.selected && !sel.ids.size) sel.ids.add(dt.selected);
   if (dt.selected && docs.some(d => d.id === dt.selected)) select(dt.selected);
   else clear(panel).append(h('div', { class: 'muted', style: { padding: '16px' } }, 'Choose an item to see and edit its details.'));
 }

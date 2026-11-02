@@ -219,6 +219,8 @@ fun HomeScreen(
     }
 
     var contextMenuDocument by remember { mutableStateOf<DocumentEntity?>(null) }
+    // Several items chosen at once (any view).
+    val selection = remember { LibrarySelection() }
     var shareOptionsDocument by remember { mutableStateOf<DocumentEntity?>(null) }
     var previewMocDocument by remember { mutableStateOf<DocumentEntity?>(null) }
     var exportBundleDocument by remember { mutableStateOf<DocumentEntity?>(null) }
@@ -756,6 +758,21 @@ fun HomeScreen(
                             }
                         }
 
+                        Surface(
+                            shape = RoundedCornerShape(0.dp),
+                            color = if (selection.active) Color.Black else Color.White,
+                            border = BorderStroke(1.5.dp, Color.Black),
+                            modifier = Modifier.clickable { if (selection.active) selection.clear() else selection.active = true }
+                        ) {
+                            Text(
+                                text = if (selection.active) "Selecting" else "Select",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp),
+                                fontWeight = FontWeight.Bold,
+                                color = if (selection.active) Color.White else Color.Black,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+
                         // Tags placed besides the toggle button to the right of it
                         Box(
                             modifier = Modifier.weight(1f),
@@ -1010,6 +1027,9 @@ fun HomeScreen(
                         HorizontalDivider(thickness = 1.5.dp, color = Color.Black)
                     }
 
+                    if (selection.active) Box(Modifier.fillMaxWidth().padding(horizontal = horizontalPadding, vertical = 4.dp)) {
+                        BulkBar(selection, documents)
+                    }
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -1036,6 +1056,7 @@ fun HomeScreen(
                                 onOpenDocument = onOpenDocument,
                                 onOpenDocumentAtPage = onOpenDocumentAtPage,
                                 onLongPress = { contextMenuDocument = it },
+                                selection = selection,
                                 onUpdateDocumentInfo = { d, title, author, tags -> onUpdateDocumentInfo(d, title, author, tags, null, false) },
                                 onUpdateSummary = onUpdateDocumentSummary,
                                 onChangeCategory = onChangeCategory
@@ -1050,12 +1071,13 @@ fun HomeScreen(
                                 verticalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 items(documents, key = { it.id }) { doc ->
+                                    SelectableFrame(selection.active && selection.isSelected(doc.id)) {
                                     DocumentHorizontalListItem(
                                         document = doc,
                                         coverRefreshKey = coverRefreshTrigger + webCoverVersion,
                                         highlightCount = highlightCountsByDocId[doc.id] ?: 0,
-                                        onClick = { onOpenDocument(doc) },
-                                        onLongClickOrRightClick = { contextMenuDocument = doc },
+                                        onClick = { if (selection.active) selection.toggle(doc.id) else onOpenDocument(doc) },
+                                        onLongClickOrRightClick = { if (selection.active) selection.toggle(doc.id) else contextMenuDocument = doc },
                                         onTagClick = { clickedTag ->
                                             onUpdateSearchQuery(clickedTag)
                                         },
@@ -1066,6 +1088,7 @@ fun HomeScreen(
                                             onUpdateEstimatedReadingMinutes(doc.id, minutes)
                                         }
                                     )
+                                    }
                                 }
                             }
                         } else {
@@ -1079,13 +1102,14 @@ fun HomeScreen(
                                 verticalArrangement = Arrangement.spacedBy(gridVerticalSpacing)
                             ) {
                                 items(documents, key = { it.id }) { doc ->
+                                    SelectableFrame(selection.active && selection.isSelected(doc.id)) {
                                     DocumentCardItem(
                                         document = doc,
                                         coverRefreshKey = coverRefreshTrigger + webCoverVersion,
                                         isTabletDisplay = isMediumReadingTablet || isExpandedTablet,
                                         isCompactTile = effectiveMinTileWidth < 118.dp,
-                                        onClick = { onOpenDocument(doc) },
-                                        onLongClickOrRightClick = { contextMenuDocument = doc },
+                                        onClick = { if (selection.active) selection.toggle(doc.id) else onOpenDocument(doc) },
+                                        onLongClickOrRightClick = { if (selection.active) selection.toggle(doc.id) else contextMenuDocument = doc },
                                         onToggleWidgetPin = { onToggleBookWidgetPin(doc) },
                                         onTagClick = { clickedTag ->
                                             onUpdateSearchQuery(clickedTag)
@@ -1097,6 +1121,7 @@ fun HomeScreen(
                                             onUpdateEstimatedReadingMinutes(doc.id, minutes)
                                         }
                                     )
+                                    }
                                 }
                             }
                         }

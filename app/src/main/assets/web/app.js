@@ -1353,6 +1353,7 @@ function renderShelf() {
       s.addEventListener('change', () => { state.sort = s.value; localSet('ml.sort', s.value); renderShelf(); });
       return s;
     })(),
+    h('button', { class: 'chip' + (sel.selecting ? ' on' : ''), title: 'Tap items to select them (or Ctrl/⌘-click and Shift-click any time)', onclick: () => { sel.selecting = !sel.selecting; if (!sel.selecting) clearSelection(); renderShelf(); } }, sel.selecting ? 'Selecting…' : 'Select'),
     state.docs.some(d => d.placeholder) ? h('button', { class: 'chip' + (state.hidePh ? ' on' : ''), title: 'Zotero items in the library without a file', onclick: () => { state.hidePh = !state.hidePh; localSet('ml.hidePh', state.hidePh ? '1' : '0'); renderShelf(); } }, state.hidePh ? 'Placeholders hidden' : 'Hide placeholders') : null,
     h('button', { class: 'chip' + (state.view === 'grid' ? ' on' : ''), onclick: () => { state.view = 'grid'; localSet('ml.view', 'grid'); renderShelf(); } }, 'Covers'),
     h('button', { class: 'chip' + (state.view === 'list' ? ' on' : ''), onclick: () => { state.view = 'list'; localSet('ml.view', 'list'); renderShelf(); } }, 'List'),
@@ -1379,7 +1380,7 @@ function renderShelf() {
   if (state.view === 'list') {
     const list = h('div', { class: 'list' });
     docs.forEach(d => {
-      const row = h('div', { class: 'li', onclick: () => { location.hash = `#/book/${d.id}`; } },
+      const row = h('div', { class: 'li' + (sel.ids.has(d.id) ? ' picked' : ''), 'data-pick': d.id, onclick: e => { if (selectionClick(e, d.id, docs.map(x => x.id))) return; location.hash = `#/book/${d.id}`; } },
         coverImg(d, 'ph'),
         h('div', { style: { minWidth: 0 } }, h('div', { class: 't' }, d.title), h('div', { class: 'muted', style: { fontSize: '13px' } }, d.displayAuthor || d.author)),
         h('div', { class: 'mono muted', style: { fontSize: '11px' } }, splitTags(d.tags).slice(0, 3).map(t => '#' + t).join(' ')),
@@ -1390,11 +1391,13 @@ function renderShelf() {
       list.append(row);
     });
     shelf.append(list);
+    sel.order = docs.map(x => x.id);
+    renderBulkBar();
     return;
   }
   const grid = h('div', { class: 'grid' });
   docs.forEach(d => {
-    const card = h('div', { class: 'card', onclick: () => { location.hash = `#/book/${d.id}`; }, title: 'Open · drag to your desktop to save the file' },
+    const card = h('div', { class: 'card' + (sel.ids.has(d.id) ? ' picked' : ''), 'data-pick': d.id, onclick: e => { if (selectionClick(e, d.id, docs.map(x => x.id))) return; location.hash = `#/book/${d.id}`; }, title: 'Open · Ctrl/⌘-click or Shift-click to select · drag to your desktop to save the file' },
       coverFrame(d, h('span', { class: 'badge' + (d.placeholder ? ' phbadge' : '') }, d.folder ? `FOLDER · ${d.partCount || 0}` : d.placeholder ? 'NO FILE · ZOTERO' : d.fileType), d.pinned ? h('span', { class: 'pin', title: 'Pinned to the widget' }, '◆') : null),
       h('div', { class: 'bar' }, h('i', { style: { width: pct(d.progress) + '%' } })),
       h('div', { class: 't' }, d.title),
@@ -1405,6 +1408,8 @@ function renderShelf() {
     grid.append(card);
   });
   shelf.append(grid);
+  sel.order = docs.map(x => x.id);
+  renderBulkBar();
 }
 
 // ------------------------------------------------------------------ book page

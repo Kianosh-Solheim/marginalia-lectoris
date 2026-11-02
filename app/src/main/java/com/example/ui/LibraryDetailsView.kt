@@ -120,7 +120,8 @@ fun LibraryDetailsView(
     onLongPress: (DocumentEntity) -> Unit,
     onUpdateDocumentInfo: (DocumentEntity, String, String, String) -> Unit,
     onUpdateSummary: (Long, String) -> Unit,
-    onChangeCategory: (DocumentEntity, String) -> Unit
+    onChangeCategory: (DocumentEntity, String) -> Unit,
+    selection: LibrarySelection? = null
 ) {
     val context = LocalContext.current
     LaunchedEffect(Unit) { withContext(Dispatchers.IO) { BibStore.init(context); Zotero.init(context); EditedVolumes.init(context) } }
@@ -161,6 +162,7 @@ fun LibraryDetailsView(
                     Column(Modifier.width(maxOf(tableWidth, if (wide) fullWidth - 420.dp else fullWidth))) {
                         // Header
                         Row(Modifier.fillMaxWidth().border(width = 0.dp, color = Color.Transparent).background(Color.White)) {
+                            if (selection?.active == true) Spacer(Modifier.width(28.dp))
                             Spacer(Modifier.width(28.dp))
                             cols.forEach { c ->
                                 Text(c.label + if (sort == c) (if (asc) " ▲" else " ▼") else "",
@@ -180,13 +182,18 @@ fun LibraryDetailsView(
                                 val isOpen = open[d.id] == true
                                 val canOpen = r.notes > 0 || FolderBooks.isFolder(d) || (EditedVolumes.get(context, d.id)?.enabled == true)
                                 item(key = d.id) {
-                                    val sel = selected == d.id
+                                    val picking = selection?.active == true
+                                    val sel = if (picking) selection!!.isSelected(d.id) else selected == d.id
                                     Row(Modifier.fillMaxWidth().background(if (sel) Color.Black else if (i % 2 == 1) Color(0xFFFAFAFA) else Color.White)
                                         .combinedClickable(
-                                            onClick = { selected = d.id; prefs(context).edit().putLong("selected", d.id).apply() },
-                                            onDoubleClick = { onOpenDocument(d) },
-                                            onLongClick = { onLongPress(d) }),
+                                            onClick = {
+                                                if (picking) selection!!.toggle(d.id)
+                                                else { selected = d.id; prefs(context).edit().putLong("selected", d.id).apply() }
+                                            },
+                                            onDoubleClick = { if (!picking) onOpenDocument(d) },
+                                            onLongClick = { if (picking) selection!!.toggle(d.id) else onLongPress(d) }),
                                         verticalAlignment = Alignment.CenterVertically) {
+                                        if (picking) Text(if (sel) "☑" else "☐", color = if (sel) Color.White else Color.Black, fontSize = 15.sp, textAlign = TextAlign.Center, modifier = Modifier.width(28.dp))
                                         Text(if (!canOpen) "" else if (isOpen) "▾" else "▸", color = if (sel) Color.White else Color.Black, fontSize = 14.sp, textAlign = TextAlign.Center,
                                             modifier = Modifier.width(28.dp).clickable(enabled = canOpen) { open[d.id] = !isOpen }.padding(vertical = 9.dp))
                                         cols.forEach { c ->
