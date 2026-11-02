@@ -412,6 +412,13 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             .put("zoteroSynced", com.example.reader.ZoteroPlaceholders.isSynced(context, d.id))
             .put("zoteroKey", com.example.reader.Zotero.linkOf(d.id) ?: "")
             .apply {
+                // For the details table: year, citation key, item type.
+                val rec = runCatching { BibStore.get(d.id) }.getOrNull()
+                put("year", rec?.get(BibField.YEAR)?.let { Regex("\\d{4}").find(it)?.value ?: it }.orEmpty())
+                put("citekey", runCatching { if (rec != null) Citations.citeKey(d, rec) else "" }.getOrDefault(""))
+                put("entryType", rec?.entryType.orEmpty())
+            }
+            .apply {
                 if (FolderBooks.isFolder(d)) put("partCount", FolderBooks.partsOf(d.id).size)
                 FolderBooks.folderOf(d.id)?.let { put("inFolder", it) }
             }

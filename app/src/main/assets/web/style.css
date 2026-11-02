@@ -594,3 +594,46 @@ main.zotero { max-width: none; padding: 0 16px 16px; }
 .zref { margin-top: 8px; }
 .zinfo .btn { font-size: 11px; padding: 5px 8px; }
 @media (max-width: 900px) { .zgrid { grid-template-columns: 1fr; height: auto; } .zrefs { grid-template-columns: 1fr; } }
+
+/* Details view (Zotero-style table and item panel) */
+main.wide { max-width: none; }
+.dtwrap { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 0; border: 1px solid var(--ink); height: calc(100vh - 210px); min-height: 420px; }
+.dttable { overflow: auto; min-width: 0; }
+.dtbar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--rule); position: sticky; left: 0; background: var(--paper); }
+table.dt { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13.5px; }
+table.dt th { position: sticky; top: 0; background: var(--paper); text-align: left; font-weight: 600; font-size: 12.5px; padding: 6px 8px; border-bottom: 1px solid var(--ink); border-right: 1px solid var(--rule); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: none; z-index: 1; }
+table.dt th.on { text-decoration: underline; }
+table.dt th.num, table.dt td.num { text-align: right; }
+table.dt td { padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #f0f0f0; }
+table.dt tr.dtrow { cursor: default; }
+table.dt tr.dtrow:nth-child(even) td { background: #fafafa; }
+table.dt tr.dtrow.sel td { background: var(--ink); color: var(--paper); }
+table.dt td.c-citekey { font-family: var(--mono); font-size: 12px; }
+.dttw { padding: 0 !important; text-align: center; }
+.dttwist { border: 0; background: none; cursor: pointer; font-size: 12px; padding: 2px 4px; color: inherit; }
+table.dt tr.dtchild td { background: #f6f6f6; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+table.dt tr.dtchild:hover td { background: #ececec; }
+.dtkind { display: inline-block; width: 18px; color: #666; }
+.dtmenu { position: fixed; z-index: 50; background: var(--paper); border: 1.5px solid var(--ink); padding: 8px; display: flex; flex-direction: column; gap: 4px; min-width: 200px; box-shadow: 4px 4px 0 var(--ink); }
+.dtmenu label { display: flex; gap: 8px; align-items: center; font-size: 13px; cursor: pointer; }
+.dtpanel { border-left: 1px solid var(--ink); overflow: auto; padding: 0 0 24px; }
+.dthead { padding: 12px 14px 8px; border-bottom: 1px solid var(--rule); }
+.dttitle { font-family: var(--serif, Georgia, serif); font-weight: 700; font-size: 17px; line-height: 1.25; }
+.dtsec { border-bottom: 1px solid var(--rule); }
+.dtsechead { display: flex; justify-content: space-between; width: 100%; border: 0; background: none; padding: 9px 14px; font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; cursor: pointer; }
+.dtsecbody { padding: 0 14px 10px; }
+.dtfield { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 2px 0; font-size: 13.5px; }
+.dtsecbody > .dtfield:only-child, .dtfield:has(> .dtlab:empty) { grid-template-columns: minmax(0, 1fr); }
+.dtlab { color: #6b6b6b; text-align: right; font-size: 12.5px; }
+.dtlab:empty { display: none; }
+.dtval { min-height: 22px; padding: 2px 4px; border: 1px solid transparent; word-break: break-word; white-space: pre-wrap; cursor: text; }
+.dtval:hover:not(.ro) { border-color: var(--rule); }
+.dtval.empty { color: #a1a1aa; }
+.dtval.ro { cursor: default; }
+.dtval.saving { opacity: .6; }
+.dtval input, .dtval textarea, .dtval select { width: 100%; font: inherit; padding: 2px 4px; }
+.dtattach { display: flex; gap: 12px; align-items: flex-start; }
+.dtcover { width: 72px; border: 1px solid var(--rule); cursor: pointer; }
+.dtnote { padding: 6px 0; border-bottom: 1px dashed var(--rule); cursor: pointer; font-size: 13px; }
+.dtnote:last-child { border-bottom: 0; }
+@media (max-width: 900px) { .dtwrap { grid-template-columns: 1fr; height: auto; } .dtpanel { border-left: 0; border-top: 1px solid var(--ink); } }

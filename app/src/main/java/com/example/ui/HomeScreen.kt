@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.TableRows
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NoteAlt
 import androidx.compose.material.icons.filled.PushPin
@@ -148,7 +149,8 @@ enum class TileScalePreference(val label: String, val scaleFactor: Float) {
 
 enum class LibraryViewMode {
     GRID,
-    LIST
+    LIST,
+    DETAILS
 }
 
 private val CARD_HEIGHT = 120.dp
@@ -726,7 +728,8 @@ fun HomeScreen(
                             border = BorderStroke(1.5.dp, Color.Black),
                             modifier = Modifier
                                 .clickable {
-                                    setViewMode(if (isCurrentlyGrid) LibraryViewMode.LIST else LibraryViewMode.GRID)
+                                    // Grid → Cards → Details → Grid
+                                    setViewMode(when (libraryViewMode) { LibraryViewMode.GRID -> LibraryViewMode.LIST; LibraryViewMode.LIST -> LibraryViewMode.DETAILS; else -> LibraryViewMode.GRID })
                                 }
                                 .testTag("view_mode_toggle_button")
                         ) {
@@ -736,13 +739,13 @@ fun HomeScreen(
                                 horizontalArrangement = Arrangement.spacedBy(5.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (isCurrentlyGrid) Icons.Default.ViewAgenda else Icons.Default.GridView,
-                                    contentDescription = if (isCurrentlyGrid) "Switch to Cards View" else "Switch to Grid View",
+                                    imageVector = when (libraryViewMode) { LibraryViewMode.GRID -> Icons.Default.ViewAgenda; LibraryViewMode.LIST -> Icons.Default.TableRows; else -> Icons.Default.GridView },
+                                    contentDescription = when (libraryViewMode) { LibraryViewMode.GRID -> "Switch to Cards View"; LibraryViewMode.LIST -> "Switch to Details View"; else -> "Switch to Grid View" },
                                     tint = Color.Black,
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    text = if (isCurrentlyGrid) "Cards" else "Grid",
+                                    text = when (libraryViewMode) { LibraryViewMode.GRID -> "Cards"; LibraryViewMode.LIST -> "Details"; else -> "Grid" },
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 11.sp
@@ -1026,6 +1029,17 @@ fun HomeScreen(
                                     onAddClick = onAddDocumentClick
                                 )
                             }
+                        } else if (libraryViewMode == LibraryViewMode.DETAILS) {
+                            LibraryDetailsView(
+                                documents = documents,
+                                allHighlights = allHighlights,
+                                onOpenDocument = onOpenDocument,
+                                onOpenDocumentAtPage = onOpenDocumentAtPage,
+                                onLongPress = { contextMenuDocument = it },
+                                onUpdateDocumentInfo = { d, title, author, tags -> onUpdateDocumentInfo(d, title, author, tags, null, false) },
+                                onUpdateSummary = onUpdateDocumentSummary,
+                                onChangeCategory = onChangeCategory
+                            )
                         } else if (libraryViewMode == LibraryViewMode.LIST) {
                             // Single-column Horizontal Editorial E-Paper Card List (one book per row)
                             LazyColumn(

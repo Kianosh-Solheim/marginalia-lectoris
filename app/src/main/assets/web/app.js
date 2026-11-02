@@ -1337,6 +1337,7 @@ function changeCover(d, initial) {
 
 function renderShelf() {
   const shelf = document.getElementById('shelf'); if (!shelf) return;
+  const mainEl = document.getElementById('main'); if (mainEl) mainEl.classList.toggle('wide', state.view === 'table');
   const toolbar = document.getElementById('toolbar'), tagbar = document.getElementById('tagbar');
   const docs = filteredDocs();
 
@@ -1354,7 +1355,8 @@ function renderShelf() {
     })(),
     state.docs.some(d => d.placeholder) ? h('button', { class: 'chip' + (state.hidePh ? ' on' : ''), title: 'Zotero items in the library without a file', onclick: () => { state.hidePh = !state.hidePh; localSet('ml.hidePh', state.hidePh ? '1' : '0'); renderShelf(); } }, state.hidePh ? 'Placeholders hidden' : 'Hide placeholders') : null,
     h('button', { class: 'chip' + (state.view === 'grid' ? ' on' : ''), onclick: () => { state.view = 'grid'; localSet('ml.view', 'grid'); renderShelf(); } }, 'Covers'),
-    h('button', { class: 'chip' + (state.view === 'list' ? ' on' : ''), onclick: () => { state.view = 'list'; localSet('ml.view', 'list'); renderShelf(); } }, 'List')
+    h('button', { class: 'chip' + (state.view === 'list' ? ' on' : ''), onclick: () => { state.view = 'list'; localSet('ml.view', 'list'); renderShelf(); } }, 'List'),
+    h('button', { class: 'chip' + (state.view === 'table' ? ' on' : ''), title: 'A table with columns and an item panel, as in Zotero', onclick: () => { state.view = 'table'; localSet('ml.view', 'table'); renderShelf(); } }, 'Details')
   );
 
   const counts = {};
@@ -1373,6 +1375,7 @@ function renderShelf() {
   }
   if (!docs.length) { shelf.append(h('div', { class: 'empty' }, h('h2', null, 'Nothing matches'), h('div', { class: 'muted' }, 'Try another search or tag.'))); return; }
 
+  if (state.view === 'table') { renderDetailsTable(shelf, docs); return; }
   if (state.view === 'list') {
     const list = h('div', { class: 'list' });
     docs.forEach(d => {
