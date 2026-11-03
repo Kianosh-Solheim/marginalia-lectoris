@@ -57,7 +57,7 @@ function indexingText(ix) {
 function bookIndexText(st) {
   if (!st) return '';
   switch (st.state) {
-    case 'done': return 'Search: ready' + (st.ocrDone ? ` (${st.ocrDone} scanned pages read with OCR)` : '');
+    case 'done': return `Search: ready ✓ — all ${st.pagesTotal} pages searchable` + (st.ocrDone ? ` (${st.ocrDone} of them had no text layer and were read with OCR)` : '');
     case 'ocr': return `Search: text ready · ${st.ocrLeft} scanned page${st.ocrLeft === 1 ? '' : 's'} still to read with OCR`;
     case 'reading': return st.pagesTotal ? `Search: being read now · page ${st.pagesDone} of ${st.pagesTotal}` : 'Search: being read now';
     case 'queued': return st.pagesDone ? `Search: waiting · ${st.pagesDone} of ${st.pagesTotal} pages read` : 'Search: waiting to be read';
