@@ -648,3 +648,20 @@ table.dt tr.dtrow.sel.picked td { background: var(--ink); }
 #bulkbar { width: max-content; position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 40; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: var(--paper); border: 1.5px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); padding: 8px 10px; max-width: calc(100vw - 24px); }
 #bulkbar .bsep { width: 1px; height: 22px; background: var(--rule); margin: 0 4px; }
 #bulkbar .menu-pop { bottom: 100%; top: auto; }
+
+/* Full-text search */
+main.tsearch { max-width: 980px; }
+main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; }
+.tsbook { border: 1px solid var(--ink); margin: 12px 0; }
+.tshead { display: flex; gap: 6px; align-items: baseline; padding: 8px 12px; border-bottom: 1px solid var(--rule); background: #fafafa; }
+.tshead a { color: inherit; }
+.tshit { display: block; padding: 8px 12px; border-bottom: 1px solid #f0f0f0; color: inherit; text-decoration: none; font-size: 14px; line-height: 1.45; }
+.tshit:hover { background: #f4f4f5; }
+.tshit:last-child { border-bottom: 0; }
+.tsloc { display: inline-block; min-width: 64px; font-size: 11px; color: #6b6b6b; margin-right: 8px; }
+.snip mark { background: #fde047; color: inherit; padding: 0 1px; }
+.fhits { overflow: auto; }
+.fhit { padding: 7px 4px; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: 13px; line-height: 1.4; }
+.fhit:hover { background: #f4f4f5; }
+.fhit.cur { background: #fef9c3; outline: 1px solid var(--ink); }
+.textLayer mark.find-hit { background: rgba(250, 204, 21, .55); color: transparent; border-radius: 2px; padding: 0; }

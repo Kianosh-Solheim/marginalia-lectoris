@@ -62,6 +62,7 @@ class MainActivity : FragmentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        com.example.reader.SearchIndex.kick(this)   // full-text index of the books, in the background
         super.onCreate(savedInstanceState)
         com.example.reader.BibStore.init(applicationContext)
         com.example.reader.EditedVolumes.init(applicationContext)

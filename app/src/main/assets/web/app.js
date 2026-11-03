@@ -173,6 +173,7 @@ function route() {
   if (parts[0] === 'settings') { state.tab = 'settings'; return showSettings(); }
   if (parts[0] === 'presentations') { state.tab = 'presentations'; return showPresentations(); }
   if (parts[0] === 'zotero') { state.tab = 'zotero'; return showZotero(); }
+  if (parts[0] === 'search') { state.tab = 'search'; return showTextSearch(params); }
   if (parts[0] === 'presenter' && parts[1]) return showPresenter(decodeURIComponent(parts[1]), params);
   if (parts[0] === 'audience') return showAudience();
   state.tab = ['books', 'articles'].includes(parts[0]) ? parts[0] : 'all';
@@ -209,7 +210,7 @@ function showLogin() {
 // ------------------------------------------------------------------ header
 
 function header() {
-  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero'], ['settings', 'Settings', '#/settings']];
+  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero'], ['search', 'Search', '#/search'], ['settings', 'Settings', '#/settings']];
   const search = h('input', { type: 'search', class: 'search', placeholder: 'Search title, author, tag…', value: state.query });
   search.addEventListener('input', () => {
     state.query = search.value;
@@ -2443,6 +2444,7 @@ function readerKeys(e) {
   if (e.key === 'ArrowRight' || e.key === 'PageDown') { readerOpen.next && readerOpen.next(); e.preventDefault(); }
   if (e.key === 'ArrowLeft' || e.key === 'PageUp') { readerOpen.prev && readerOpen.prev(); e.preventDefault(); }
   if (e.key === 'Escape' && !document.querySelector('.scrim')) history.back();
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && readerOpen.openSearch) { e.preventDefault(); readerOpen.openSearch(); }
 }
 
 async function openReader(id, params) {
@@ -2453,7 +2455,7 @@ async function openReader(id, params) {
   const mainArea = h('div', { class: 'rmain' }, h('div', { class: 'loading', id: 'rload' }, h('div', { class: 'spin' }), h('div', { id: 'rloadmsg' }, 'Opening the book…')));
   const status = h('div', { class: 'rstatus' });
   const zoomBox = h('span', { class: 'row', style: { gap: '4px' } });
-  const sideTabs = { toc: null, notes: null };
+  const sideTabs = { toc: null, notes: null, search: null };
   let infoBtn = null, infoCtx = null;
   let sideMode = localGet('ml.sideMode', 'notes');
   const bar = h('div', { class: 'rbar' },
@@ -2464,6 +2466,7 @@ async function openReader(id, params) {
     } }, 'Info'),
     h('div', { class: 'rt' }, titleB, placeS),
     zoomBox,
+    sideTabs.search = h('button', { class: 'btn', title: 'Search in this book (Ctrl/⌘-F)', onclick: () => toggleSide('search') }, 'Search'),
     sideTabs.toc = h('button', { class: 'btn', onclick: () => toggleSide('toc') }, 'Contents'),
     sideTabs.notes = h('button', { class: 'btn', onclick: () => toggleSide('notes') }, 'Notes'));
   const readerRoot = h('div', { class: 'reader' }, bar, h('div', { class: 'rbody' }, lside, mainArea, side), status);
@@ -2505,9 +2508,12 @@ async function openReader(id, params) {
   function drawSide() {
     sideTabs.toc.classList.toggle('fill', !side.hidden && sideMode === 'toc');
     sideTabs.notes.classList.toggle('fill', !side.hidden && sideMode === 'notes');
+    sideTabs.search.classList.toggle('fill', !side.hidden && sideMode === 'search');
     if (side.hidden) return;
     clear(side);
-    if (sideMode === 'toc') {
+    if (sideMode === 'search') {
+      ctx.searchUi = readerSearchPanel(ctx, side);
+    } else if (sideMode === 'toc') {
       side.append(h('h3', null, 'Contents'));
       const toc = h('div', { class: 'toc' });
       if (!ctx.tocItems.length) toc.append(h('div', { class: 'muted' }, 'This book has no table of contents.'));
@@ -2559,6 +2565,18 @@ async function openReader(id, params) {
   drawSide();
   const hl = +params.get('hl');
   if (hl) { const n = ctx.notes.find(x => x.id === hl); if (n) setTimeout(() => readerOpen && readerOpen.goToNote(n), 300); }
+  if (readerOpen) readerOpen.openSearch = () => { if (side.hidden || sideMode !== 'search') toggleSide('search'); else if (ctx.searchUi) ctx.searchUi.input.focus(); };
+  // From the library's search: open the search here, run it, and show the chosen match.
+  const find = params.get('find');
+  if (find && readerOpen) {
+    ctx.find = { q: find, whole: params.get('whole') === '1', hits: [], notes: [], i: -1 };
+    if (side.hidden || sideMode !== 'search') toggleSide('search');
+    await ctx.searchUi.run();
+    const page = +params.get('page'), href = params.get('href'), occ = +params.get('occ') || 0;
+    let k = ctx.find.hits.findIndex(x => href ? (x.href === href && x.occurrence === occ) : x.loc === page);
+    if (k < 0) k = ctx.find.hits.findIndex(x => href ? x.href === href : x.loc >= page);
+    if (k >= 0) ctx.searchUi.go(k);
+  }
 }
 
 /** At the end of a chapter of a folder book: the next chapter. */
@@ -2965,7 +2983,9 @@ async function openPdf(ctx, params) {
     const textDivs = [], strs = [];
     await pdfjsLib.renderTextLayer({ textContentSource: tc, container: textDiv, viewport: vp, textDivs, textContentItemsStr: strs }).promise;
     el._text = { divs: textDivs, strs };
+    el._textDiv = textDiv;
     paintHighlights(i);
+    if (ctx.find && ctx.find.q) markFindInTextLayer(textDiv, ctx.find.q, ctx.find.whole);
     if (needsTablet(i)) applyTabletText(i, el, textDiv).catch(console.error); else badge(el, null);
   }
 
@@ -3200,6 +3220,13 @@ async function openPdf(ctx, params) {
     next: () => goPage(current + 1, true),
     prev: () => goPage(current - 1, true),
     goToNote: note => { goPage(note.pageNumber, true); },
+    goToHit: (hit, q, whole) => {
+      goPage(hit.loc, true);
+      pages.forEach(el => { if (el._textDiv) markFindInTextLayer(el._textDiv, q, whole); });
+      setTimeout(() => { const m = pages[hit.loc - 1] && pages[hit.loc - 1].querySelector('.find-hit'); if (m) m.scrollIntoView({ block: 'center' }); }, 450);
+    },
+    markFind: (q, whole) => pages.forEach(el => { if (el._textDiv) markFindInTextLayer(el._textDiv, q, whole); }),
+    clearFind: () => pages.forEach(el => { if (el._textDiv) markFindInTextLayer(el._textDiv, '', false); }),
     notesChanged: () => { [...rendered.keys()].forEach(paintHighlights); },
     destroy: () => {
       document.removeEventListener('selectionchange', onSel);
@@ -3483,6 +3510,7 @@ async function openEpub(ctx, params) {
   });
   onContext(view, e => readerContext(ctx, e, false));
 
+  let findCfi = null;   // the search match shown now
   // Where to start: a note, a chapter, the app's own position, or where this browser left off
   const target = async () => {
     const pos = +params.get('pos');
@@ -3512,6 +3540,21 @@ async function openEpub(ctx, params) {
     kind: 'epub',
     next: () => rendition.next(),
     prev: () => rendition.prev(),
+    goToHit: async (hit, q, whole) => {
+      const r = resourceFor(hit.href); const sh = (r && spineHrefFor(r)) || hit.href;
+      try { await rendition.display(sh); } catch (_) { await goTo(locatePos(hit.loc)); }
+      let ranges = [], contents = null;
+      for (const c of (rendition.getContents() || [])) { const rs = findRangesIn(c.document, q, whole); if (rs.length) { ranges = rs; contents = c; break; } }
+      if (!ranges.length) return;
+      const range = ranges[Math.min(hit.occurrence || 0, ranges.length - 1)];
+      let cfi; try { cfi = contents.cfiFromRange(range); } catch (_) { return; }
+      if (findCfi) { try { rendition.annotations.remove(findCfi, 'highlight'); } catch (_) {} }
+      findCfi = cfi;
+      try { await rendition.display(cfi); } catch (_) {}
+      try { rendition.annotations.highlight(cfi, {}, () => {}, 'ml-find', { fill: '#facc15', 'fill-opacity': '0.45', 'mix-blend-mode': 'multiply' }); } catch (_) {}
+    },
+    markFind: () => {},
+    clearFind: () => { if (findCfi) { try { rendition.annotations.remove(findCfi, 'highlight'); } catch (_) {} findCfi = null; } },
     goToNote: async note => {
       const cfi = painted.get(note.id);
       if (cfi) { await rendition.display(cfi); return; }

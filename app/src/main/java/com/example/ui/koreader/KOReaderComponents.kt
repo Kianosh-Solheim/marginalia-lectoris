@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
@@ -192,6 +193,7 @@ fun KOReaderTopBar(
     onNavigateBack: () -> Unit,
     onOpenFileMenu: () -> Unit,
     onOpenTocMenu: () -> Unit,
+    onOpenSearch: (() -> Unit)? = null,
     onOpenTypesettingMenu: () -> Unit,
     onOpenPdfCropMenu: (() -> Unit)? = null,
     onOpenPdfTextToolsMenu: (() -> Unit)? = null,
@@ -283,6 +285,7 @@ fun KOReaderTopBar(
                     val cells = mutableListOf<@Composable () -> Unit>()
                     cells += { ReaderToolCell(Icons.Default.Folder, "Book", activeTheme, onOpenFileMenu, tag = "koreader_tab_file") }
                     cells += { ReaderToolCell(Icons.AutoMirrored.Filled.List, "Contents", activeTheme, onOpenTocMenu, tag = "koreader_tab_toc") }
+                    if (onOpenSearch != null) cells += { ReaderToolCell(Icons.Default.FindInPage, "Search", activeTheme, onOpenSearch, tag = "koreader_tab_search") }
                     if (onTogglePdfEbookMode != null && isPdf) {
                         cells += { ReaderToolCell(Icons.Default.AutoStories, "Reflow", activeTheme, onTogglePdfEbookMode, active = isPdfEbookMode, tag = "koreader_tab_pdf_ebook_mode") }
                     }

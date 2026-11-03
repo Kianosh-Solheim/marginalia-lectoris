@@ -20,6 +20,7 @@ import com.example.reader.PdfDocumentRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -110,6 +111,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             }
             s == listOf("upload") && m == "POST" -> return upload(req)
             s.firstOrNull() == "zotero" -> return zoteroApi.route(req, s.drop(1))
+            s == listOf("search") && m == "GET" -> return searchAll(req)
             s.firstOrNull() == "bulk" && s.size >= 2 -> return bulk(req, s[1])
             s.firstOrNull() == "presentations" -> return presentationsRoute(req, s.drop(1))
             s.firstOrNull() == "live" -> return liveRoute(req, s.drop(1))
@@ -263,6 +265,15 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                     val served = if (isPdf(doc) && req.query["web"] == "1") PdfWebCopy.readyCopy(context, doc.id, f) ?: f else f
                     HttpResponse.FileBody(served, MiniHttpServer.mimeFor(f.name)).header("Cache-Control", "no-store")
                 }
+            }
+            what == "search" && m == "GET" -> {
+                val q = req.query["q"].orEmpty()
+                val whole = req.query["whole"] == "1"
+                val hits = com.example.reader.SearchIndex.searchBook(context, doc, q, whole)
+                val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, doc.id)
+                HttpResponse.json(JSONObject().put("q", q).put("count", hits.size)
+                    .put("hits", JSONArray().apply { hits.forEach { put(hitJson(it)) } })
+                    .put("notes", JSONArray().apply { notes.forEach { put(noteHitJson(it)) } }).toString())
             }
             what == "highlights" && m == "GET" -> HttpResponse.json(JSONArray().apply {
                 ops.repository.getHighlightsListForDocument(doc.id).forEach { put(hlJson(it)) }
@@ -1048,6 +1059,34 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             }
             else -> throw NoSuchElementException("Unknown export.")
         }
+    }
+
+    // ------------------------------------------------------------------------------- full-text search
+
+    private fun hitJson(h: com.example.reader.SearchIndex.Hit) = JSONObject().put("loc", h.loc).put("href", h.href).put("label", h.label)
+        .put("snippet", h.snippet).put("start", h.start).put("end", h.end).put("occurrence", h.occurrence)
+
+    private fun noteHitJson(n: com.example.reader.SearchIndex.NoteHit) = JSONObject().put("id", n.note.id).put("docId", n.note.documentId).put("docTitle", n.docTitle)
+        .put("title", n.note.title).put("page", n.note.pageNumber).put("label", n.note.printedPageLabel)
+        .put("snippet", n.snippet).put("start", n.start).put("end", n.end)
+
+    /** /api/search?q=&whole=1 — the text of every book, and the notes. */
+    private suspend fun searchAll(req: HttpRequest): HttpResponse {
+        val q = req.query["q"].orEmpty()
+        val whole = req.query["whole"] == "1"
+        val books = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.search(context, q, whole, perBook = 5) }
+        val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, limit = 100)
+        val p = com.example.reader.SearchIndex.progress.value
+        com.example.reader.SearchIndex.kick(context)
+        return HttpResponse.json(JSONObject().put("q", q)
+            .put("indexing", JSONObject().put("running", p.running).put("done", p.done).put("total", p.total).put("current", p.current))
+            .put("books", JSONArray().apply {
+                books.take(200).forEach { (id, r) ->
+                    val d = db.documentDao().getDocumentById(id) ?: return@forEach
+                    put(JSONObject().put("doc", docJson(d, 0)).put("count", r.first).put("hits", JSONArray().apply { r.second.forEach { put(hitJson(it)) } }))
+                }
+            })
+            .put("notes", JSONArray().apply { notes.forEach { put(noteHitJson(it)) } }).toString())
     }
 
     // ------------------------------------------------------------------------------- several items at once

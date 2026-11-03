@@ -99,6 +99,7 @@ class LibraryOps(context: Context) {
             estimatedReadingMinutes = estimatedMinutes
         )
         val newId = repository.insertDocument(doc)
+        com.example.reader.SearchIndex.kick(app)
         com.example.reader.MetadataDetector.commit(app, filePath, newId)
         val created = repository.getDocumentById(newId)
         PinnedBooksWidgetProvider.refreshAllWidgets(app)

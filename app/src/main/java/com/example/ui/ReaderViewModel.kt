@@ -352,6 +352,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                 estimatedReadingMinutes = estimatedMinutes
             )
             val newId = repository.insertDocument(doc)
+            com.example.reader.SearchIndex.kick(getApplication())
         com.example.reader.MetadataDetector.commit(app, filePath, newId)
             val created = repository.getDocumentById(newId)
             if (created != null && openImmediately) {

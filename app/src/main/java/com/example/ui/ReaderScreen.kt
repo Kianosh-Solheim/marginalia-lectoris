@@ -62,6 +62,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -460,6 +462,7 @@ fun ReaderScreen(
         mutableStateOf(initialHighlightRequest?.let { (it.pageNumber - 1).coerceAtLeast(0) })
     }
     var targetHighlightRequest by remember(document.id) { mutableStateOf(initialHighlightRequest) }
+    val findState = remember(document.id) { FindState() }
     var jumpRequestToken by remember(document.id) { mutableIntStateOf(if (initialHighlightRequest != null) 1 else 0) }
 
     // Readium Mobile Toolkit engine state (publisher fidelity, column layout & fixed-layout support)
@@ -946,6 +949,7 @@ fun ReaderScreen(
                     },
                     onOpenFileMenu = { showBookInfoDialog = true },
                     onOpenTocMenu = { coroutineScope.launch { chapterDrawerState.open() } },
+                    onOpenSearch = { findState.open = true },
                     onOpenTypesettingMenu = { showFormattingSheet = true },
                     onOpenPdfCropMenu = { showPdfCropDialog = true },
                     onOpenPdfTextToolsMenu = if (isPdfDocument) {
@@ -1686,6 +1690,38 @@ fun ReaderScreen(
     // Recording mode: "● REC 12:34" with pause and stop, over the book while recording.
     Box(Modifier.fillMaxSize().statusBarsPadding().padding(top = if (isUiVisible) 96.dp else 8.dp, end = 12.dp), contentAlignment = Alignment.TopEnd) {
         RecordingBadge()
+    }
+
+    // Search in this book: the find bar at the bottom.
+    val findSearch: suspend (String, Boolean) -> List<FindHit> = { q, w ->
+        if (isPdfDocument) findInPdf(context, document, q, w) else findInPages(activeEpubPages, q, w)
+    }
+    val findJump: (FindHit) -> Unit = { h ->
+        if (isPdfDocument && isPdfEbookMode) {
+            currentActivePage = syncedPdfPageAnchor.coerceIn(1, syncedPdfTotalPages.coerceAtLeast(1))
+            activeTotalPages = syncedPdfTotalPages.coerceAtLeast(1)
+            isPdfEbookMode = false
+        }
+        targetHighlightRequest = null
+        targetPageRequest = (h.page - 1).coerceAtLeast(0)
+        jumpRequestToken++
+    }
+    // Opened from the library's search: show the search here and go to the chosen match.
+    LaunchedEffect(document.id, activeEpubPages.size) {
+        val p = pendingFind.value ?: return@LaunchedEffect
+        if (p.docId != document.id || (!isPdfDocument && activeEpubPages.isEmpty())) return@LaunchedEffect
+        pendingFind.value = null
+        findState.query = p.query; findState.whole = p.whole; findState.open = true; findState.busy = true
+        val hits = runCatching { findSearch(p.query, p.whole) }.getOrDefault(emptyList())
+        findState.hits = hits; findState.searched = p.query; findState.busy = false
+        val i = if (isPdfDocument) hits.indexOfFirst { it.page == p.loc }.takeIf { it >= 0 } ?: hits.indexOfFirst { it.page >= p.loc }
+            else hits.indexOfFirst { p.label.isNotBlank() && it.where == p.label }.takeIf { it >= 0 } ?: 0
+        if (i >= 0 && i < hits.size) { findState.index = i; findJump(hits[i]) }
+    }
+    if (findState.open) {
+        Box(Modifier.fillMaxSize().navigationBarsPadding().padding(start = 8.dp, end = 8.dp, bottom = if (isUiVisible) 60.dp else 8.dp), contentAlignment = Alignment.BottomCenter) {
+            FindBar(findState, findSearch, findJump, Modifier.widthIn(max = 760.dp))
+        }
     }
 
     // "Go to printed page" action exposed when Quick Scrubber is open and publication has page list metadata

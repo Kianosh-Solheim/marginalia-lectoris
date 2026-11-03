@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.filled.TableRows
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NoteAlt
@@ -201,6 +202,7 @@ fun HomeScreen(
     val coroutineScope = rememberCoroutineScope()
     PresentationsHost()
     ZoteroHost()
+    TextSearchHost(onOpenDocument = onOpenDocument, onOpenDocumentAtPage = onOpenDocumentAtPage)
     SpeechHost()
     PlaceholderHost()
     var tileScalePref by remember { mutableStateOf(TileScalePreference.AUTO) }
@@ -430,6 +432,23 @@ fun HomeScreen(
                         .border(1.dp, Color.Black)
                 )
 
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.FindInPage, contentDescription = null, tint = Color.Black) },
+                    label = { Text("Search in the books", fontWeight = FontWeight.Medium) },
+                    selected = false,
+                    onClick = {
+                        coroutineScope.launch { drawerState.close() }
+                        textSearchOpen.value = true
+                    },
+                    shape = RoundedCornerShape(0.dp),
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.White,
+                        unselectedTextColor = Color.Black
+                    ),
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 3.dp)
+                        .border(1.dp, Color.Black)
+                )
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Default.RecordVoiceOver, contentDescription = null, tint = Color.Black) },
                     label = { Text("Speech mode", fontWeight = FontWeight.Medium) },
@@ -771,6 +790,18 @@ fun HomeScreen(
                                 color = if (selection.active) Color.White else Color.Black,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                             )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(0.dp),
+                            color = Color.White,
+                            border = BorderStroke(1.5.dp, Color.Black),
+                            modifier = Modifier.clickable { textSearchOpen.value = true }
+                        ) {
+                            Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Icon(Icons.Default.FindInPage, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
+                                Text("Search text", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp), fontWeight = FontWeight.Bold, color = Color.Black)
+                            }
                         }
 
                         // Tags placed besides the toggle button to the right of it
