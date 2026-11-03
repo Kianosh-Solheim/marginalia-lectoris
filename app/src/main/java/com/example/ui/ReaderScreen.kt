@@ -1720,7 +1720,8 @@ fun ReaderScreen(
     }
     if (findState.open) {
         Box(Modifier.fillMaxSize().navigationBarsPadding().padding(start = 8.dp, end = 8.dp, bottom = if (isUiVisible) 60.dp else 8.dp), contentAlignment = Alignment.BottomCenter) {
-            FindBar(findState, findSearch, findJump, Modifier.widthIn(max = 760.dp))
+            FindBar(findState, findSearch, findJump, Modifier.widthIn(max = 760.dp),
+                statusOf = if (isPdfDocument) ({ com.example.reader.SearchIndex.status(context, document) }) else null)
         }
     }
 

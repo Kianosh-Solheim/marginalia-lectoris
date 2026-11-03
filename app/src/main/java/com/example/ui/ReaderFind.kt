@@ -76,7 +76,8 @@ private fun snippetText(h: FindHit) = buildAnnotatedString {
  * "List" for all of them with their passages.
  */
 @Composable
-fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>, onJump: (FindHit) -> Unit, modifier: Modifier = Modifier) {
+fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>, onJump: (FindHit) -> Unit, modifier: Modifier = Modifier,
+            statusOf: (() -> SearchIndex.Status)? = null) {
     val scope = rememberCoroutineScope()
     var listOpen by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
@@ -96,6 +97,24 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
         }
     }
     LaunchedEffect(Unit) { if (state.query.isBlank()) runCatching { focus.requestFocus() } }
+    // A PDF that is still being read for search: show how far, and search again as more pages come in.
+    var status by remember { mutableStateOf<SearchIndex.Status?>(null) }
+    val progress by SearchIndex.progress.collectAsState()
+    val latestStatusOf by rememberUpdatedState(statusOf)
+    LaunchedEffect(statusOf != null) {
+        if (latestStatusOf == null) return@LaunchedEffect
+        while (true) {
+            val st = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { latestStatusOf?.invoke() } ?: break
+            val changed = status?.let { it.pagesDone != st.pagesDone || it.ocrLeft != st.ocrLeft || it.state != st.state } ?: false
+            status = st
+            if (changed && state.searched.isNotBlank() && !state.busy) {
+                val keep = state.index
+                state.hits = runCatching { search(state.searched, state.whole) }.getOrDefault(state.hits)
+                state.index = keep.coerceAtMost(state.hits.size - 1)
+            }
+            kotlinx.coroutines.delay(if (st.state == "done" || st.state == "none") 15000 else 2500)
+        }
+    }
 
     Column(modifier.fillMaxWidth().background(Color.White).border(1.5.dp, Color.Black).padding(horizontal = 10.dp, vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -112,8 +131,20 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
             InkChip("List", listOpen, { listOpen = true })
             InkChip("×", false, { state.open = false })
         }
+        status?.let { st ->
+            val line = when (st.state) {
+                "done" -> null
+                "ocr" -> "Text searchable · ${st.ocrLeft} scanned page${if (st.ocrLeft == 1) "" else "s"} still to read with OCR" +
+                    if (progress.running && progress.phase == "ocr") " (now: ${progress.page} of ${progress.pages}${if (progress.current.isNotBlank()) ", ${progress.current}" else ""})" else ""
+                "reading" -> "Reading this book for search: page ${st.pagesDone} of ${st.pagesTotal} — matches so far are shown"
+                "queued" -> if (st.pagesDone > 0) "Waiting to finish reading for search (${st.pagesDone} of ${st.pagesTotal} pages read)" else "Waiting to be read for search — it is next in line"
+                else -> null
+            }
+            if (line != null) Text(line, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Color.Black,
+                modifier = Modifier.padding(top = 4.dp).fillMaxWidth().background(Color(0xFFFFFBEB)).border(1.dp, Color.Black).padding(horizontal = 6.dp, vertical = 3.dp))
+        }
         Text(when {
-            state.busy -> "Searching… (a book is read for search the first time)"
+            state.busy -> "Searching…"
             state.searched.isBlank() -> "Case, accents and line-break hyphens are ignored; \"quotes\" for an exact phrase."
             state.hits.isEmpty() -> "Nothing found for “${state.searched}”."
             else -> "${state.hits.size} match${if (state.hits.size == 1) "" else "es"}" + if (state.index >= 0) " · ${state.index + 1} of ${state.hits.size} · ${state.hits[state.index].where}" else ""

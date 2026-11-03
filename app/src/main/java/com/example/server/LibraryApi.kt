@@ -112,6 +112,10 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s == listOf("upload") && m == "POST" -> return upload(req)
             s.firstOrNull() == "zotero" -> return zoteroApi.route(req, s.drop(1))
             s == listOf("search") && m == "GET" -> return searchAll(req)
+            s == listOf("search-status") && m == "GET" -> {
+                com.example.reader.SearchIndex.kick(context)
+                return HttpResponse.json(JSONObject().put("indexing", progressJson()).toString())
+            }
             s.firstOrNull() == "bulk" && s.size >= 2 -> return bulk(req, s[1])
             s.firstOrNull() == "presentations" -> return presentationsRoute(req, s.drop(1))
             s.firstOrNull() == "live" -> return liveRoute(req, s.drop(1))
@@ -271,7 +275,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 val whole = req.query["whole"] == "1"
                 val hits = com.example.reader.SearchIndex.searchBook(context, doc, q, whole)
                 val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, doc.id)
-                HttpResponse.json(JSONObject().put("q", q).put("count", hits.size)
+                HttpResponse.json(JSONObject().put("q", q).put("count", hits.size).put("status", searchStatusJson(doc)).put("indexing", progressJson())
                     .put("hits", JSONArray().apply { hits.forEach { put(hitJson(it)) } })
                     .put("notes", JSONArray().apply { notes.forEach { put(noteHitJson(it)) } }).toString())
             }
@@ -423,6 +427,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             .put("placeholder", com.example.reader.ZoteroPlaceholders.isPlaceholder(d))
             .put("zoteroSynced", com.example.reader.ZoteroPlaceholders.isSynced(context, d.id))
             .put("zoteroKey", com.example.reader.Zotero.linkOf(d.id) ?: "")
+            .put("search", runCatching { searchStatusJson(d) }.getOrNull() ?: JSONObject().put("state", "none"))
             .apply {
                 // For the details table: year, citation key, item type.
                 val rec = runCatching { BibStore.get(d.id) }.getOrNull()
@@ -1070,16 +1075,26 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         .put("title", n.note.title).put("page", n.note.pageNumber).put("label", n.note.printedPageLabel)
         .put("snippet", n.snippet).put("start", n.start).put("end", n.end)
 
+    private fun searchStatusJson(d: DocumentEntity): JSONObject {
+        val st = com.example.reader.SearchIndex.status(context, d)
+        return JSONObject().put("state", st.state).put("pagesDone", st.pagesDone).put("pagesTotal", st.pagesTotal).put("ocrLeft", st.ocrLeft).put("ocrDone", st.ocrDone)
+    }
+
+    private fun progressJson(): JSONObject {
+        val p = com.example.reader.SearchIndex.progress.value
+        return JSONObject().put("running", p.running).put("done", p.done).put("total", p.total).put("current", p.current).put("currentId", p.currentId)
+            .put("phase", p.phase).put("page", p.page).put("pages", p.pages).put("ocrLeft", p.ocrLeft)
+    }
+
     /** /api/search?q=&whole=1 — the text of every book, and the notes. */
     private suspend fun searchAll(req: HttpRequest): HttpResponse {
         val q = req.query["q"].orEmpty()
         val whole = req.query["whole"] == "1"
         val books = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.search(context, q, whole, perBook = 5) }
         val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, limit = 100)
-        val p = com.example.reader.SearchIndex.progress.value
         com.example.reader.SearchIndex.kick(context)
         return HttpResponse.json(JSONObject().put("q", q)
-            .put("indexing", JSONObject().put("running", p.running).put("done", p.done).put("total", p.total).put("current", p.current))
+            .put("indexing", progressJson())
             .put("books", JSONArray().apply {
                 books.take(200).forEach { (id, r) ->
                     val d = db.documentDao().getDocumentById(id) ?: return@forEach

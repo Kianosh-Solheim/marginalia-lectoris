@@ -1450,7 +1450,8 @@ function renderBook(main, d) {
       d.placeholder ? h('span', null, 'No file yet · from Zotero') : h('span', null, `${d.fileType} · ${fmtSize(d.size)}`),
       d.placeholder ? h('span', null, d.category === 'ARTICLE' ? 'Article' : 'Book') : h('span', null, `${d.category === 'ARTICLE' ? 'Article' : 'Book'} · ${d.totalPages} ${isEpub(d) ? 'positions' : 'pages'}`),
       h('span', null, `Added ${fmtDate(d.dateAdded)}`),
-      d.placeholder ? null : h('span', null, `Last read ${fmtDate(d.lastRead)}`)),
+      d.placeholder ? null : h('span', null, `Last read ${fmtDate(d.lastRead)}`),
+      d.search && d.search.state !== 'none' ? h('span', { title: 'Whether the text of this book can be searched yet' }, bookIndexText(d.search)) : null),
     bibFacts(d));
 
   const right = h('div', null,

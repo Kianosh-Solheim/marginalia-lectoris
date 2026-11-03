@@ -101,7 +101,9 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
                 Text(buildString {
                     if (busy) append("Searching…") else if (query.trim().length >= 2) append("$total match${if (total == 1) "" else "es"} in ${books.size} book${if (books.size == 1) "" else "s"} · ${notes.size} note${if (notes.size == 1) "" else "s"}")
                     else append("Case, accents and line-break hyphens are ignored; words also find longer forms (vold → volden).")
-                    if (progress.running) append(" · reading books for search: ${progress.done} of ${progress.total}")
+                    if (progress.running) append("\nPreparing books for search: ${progress.done} of ${progress.total} ready · now “${progress.current}” " +
+                        (if (progress.phase == "ocr") "(reading scanned pages with OCR: ${progress.page} of ${progress.pages})" else if (progress.pages > 0) "(page ${progress.page} of ${progress.pages})" else "") +
+                        if (progress.ocrLeft > 0 && progress.phase != "ocr") " · ${progress.ocrLeft} scanned pages wait for OCR" else "")
                 }, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TGrey)
                 LazyColumn(Modifier.fillMaxSize()) {
                     if (notes.isNotEmpty()) {

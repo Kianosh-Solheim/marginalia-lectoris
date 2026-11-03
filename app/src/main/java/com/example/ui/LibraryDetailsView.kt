@@ -60,7 +60,7 @@ private val DRule = Color(0xFFE4E4E7)
 private enum class DCol(val label: String, val width: Dp, val numeric: Boolean = false) {
     CREATOR("Creator", 150.dp), YEAR("Year", 56.dp, true), TITLE("Title", 360.dp), CITEKEY("Citation Key", 220.dp),
     TYPE("Item Type", 120.dp), FILE("File", 70.dp), NOTES("Notes", 56.dp, true), PROGRESS("Read", 56.dp, true),
-    TAGS("Tags", 170.dp), ADDED("Date Added", 110.dp, true), ZOTERO("Zotero", 60.dp)
+    TAGS("Tags", 170.dp), ADDED("Date Added", 110.dp, true), ZOTERO("Zotero", 60.dp), SEARCH("Searchable", 120.dp)
 }
 
 private val DEFAULT_COLS = listOf(DCol.CREATOR, DCol.YEAR, DCol.TITLE, DCol.CITEKEY, DCol.FILE, DCol.NOTES)
@@ -75,11 +75,13 @@ private class DRow(val doc: DocumentEntity, val rec: BibRecord, val notes: Int) 
     val progress = if (ZoteroPlaceholders.isPlaceholder(doc) || FolderBooks.isFolder(doc)) -1 else (doc.readingProgress * 100).toInt()
     val tags = NoteSuggestionEngine.parseTagsList(doc.tags).joinToString(", ")
     val zotero = Zotero.linkOf(doc.id) != null
+    var searchState: String = ""
 
     fun text(c: DCol): String = when (c) {
         DCol.CREATOR -> creator; DCol.YEAR -> year; DCol.TITLE -> doc.title; DCol.CITEKEY -> citekey; DCol.TYPE -> type
         DCol.FILE -> file; DCol.NOTES -> notes.toString(); DCol.PROGRESS -> if (progress < 0) "" else "$progress%"
         DCol.TAGS -> tags; DCol.ADDED -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(doc.dateAdded)); DCol.ZOTERO -> if (zotero) "✓" else ""
+        DCol.SEARCH -> searchState
     }
 
     fun sortKey(c: DCol): Comparable<*> = when (c) {
@@ -136,7 +138,18 @@ fun LibraryDetailsView(
     var choosing by remember { mutableStateOf(false) }
 
     val notesBy = remember(allHighlights) { allHighlights.groupBy { it.documentId } }
-    val rows = remember(documents, notesBy, bibVersion) { documents.map { DRow(it, BibStore.get(it.id), notesBy[it.id]?.size ?: 0) } }
+    val indexing by com.example.reader.SearchIndex.progress.collectAsState()
+    val rows = remember(documents, notesBy, bibVersion, if (DCol.SEARCH in cols) indexing.done * 100000 + indexing.page / 25 else 0) {
+        documents.map { DRow(it, BibStore.get(it.id), notesBy[it.id]?.size ?: 0) }.onEach { r ->
+            if (DCol.SEARCH in cols) r.searchState = runCatching { com.example.reader.SearchIndex.status(context, r.doc) }.getOrNull()?.let { st ->
+                when (st.state) {
+                    "done" -> "✓"; "ocr" -> "✓ (OCR ${st.ocrLeft} left)"
+                    "reading" -> if (st.pagesTotal > 0) "reading ${100 * st.pagesDone / st.pagesTotal}%" else "reading"
+                    "queued" -> "waiting"; else -> ""
+                }
+            }.orEmpty()
+        }
+    }
     val sorted = remember(rows, sort, asc) {
         val cmp = Comparator<DRow> { a, b ->
             @Suppress("UNCHECKED_CAST")

@@ -665,3 +665,8 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .fhit:hover { background: #f4f4f5; }
 .fhit.cur { background: #fef9c3; outline: 1px solid var(--ink); }
 .textLayer mark.find-hit { background: rgba(250, 204, 21, .55); color: transparent; border-radius: 2px; padding: 0; }
+
+.ixline { font-family: var(--mono); font-size: 12px; padding: 6px 10px; border: 1px dashed var(--ink); margin: 6px 0; background: #fffbeb; }
+.ixline.small { padding: 4px 6px; margin: 6px 0 0; background: transparent; border-style: solid; border-color: var(--rule); }
+.ixline.small.busy { border-color: var(--ink); background: #fffbeb; }
+.ixline:empty { display: none; }

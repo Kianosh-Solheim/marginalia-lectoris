@@ -46,6 +46,25 @@ function parseQuery(raw, whole) {
   };
 }
 
+/** What the tablet's search indexer is doing, in words. */
+function indexingText(ix) {
+  if (!ix || !ix.running) return '';
+  const what = ix.phase === 'ocr' ? `reading scanned pages with OCR: ${ix.page} of ${ix.pages}` : ix.pages ? `page ${ix.page} of ${ix.pages}` : 'reading';
+  return `Preparing books for search: ${ix.done} of ${ix.total} ready · now “${ix.current}” (${what})` + (ix.ocrLeft && ix.phase !== 'ocr' ? ` · ${ix.ocrLeft} scanned pages wait for OCR` : '');
+}
+
+/** One book's search state, in words. */
+function bookIndexText(st) {
+  if (!st) return '';
+  switch (st.state) {
+    case 'done': return 'Search: ready' + (st.ocrDone ? ` (${st.ocrDone} scanned pages read with OCR)` : '');
+    case 'ocr': return `Search: text ready · ${st.ocrLeft} scanned page${st.ocrLeft === 1 ? '' : 's'} still to read with OCR`;
+    case 'reading': return st.pagesTotal ? `Search: being read now · page ${st.pagesDone} of ${st.pagesTotal}` : 'Search: being read now';
+    case 'queued': return st.pagesDone ? `Search: waiting · ${st.pagesDone} of ${st.pagesTotal} pages read` : 'Search: waiting to be read';
+    default: return 'Search: not available for this kind of file';
+  }
+}
+
 function snippetEl(text, start, end) {
   return h('span', { class: 'snip' }, text.slice(0, start), h('mark', null, text.slice(start, end)), text.slice(end));
 }
@@ -61,25 +80,34 @@ async function showTextSearch(params) {
   const input = h('input', { type: 'search', placeholder: 'Search the text of every book, and your notes…', value: params.get('q') || '', autofocus: true });
   const whole = h('input', { type: 'checkbox', checked: localGet('ml.findWhole', '0') === '1' });
   const status = h('div', { class: 'muted mono', style: { fontSize: '12px', minHeight: '18px' } });
+  const ixLine = h('div', { class: 'ixline', hidden: true });
   const out = h('div');
   main.append(h('h1', null, 'Search'),
     h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } }, input, h('label', { class: 'row', style: { gap: '4px', fontSize: '13px', whiteSpace: 'nowrap' } }, whole, 'Whole words')),
     h('div', { class: 'muted', style: { fontSize: '12px', margin: '4px 0 10px' } }, 'Case, accents and words broken over a line are ignored; words also find their longer forms (vold → volden). "Quote" an exact phrase.'),
-    status, out);
-  let seq = 0, timer = 0;
-  const run = async () => {
+    ixLine, status, out);
+  let seq = 0, timer = 0, again = 0, ixTimer = 0;
+  const showIx = ix => { ixLine.textContent = indexingText(ix); ixLine.hidden = !ixLine.textContent; };
+  const pollIx = async () => {
+    if (!document.body.contains(main)) return;
+    try { const r = await api('search-status'); showIx(r.indexing); if (r.indexing.running) ixTimer = setTimeout(pollIx, 2500); } catch (_) {}
+  };
+  pollIx();
+  const run = async quiet => {
     const q = input.value.trim();
     history.replaceState(null, '', '#/search' + (q ? '?q=' + encodeURIComponent(q) : ''));
     if (!q) { clear(out); status.textContent = ''; return; }
     const my = ++seq;
-    status.textContent = 'Searching…';
+    if (quiet !== true) status.textContent = 'Searching…';
     let r;
     try { r = await api(`search?q=${encodeURIComponent(q)}${whole.checked ? '&whole=1' : ''}`); } catch (e) { fail(e); return; }
     if (my !== seq) return;
     const total = r.books.reduce((a, b) => a + b.count, 0);
     const ix = r.indexing;
-    status.textContent = `${total} match${total === 1 ? '' : 'es'} in ${r.books.length} book${r.books.length === 1 ? '' : 's'} · ${r.notes.length} note${r.notes.length === 1 ? '' : 's'}` +
-      (ix && ix.running ? ` · still reading books: ${ix.done} of ${ix.total}${ix.current ? ' (' + ix.current + ')' : ''}` : '');
+    status.textContent = `${total} match${total === 1 ? '' : 'es'} in ${r.books.length} book${r.books.length === 1 ? '' : 's'} · ${r.notes.length} note${r.notes.length === 1 ? '' : 's'}`;
+    showIx(ix);
+    // While books are still being read, search again now and then: more results come in.
+    clearTimeout(again); if (ix && ix.running) again = setTimeout(() => { if (document.body.contains(main)) run(true); }, 5000);
     clear(out);
     if (r.notes.length) {
       out.append(h('div', { class: 'tsbook' }, h('div', { class: 'tshead' }, h('b', null, 'Your notes'), h('span', { class: 'muted mono' }, r.notes.length)),
@@ -116,6 +144,7 @@ function readerSearchPanel(ctx, side) {
   const whole = h('input', { type: 'checkbox', checked: f.whole });
   const info = h('div', { class: 'muted mono', style: { fontSize: '12px', margin: '6px 0' } });
   const list = h('div', { class: 'fhits' });
+  const stLine = h('div', { class: 'ixline small' });
   const go = i => {
     if (!f.hits.length) return;
     f.i = (i + f.hits.length) % f.hits.length;
@@ -123,7 +152,10 @@ function readerSearchPanel(ctx, side) {
     if (readerOpen && readerOpen.goToHit) readerOpen.goToHit(f.hits[f.i], f.q, f.whole);
   };
   const draw = () => {
-    info.textContent = f.q ? (f.busy ? 'Searching…' : `${f.hits.length} match${f.hits.length === 1 ? '' : 'es'}${f.i >= 0 ? ` · ${f.i + 1} of ${f.hits.length}` : ''}${f.notes.length ? ` · ${f.notes.length} in notes` : ''}`) : '';
+    info.textContent = f.q ? (f.busy ? 'Searching…' : `${f.hits.length} match${f.hits.length === 1 ? '' : 'es'}${f.i >= 0 ? ` · ${f.i + 1} of ${f.hits.length}` : ''}${f.notes.length ? ` · ${f.notes.length} in notes` : ''}` +
+      (f.status && f.status.state !== 'done' ? ' so far' : '')) : '';
+    stLine.textContent = bookIndexText(f.status);
+    stLine.classList.toggle('busy', !!f.status && f.status.state !== 'done');
     clear(list);
     f.hits.slice(0, 500).forEach((hit, k) => list.append(h('div', { class: 'fhit' + (k === f.i ? ' cur' : ''), onclick: () => go(k) },
       h('span', { class: 'tsloc mono' }, isPdf(ctx.d) ? 'p. ' + (hit.label || hit.loc) : (hit.label || 'pos. ' + hit.loc)), snippetEl(hit.snippet, hit.start, hit.end))));
@@ -135,19 +167,23 @@ function readerSearchPanel(ctx, side) {
     }
     const cur = list.querySelector('.fhit.cur'); if (cur) cur.scrollIntoView({ block: 'nearest' });
   };
-  let timer = 0, seq = 0;
-  const run = async () => {
+  let timer = 0, seq = 0, again = 0;
+  const run = async quiet => {
     const q = input.value.trim();
-    f.q = q; f.whole = whole.checked; f.i = -1;
+    const same = quiet === true && q === f.q;
+    f.q = q; f.whole = whole.checked; if (!same) f.i = -1;
     if (!q) { f.hits = []; f.notes = []; if (readerOpen && readerOpen.clearFind) readerOpen.clearFind(); draw(); return; }
-    const my = ++seq; f.busy = true; draw();
+    const my = ++seq; if (!same) { f.busy = true; draw(); }
     try {
-      const r = await api(`doc/${ctx.d.id}/search?q=${encodeURIComponent(q)}${f.whole ? '&whole=1' : ''}`, { timeout: 600000 });
+      const r = await api(`doc/${ctx.d.id}/search?q=${encodeURIComponent(q)}${f.whole ? '&whole=1' : ''}`, { timeout: 60000 });
       if (my !== seq) return;
-      f.hits = r.hits; f.notes = r.notes;
+      f.hits = r.hits; f.notes = r.notes; f.status = r.status;
     } catch (e) { fail(e); }
     f.busy = false;
     draw();
+    // The book is still being read for search: look again in a moment (more matches come in).
+    clearTimeout(again);
+    if (f.status && f.status.state !== 'done' && f.status.state !== 'none') again = setTimeout(() => { if (document.body.contains(side) && f.q === q) run(true); }, 3000);
     if (readerOpen && readerOpen.markFind) readerOpen.markFind(f.q, f.whole);
   };
   input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 300); });
@@ -161,7 +197,8 @@ function readerSearchPanel(ctx, side) {
       h('button', { class: 'btn quiet', title: 'Previous (Shift+Enter)', onclick: () => go(f.i - 1) }, '↑'),
       h('button', { class: 'btn quiet', title: 'Next (Enter)', onclick: () => go(f.i + 1) }, '↓')),
     h('label', { class: 'row', style: { gap: '4px', fontSize: '12px', marginTop: '4px' } }, whole, 'Whole words'),
-    info, list);
+    stLine, info, list);
+  if (!f.status) api(`doc/${ctx.d.id}/search?q=`).then(r => { f.status = r.status; draw(); }).catch(() => {});
   draw();
   setTimeout(() => input.focus(), 0);
   return { run, go, input };

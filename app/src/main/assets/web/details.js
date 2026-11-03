@@ -14,6 +14,7 @@ const DT_COLUMNS = [
   { key: 'tags', label: 'Tags', w: 180, get: d => splitTags(d.tags).join(', ') },
   { key: 'added', label: 'Date Added', w: 110, num: true, get: d => d.dateAdded || 0, show: v => v ? fmtDate(v) : '' },
   { key: 'zotero', label: 'Zotero', w: 60, get: d => d.zoteroKey ? '✓' : '' },
+  { key: 'search', label: 'Searchable', w: 110, get: d => { const st = d.search || {}; return st.state === 'done' ? '✓' : st.state === 'ocr' ? `✓ (OCR ${st.ocrLeft} left)` : st.state === 'reading' ? (st.pagesTotal ? `reading ${Math.round(100 * st.pagesDone / st.pagesTotal)}%` : 'reading') : st.state === 'queued' ? 'waiting' : ''; } },
 ];
 const DT_DEFAULT = ['creator', 'year', 'title', 'citekey', 'file', 'notes'];
 

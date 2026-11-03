@@ -47,7 +47,18 @@ object SearchIndex {
     private const val TAG = "SearchIndex"
     private const val VERSION = 3   // bump to re-index everything after a change in how text is read
 
-    data class Progress(val running: Boolean = false, val done: Int = 0, val total: Int = 0, val current: String = "")
+    /**
+     * What the indexer is doing: [books] read for search out of [total], the book now ([current]) with
+     * its [page] of [pages], [phase] "text" (reading the text layer) or "ocr" (reading scanned pages),
+     * and how many scanned pages wait for OCR in all ([ocrLeft]).
+     */
+    data class Progress(val running: Boolean = false, val done: Int = 0, val total: Int = 0, val current: String = "",
+                        val currentId: Long = 0, val phase: String = "", val page: Int = 0, val pages: Int = 0, val ocrLeft: Int = 0)
+
+    /** One book's state in the index. [state]: "done", "reading" (now), "ocr" (text done, scanned pages left), "queued", "none" (cannot be searched). */
+    data class Status(val state: String, val pagesDone: Int = 0, val pagesTotal: Int = 0, val ocrLeft: Int = 0, val ocrDone: Int = 0) {
+        val searchable get() = state == "done" || state == "ocr" || pagesDone > 0
+    }
     private val _progress = MutableStateFlow(Progress())
     val progress: StateFlow<Progress> = _progress.asStateFlow()
 
@@ -58,14 +69,19 @@ object SearchIndex {
 
     // ------------------------------------------------------------------ storage
 
-    private class Db(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, "search_index.db", null, 1) {
+    private class Db(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, "search_index.db", null, 2) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE units (id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL, loc INTEGER, href TEXT, label TEXT, text TEXT)")
             db.execSQL("CREATE INDEX units_doc ON units(doc_id)")
             db.execSQL("CREATE VIRTUAL TABLE fts USING fts4(body, tokenize=simple)")
-            db.execSQL("CREATE TABLE docs (doc_id INTEGER PRIMARY KEY, sig TEXT, units INTEGER, updated INTEGER)")
+            // phase: text (being read) · ocr (text done, scanned pages left) · done
+            db.execSQL("CREATE TABLE docs (doc_id INTEGER PRIMARY KEY, sig TEXT, phase TEXT, pages INTEGER, pages_done INTEGER, ocr_done INTEGER, updated INTEGER)")
+            db.execSQL("CREATE TABLE ocr_todo (doc_id INTEGER, page INTEGER, PRIMARY KEY(doc_id, page))")
         }
-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            listOf("units", "fts", "docs", "ocr_todo").forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
+            onCreate(db)
+        }
     }
 
     @Volatile private var db: Db? = null
@@ -74,7 +90,10 @@ object SearchIndex {
     // ------------------------------------------------------------------ forgiving text
 
     private val combining = Regex("\\p{Mn}+")
-    private fun foldChar(c: Char): String = when (c) {
+    private val foldCache = java.util.concurrent.ConcurrentHashMap<Char, String>()
+    private val asciiLower = Array(128) { it.toChar().lowercaseChar().toString() }
+    private fun foldChar(c: Char): String = if (c.code < 128) asciiLower[c.code] else foldCache.getOrPut(c) { foldSlow(c) }
+    private fun foldSlow(c: Char): String = when (c) {
         'ø', 'Ø' -> "o"; 'æ', 'Æ' -> "ae"; 'œ', 'Œ' -> "oe"; 'ß' -> "ss"; 'ł', 'Ł' -> "l"; 'đ', 'Đ', 'ð', 'Ð' -> "d"; 'þ', 'Þ' -> "th"
         '’', '‘', 'ʼ' -> "'"
         else -> {
@@ -160,42 +179,14 @@ object SearchIndex {
 
     private fun signature(d: DocumentEntity): String {
         val f = File(d.filePath)
-        return "$VERSION|${f.length()}|${f.lastModified()}|${d.pdfTextExtractionMode}|${d.pdfPageExtractionOverridesJson.hashCode()}"
+        return "$VERSION|${f.length()}|${f.lastModified()}"
     }
 
-    private fun indexable(d: DocumentEntity): Boolean =
+    fun indexable(d: DocumentEntity): Boolean =
         !FolderBooks.isFolder(d) && !ZoteroPlaceholders.isPlaceholder(d) && File(d.filePath).isFile &&
             d.fileType.uppercase(Locale.ROOT) in setOf("PDF", "EPUB", "HTML", "HTM", "XHTML", "TXT", "MD")
 
-    private suspend fun pdfUnits(ctx: Context, d: DocumentEntity, onPage: (Int, Int) -> Unit): List<Chunk> {
-        val r = PdfDocumentRenderer(File(d.filePath), ctx)
-        try {
-            runCatching {
-                r.updateExtractionConfiguration(
-                    PdfTextExtractionMode.fromId(d.pdfTextExtractionMode),
-                    PdfPageDiagnosticsAndOcrEngine.parsePageOverridesJson(d.pdfPageExtractionOverridesJson),
-                    d.pdfOcrLanguage.ifBlank { "AUTO" })
-            }
-            val n = r.pageCount
-            val out = ArrayList<Chunk>(n)
-            for (i in 0 until n) {
-                yield()
-                onPage(i + 1, n)
-                val data = runCatching { r.extractPageTextData(i) }.getOrNull()
-                var text = data?.fullText.orEmpty()
-                // A page without a text layer (scanned): read it with OCR.
-                if (text.count { it.isLetterOrDigit() } < 20) {
-                    val ocr = runCatching {
-                        val bmp = r.renderPage(i, targetWidth = 1400)
-                        PdfPageDiagnosticsAndOcrEngine.performOcrOnPageBitmap(i, bmp).fullText.also { bmp?.recycle() }
-                    }.getOrNull().orEmpty()
-                    if (ocr.count { it.isLetterOrDigit() } > text.count { it.isLetterOrDigit() }) text = ocr
-                }
-                if (text.isNotBlank()) out += Chunk(i + 1, "", data?.printedPageLabel.orEmpty(), text)
-            }
-            return out
-        } finally { runCatching { r.close() } }
-    }
+    private fun isPdf(d: DocumentEntity) = d.fileType.equals("PDF", true)
 
     private fun htmlText(html: String): String {
         val body = html.replace(Regex("(?is)<head.*?</head>"), " ").replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), " ")
@@ -223,15 +214,12 @@ object SearchIndex {
             val spine = Regex("<(?:\\w+:)?itemref\\b[^>]*idref=\"([^\"]+)\"").findAll(opf).mapNotNull { manifest[it.groupValues[1]] }.toList()
             for (rel in spine) {
                 yield()
-                val full = normalizePath(base + rel)
-                val text = read(full)?.let { htmlText(it) }.orEmpty()
+                val text = read(normalizePath(base + rel))?.let { htmlText(it) }.orEmpty()
                 if (text.isBlank()) continue
                 val res = index?.let { com.example.server.EpubIndex.resourceFor(it, rel) }
-                // Long sections are kept in parts, each with its approximate position.
-                val parts = chunk(text, 2400)
                 var offset = 0
-                parts.forEach { part ->
-                    val loc = if (res != null) res.first + ((offset.toDouble() / text.length) * res.count).toInt().coerceAtMost(res.count - 1).coerceAtLeast(0) else 1
+                chunk(text, 2400).forEach { part ->
+                    val loc = if (res != null) res.first + ((offset.toDouble() / text.length) * res.count).toInt().coerceIn(0, (res.count - 1).coerceAtLeast(0)) else 1
                     out += Chunk(loc, rel, res?.title.orEmpty(), part)
                     offset += part.length
                 }
@@ -268,77 +256,193 @@ object SearchIndex {
         return chunk(text, 2400).map { Chunk(1, "", "", it) }
     }
 
-    // ------------------------------------------------------------------ indexing
+    // ------------------------------------------------------------------ the index's bookkeeping
 
-    private val mutex = Mutex()
-    private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "search-index").apply { priority = Thread.MIN_PRIORITY; isDaemon = true } }.asCoroutineDispatcher()
-    private val scope = CoroutineScope(SupervisorJob() + worker)
-    @Volatile private var job: Job? = null
+    private class Row(val sig: String, val phase: String, val pages: Int, val pagesDone: Int, val ocrDone: Int)
 
-    private fun isCurrent(ctx: Context, d: DocumentEntity): Boolean =
-        db(ctx).rawQuery("SELECT sig FROM docs WHERE doc_id=?", arrayOf(d.id.toString())).use { c -> c.moveToFirst() && c.getString(0) == signature(d) }
+    private fun row(ctx: Context, id: Long): Row? = db(ctx).rawQuery("SELECT sig, phase, pages, pages_done, ocr_done FROM docs WHERE doc_id=?", arrayOf(id.toString())).use { c ->
+        if (c.moveToFirst()) Row(c.getString(0).orEmpty(), c.getString(1).orEmpty(), c.getInt(2), c.getInt(3), c.getInt(4)) else null
+    }
 
-    fun isIndexed(ctx: Context, docId: Long): Boolean =
-        db(ctx).rawQuery("SELECT 1 FROM docs WHERE doc_id=?", arrayOf(docId.toString())).use { it.moveToFirst() }
+    private fun ocrLeft(ctx: Context, id: Long? = null): Int = db(ctx).rawQuery(
+        if (id == null) "SELECT COUNT(*) FROM ocr_todo" else "SELECT COUNT(*) FROM ocr_todo WHERE doc_id=?", if (id == null) null else arrayOf(id.toString())
+    ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
-    /** Reads one book into the index (again, if it changed). */
-    suspend fun indexDoc(ctx: Context, d: DocumentEntity, force: Boolean = false) = mutex.withLock {
-        if (!indexable(d)) return@withLock
-        if (!force && isCurrent(ctx, d)) return@withLock
-        val units = runCatching {
-            when (d.fileType.uppercase(Locale.ROOT)) {
-                "PDF" -> pdfUnits(ctx, d) { p, n -> _progress.value = _progress.value.copy(current = "${d.title} · page $p of $n") }
-                "EPUB" -> epubUnits(ctx, d)
-                else -> plainUnits(d)
-            }
-        }.onFailure { Log.w(TAG, "Could not read ${d.title}", it) }.getOrNull() ?: return@withLock
-        val w = db(ctx)
-        w.beginTransaction()
-        try {
-            removeLocked(w, d.id)
-            units.forEach { u ->
-                val id = w.insert("units", null, ContentValues().apply {
-                    put("doc_id", d.id); put("loc", u.loc); put("href", u.href); put("label", u.label); put("text", u.text)
-                })
-                w.execSQL("INSERT INTO fts(rowid, body) VALUES(?, ?)", arrayOf<Any>(id, norm(u.text)))
-            }
-            w.insertWithOnConflict("docs", null, ContentValues().apply {
-                put("doc_id", d.id); put("sig", signature(d)); put("units", units.size); put("updated", System.currentTimeMillis())
-            }, SQLiteDatabase.CONFLICT_REPLACE)
-            w.setTransactionSuccessful()
-        } finally { w.endTransaction() }
+    private fun setRow(w: SQLiteDatabase, id: Long, sig: String, phase: String, pages: Int, pagesDone: Int, ocrDone: Int) {
+        w.insertWithOnConflict("docs", null, ContentValues().apply {
+            put("doc_id", id); put("sig", sig); put("phase", phase); put("pages", pages); put("pages_done", pagesDone); put("ocr_done", ocrDone); put("updated", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    private fun insertChunk(w: SQLiteDatabase, id: Long, u: Chunk) {
+        val rowId = w.insert("units", null, ContentValues().apply { put("doc_id", id); put("loc", u.loc); put("href", u.href); put("label", u.label); put("text", u.text) })
+        w.execSQL("INSERT INTO fts(rowid, body) VALUES(?, ?)", arrayOf<Any>(rowId, norm(u.text)))
     }
 
     private fun removeLocked(w: SQLiteDatabase, docId: Long) {
         w.execSQL("DELETE FROM fts WHERE rowid IN (SELECT id FROM units WHERE doc_id=?)", arrayOf<Any>(docId))
         w.execSQL("DELETE FROM units WHERE doc_id=?", arrayOf<Any>(docId))
         w.execSQL("DELETE FROM docs WHERE doc_id=?", arrayOf<Any>(docId))
+        w.execSQL("DELETE FROM ocr_todo WHERE doc_id=?", arrayOf<Any>(docId))
     }
 
-    /** Starts (or continues) indexing the library in the background. Safe to call often. */
-    fun kick(ctx: Context) {
-        val app = ctx.applicationContext
-        if (job?.isActive == true) return
-        job = scope.launch {
-            delay(4000)   // let the app finish starting
-            runCatching {
-                val docs = AppDatabase.getInstance(app).documentDao().getAllDocumentsSnapshot()
-                // Forget books that were deleted.
-                val ids = docs.map { it.id }.toSet()
-                val known = db(app).rawQuery("SELECT doc_id FROM docs", null).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
-                mutex.withLock { val w = db(app); known.filter { it !in ids }.forEach { removeLocked(w, it) } }
-                val todo = docs.filter { indexable(it) && !isCurrent(app, it) }
-                    .sortedByDescending { maxOf(it.lastReadTimestamp, it.dateAdded) }   // recently read first
-                _progress.value = Progress(todo.isNotEmpty(), 0, todo.size)
-                todo.forEachIndexed { i, d ->
-                    if (!isActive) return@launch
-                    _progress.value = Progress(true, i, todo.size, d.title)
-                    indexDoc(app, d)
-                }
-            }.onFailure { Log.w(TAG, "Indexing stopped", it) }
-            _progress.value = Progress(false, _progress.value.total, _progress.value.total)
+    /** One book's state in the index. */
+    fun status(ctx: Context, d: DocumentEntity): Status {
+        if (!indexable(d)) return Status("none")
+        val r = row(ctx, d.id)
+        val p = _progress.value
+        val now = p.running && p.currentId == d.id
+        if (r == null || r.sig != signature(d)) return if (now) Status("reading", p.page, p.pages) else Status("queued")
+        return when (r.phase) {
+            "done" -> Status("done", r.pages, r.pages, 0, r.ocrDone)
+            "ocr" -> Status(if (now) "reading" else "ocr", r.pages, r.pages, ocrLeft(ctx, d.id), r.ocrDone)
+            else -> Status(if (now) "reading" else "queued", r.pagesDone, r.pages)
         }
     }
+
+    /** States of all books (for the library's list), by document id. */
+    fun statuses(ctx: Context, docs: List<DocumentEntity>): Map<Long, Status> = docs.associate { it.id to status(ctx, it) }
+
+    // ------------------------------------------------------------------ indexing
+
+    private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "search-index").apply { priority = Thread.MIN_PRIORITY; isDaemon = true } }.asCoroutineDispatcher()
+    private val scope = CoroutineScope(SupervisorJob() + worker)
+    @Volatile private var job: Job? = null
+    /** A book someone is searching in now: read it next (the book being read pauses and continues later). */
+    @Volatile private var priority: Long = 0
+    private val mutex = Mutex()
+
+    /** Reads the text of a PDF page by page with PDFBox (fast), continuing where it stopped; scanned pages are noted for OCR. */
+    private suspend fun pdfTextPhase(ctx: Context, d: DocumentEntity, from: Int): Boolean {
+        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(ctx.applicationContext)
+        val sig = signature(d)
+        com.tom_roush.pdfbox.pdmodel.PDDocument.load(File(d.filePath), com.tom_roush.pdfbox.io.MemoryUsageSetting.setupMixed(16L * 1024 * 1024)).use { pdf ->
+            val n = pdf.numberOfPages
+            val labels = runCatching { pdf.documentCatalog.pageLabels?.labelsByPageIndices }.getOrNull()
+            val stripper = com.tom_roush.pdfbox.text.PDFTextStripper().apply { sortByPosition = true }
+            val w = db(ctx)
+            var page = from + 1
+            while (page <= n) {
+                if (priority != 0L && priority != d.id) return false   // someone is searching another book: pause this one
+                val batch = ArrayList<Pair<Int, String>>()
+                val end = (page + 9).coerceAtMost(n)
+                for (p in page..end) {
+                    yield()
+                    _progress.value = _progress.value.copy(currentId = d.id, current = d.title, phase = "text", page = p, pages = n)
+                    stripper.startPage = p; stripper.endPage = p
+                    batch += p to runCatching { stripper.getText(pdf) }.getOrDefault("")
+                }
+                w.beginTransaction()
+                try {
+                    batch.forEach { (p, text) ->
+                        if (text.count { it.isLetterOrDigit() } < 20) w.execSQL("INSERT OR IGNORE INTO ocr_todo(doc_id, page) VALUES(?, ?)", arrayOf<Any>(d.id, p))
+                        else insertChunk(w, d.id, Chunk(p, "", labels?.getOrNull(p - 1)?.takeIf { it != p.toString() }.orEmpty(), text))
+                    }
+                    setRow(w, d.id, sig, if (end >= n) "ocr" else "text", n, end, 0)
+                    w.setTransactionSuccessful()
+                } finally { w.endTransaction() }
+                page = end + 1
+            }
+            if (ocrLeft(ctx, d.id) == 0) setRow(db(ctx), d.id, sig, "done", n, n, 0)
+        }
+        return true
+    }
+
+    /** Reads scanned pages of a PDF with OCR, a few at a time. Returns false when paused for another book. */
+    private suspend fun pdfOcrPhase(ctx: Context, d: DocumentEntity): Boolean {
+        val pages = db(ctx).rawQuery("SELECT page FROM ocr_todo WHERE doc_id=? ORDER BY page", arrayOf(d.id.toString())).use { c -> buildList { while (c.moveToNext()) add(c.getInt(0)) } }
+        if (pages.isEmpty()) { row(ctx, d.id)?.let { r -> setRow(db(ctx), d.id, r.sig, "done", r.pages, r.pages, r.ocrDone) }; return true }
+        val r = PdfDocumentRenderer(File(d.filePath), ctx)
+        try {
+            var doneHere = row(ctx, d.id)?.ocrDone ?: 0
+            pages.forEachIndexed { i, p ->
+                if (priority != 0L && priority != d.id) return false
+                yield()
+                _progress.value = _progress.value.copy(currentId = d.id, current = d.title, phase = "ocr", page = i + 1, pages = pages.size)
+                val text = runCatching {
+                    val bmp = r.renderPage(p - 1, targetWidth = 1400)
+                    PdfPageDiagnosticsAndOcrEngine.performOcrOnPageBitmap(p - 1, bmp).fullText.also { bmp?.recycle() }
+                }.getOrNull().orEmpty()
+                val w = db(ctx)
+                w.beginTransaction()
+                try {
+                    if (text.count { it.isLetterOrDigit() } >= 10) insertChunk(w, d.id, Chunk(p, "", "", text))
+                    w.execSQL("DELETE FROM ocr_todo WHERE doc_id=? AND page=?", arrayOf<Any>(d.id, p))
+                    doneHere++
+                    val rr = row(ctx, d.id)
+                    if (rr != null) setRow(w, d.id, rr.sig, if (i == pages.size - 1) "done" else "ocr", rr.pages, rr.pages, doneHere)
+                    w.setTransactionSuccessful()
+                } finally { w.endTransaction() }
+            }
+        } finally { runCatching { r.close() } }
+        return true
+    }
+
+    /** Reads one book (or continues it). Returns false when it paused for another book. */
+    private suspend fun work(ctx: Context, d: DocumentEntity): Boolean = mutex.withLock {
+        val r = row(ctx, d.id)
+        val sig = signature(d)
+        if (r != null && r.sig != sig) { val w = db(ctx); w.beginTransaction(); try { removeLocked(w, d.id); w.setTransactionSuccessful() } finally { w.endTransaction() } }
+        val cur = row(ctx, d.id)
+        if (isPdf(d)) {
+            if (cur == null || cur.phase == "text") return@withLock pdfTextPhase(ctx, d, cur?.pagesDone ?: 0)
+            return@withLock true
+        }
+        if (cur?.phase == "done") return@withLock true
+        _progress.value = _progress.value.copy(currentId = d.id, current = d.title, phase = "text", page = 0, pages = 0)
+        val units = runCatching { if (d.fileType.equals("EPUB", true)) epubUnits(ctx, d) else plainUnits(d) }
+            .onFailure { Log.w(TAG, "Could not read ${d.title}", it) }.getOrNull() ?: emptyList()
+        val w = db(ctx)
+        w.beginTransaction()
+        try {
+            removeLocked(w, d.id)
+            units.forEach { insertChunk(w, d.id, it) }
+            setRow(w, d.id, sig, "done", units.size, units.size, 0)
+            w.setTransactionSuccessful()
+        } finally { w.endTransaction() }
+        true
+    }
+
+    /**
+     * Starts (or continues) indexing in the background. All books' text is read first (fast); scanned
+     * pages are read with OCR after that. [first] is read before anything else (a book being searched).
+     */
+    fun kick(ctx: Context, first: Long = 0) {
+        val app = ctx.applicationContext
+        if (first != 0L) priority = first
+        if (job?.isActive == true) return
+        job = scope.launch {
+            if (first == 0L) delay(3000)   // let the app finish starting
+            runCatching {
+                val dao = AppDatabase.getInstance(app).documentDao()
+                // Forget books that were deleted.
+                val all = dao.getAllDocumentsSnapshot()
+                val ids = all.map { it.id }.toSet()
+                val known = db(app).rawQuery("SELECT doc_id FROM docs", null).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
+                mutex.withLock { val w = db(app); known.filter { it !in ids }.forEach { removeLocked(w, it) } }
+                while (isActive) {
+                    val docs = dao.getAllDocumentsSnapshot().filter { indexable(it) }
+                    val needText = docs.filter { d -> row(app, d.id).let { it == null || it.sig != signature(d) || it.phase == "text" } }
+                        .sortedByDescending { maxOf(it.lastReadTimestamp, it.dateAdded) }
+                    val needOcr = docs.filter { d -> row(app, d.id).let { it != null && it.sig == signature(d) && it.phase == "ocr" } }
+                        .sortedByDescending { maxOf(it.lastReadTimestamp, it.dateAdded) }
+                    val pr = priority
+                    val next = needText.firstOrNull { it.id == pr } ?: needOcr.firstOrNull { it.id == pr } ?: needText.firstOrNull() ?: needOcr.firstOrNull()
+                    if (pr != 0L && next?.id != pr) priority = 0
+                    if (next == null) break
+                    val doneBooks = docs.size - needText.size - needOcr.size
+                    _progress.value = _progress.value.copy(running = true, done = doneBooks, total = docs.size, ocrLeft = ocrLeft(app), currentId = next.id, current = next.title)
+                    val finished = if (next in needText || !isPdf(next)) work(app, next) else mutex.withLock { pdfOcrPhase(app, next) }
+                    if (finished && priority == next.id && row(app, next.id)?.phase == "done") priority = 0
+                }
+            }.onFailure { Log.w(TAG, "Indexing stopped", it) }
+            val p = _progress.value
+            _progress.value = Progress(false, p.total, p.total)
+        }
+    }
+
+    /** Someone is searching this book: read it next. */
+    fun prioritize(ctx: Context, d: DocumentEntity) { if (indexable(d) && status(ctx, d).state != "done") kick(ctx, d.id) }
 
     // ------------------------------------------------------------------ searching
 
@@ -420,9 +524,9 @@ object SearchIndex {
         }.sortedByDescending { it.note.id }.take(limit)
     }
 
-    /** Searches, indexing [docId] first if it has not been indexed yet. */
+    /** Searches one book in what is indexed so far; if it is not fully read yet, it is read next. */
     suspend fun searchBook(ctx: Context, d: DocumentEntity, raw: String, whole: Boolean): List<Hit> = withContext(Dispatchers.IO) {
-        if (indexable(d) && !isCurrent(ctx, d)) indexDoc(ctx, d)
+        prioritize(ctx, d)
         search(ctx, raw, whole, d.id).firstOrNull()?.second?.second.orEmpty()
     }
 }
