@@ -192,7 +192,7 @@ async function showTextSearch(params) {
     if (!r.books.length && !r.notes.length) out.append(h('div', { class: 'empty' }, h('h2', null, 'Nothing found'),
       h('div', { class: 'muted' }, ix && ix.running ? 'Some books are still being read for search; try again in a little while.' : 'Try fewer or shorter words.')));
   };
-  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 250); });
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 450); });
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(timer); run(); } });
   whole.addEventListener('change', () => { localSet('ml.findWhole', whole.checked ? '1' : '0'); run(); });
   input.focus();
