@@ -23,24 +23,29 @@ const tokensOf = s => foldText(s).split(/[^\p{L}\p{N}']+/u).map(t => t.replace(/
 function parseQuery(raw, whole) {
   const phrases = [];
   const rest = raw.replace(/"([^"]+)"/g, (_, p) => { const t = tokensOf(p); if (t.length) phrases.push(t.join(' ')); return ' '; });
-  const needles = [...phrases, ...tokensOf(rest)];
+  const words = tokensOf(rest);
+  const needles = [...phrases, ...words];
+  // Placed by one part of the search, as on the server: the first phrase, else the longest word.
+  const key = phrases[0] || words.slice().sort((a, b) => b.length - a.length)[0] || '';
+  // Very short words ("i", "of") count only as whole words.
+  const prefix = !whole && (phrases.length ? true : key.length > 2);
   return {
     needles, whole, empty: !needles.length,
     /** Ranges [start, end) in a forgiving text where the search matches. */
     ranges(n) {
       const out = [];
       const isW = ch => /[\p{L}\p{N}]/u.test(ch || '');
-      needles.forEach(needle => {
+      if (key) {
         let from = 0, i;
-        while ((i = n.indexOf(needle, from)) >= 0) {
-          let end = i + needle.length;
-          if (!isW(n[i - 1]) && (!whole || !isW(n[end]))) {
-            if (!whole) while (end < n.length && isW(n[end])) end++;
+        while ((i = n.indexOf(key, from)) >= 0 && out.length < 500) {
+          let end = i + key.length;
+          if (!isW(n[i - 1]) && (prefix || !isW(n[end]))) {
+            if (prefix) while (end < n.length && isW(n[end])) end++;
             out.push([i, end]);
           }
           from = i + 1;
         }
-      });
+      }
       return out.sort((a, b) => a[0] - b[0]);
     },
   };
@@ -104,7 +109,7 @@ async function showTextSearch(params) {
     if (my !== seq) return;
     const total = r.books.reduce((a, b) => a + b.count, 0);
     const ix = r.indexing;
-    status.textContent = `${total} match${total === 1 ? '' : 'es'} in ${r.books.length} book${r.books.length === 1 ? '' : 's'} · ${r.notes.length} note${r.notes.length === 1 ? '' : 's'}`;
+    status.textContent = `Found on ${total} page${total === 1 ? '' : 's'} in ${r.books.length} book${r.books.length === 1 ? '' : 's'} · ${r.notes.length} note${r.notes.length === 1 ? '' : 's'}`;
     showIx(ix);
     // While books are still being read, search again now and then: more results come in.
     clearTimeout(again); if (ix && ix.running) again = setTimeout(() => { if (document.body.contains(main)) run(true); }, 5000);
@@ -120,10 +125,10 @@ async function showTextSearch(params) {
         : `#/read/${d.id}?href=${encodeURIComponent(hit.href)}&pos=${hit.loc}&find=${encodeURIComponent(q)}&occ=${hit.occurrence}${whole.checked ? '&whole=1' : ''}`;
       out.append(h('div', { class: 'tsbook' },
         h('div', { class: 'tshead' }, h('a', { href: `#/book/${d.id}` }, h('b', null, d.title)), h('span', { class: 'muted' }, ' ' + (d.displayAuthor || d.author || '')),
-          h('span', { class: 'muted mono', style: { marginLeft: 'auto' } }, `${b.count} match${b.count === 1 ? '' : 'es'}`)),
+          h('span', { class: 'muted mono', style: { marginLeft: 'auto' } }, `${b.count} page${b.count === 1 ? '' : 's'}`)),
         ...b.hits.map(hit => h('a', { class: 'tshit', href: link(hit) },
           h('span', { class: 'tsloc mono' }, isPdf(d) ? 'p. ' + (hit.label || hit.loc) : (hit.label || 'pos. ' + hit.loc)), snippetEl(hit.snippet, hit.start, hit.end))),
-        b.count > b.hits.length ? h('a', { class: 'muted', style: { fontSize: '12px' }, href: link(b.hits[0]) + '&panel=1' }, `Open the book to see all ${b.count} →`) : null));
+        b.count > b.hits.length ? h('a', { class: 'muted', style: { fontSize: '12px' }, href: link(b.hits[0]) + '&panel=1' }, `Open the book to see all ${b.count} pages →`) : null));
     });
     if (!r.books.length && !r.notes.length) out.append(h('div', { class: 'empty' }, h('h2', null, 'Nothing found'),
       h('div', { class: 'muted' }, ix && ix.running ? 'Some books are still being read for search; try again in a little while.' : 'Try fewer or shorter words.')));

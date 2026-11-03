@@ -82,6 +82,8 @@ object SearchIndex {
             listOf("units", "fts", "docs", "ocr_todo").forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
             onCreate(db)
         }
+        // Searching can read while the background reader writes.
+        override fun onConfigure(db: SQLiteDatabase) { runCatching { db.enableWriteAheadLogging() } }
     }
 
     @Volatile private var db: Db? = null
@@ -147,7 +149,12 @@ object SearchIndex {
             words = tokens(rest)
         }
         val isEmpty get() = phrases.isEmpty() && words.isEmpty()
-        fun fts(): String = (phrases.map { p -> "\"" + p.joinToString(" ") + "\"" } + words.map { w -> if (whole) w else "$w*" }).joinToString(" ")
+        /** Very short words ("i", "of") are matched as whole words: as word beginnings they match almost everything and are very slow. */
+        private fun prefix(w: String) = !whole && w.length > 2
+        fun fts(): String = (phrases.map { p -> "\"" + p.joinToString(" ") + "\"" } + words.map { w -> if (prefix(w)) "$w*" else w }).joinToString(" ")
+
+        /** The most telling part of the search, used to place passages: the first phrase, else the longest word. */
+        val key: String? get() = phrases.firstOrNull()?.joinToString(" ") ?: words.maxByOrNull { it.length }
 
         /** Where the search matches in [normText] (the forgiving form): ranges of the phrases and words. */
         fun ranges(normText: String): List<IntRange> {
@@ -168,8 +175,30 @@ object SearchIndex {
                 }
             }
             phrases.forEach { p -> find(p.joinToString(" "), !whole) }
-            words.forEach { w -> find(w, !whole) }
+            words.forEach { w -> find(w, prefix(w)) }
             return out.sortedBy { it.first }
+        }
+
+        /** Where the [key] matches: one place per occurrence, for the passages shown. */
+        fun keyRanges(normText: String): List<IntRange> {
+            val k = key ?: return emptyList()
+            val isWord = phrases.isEmpty()
+            val out = ArrayList<IntRange>()
+            var from = 0
+            while (out.size < 500) {
+                val i = normText.indexOf(k, from)
+                if (i < 0) break
+                var end = i + k.length
+                val okBefore = i == 0 || !normText[i - 1].isLetterOrDigit()
+                val pre = if (isWord) prefix(k) else !whole
+                val okAfter = pre || end >= normText.length || !normText[end].isLetterOrDigit()
+                if (okBefore && okAfter) {
+                    if (pre) while (end < normText.length && normText[end].isLetterOrDigit()) end++
+                    out += i until end
+                }
+                from = i + 1
+            }
+            return out
         }
     }
 
@@ -451,7 +480,7 @@ object SearchIndex {
     /** Short passages around each match: (text, match start, match end). */
     private fun snippet(text: String, q: Query): List<Triple<String, Int, Int>> {
         val (n, map) = normWithMap(text)
-        return q.ranges(n).map { r ->
+        return q.keyRanges(n).map { r ->
             val s = map.getOrElse(r.first) { 0 }
             val e = (map.getOrElse(r.last) { text.length - 1 } + 1).coerceIn(s, text.length)
             val from = (s - 70).coerceAtLeast(0).let { f -> text.lastIndexOf(' ', f).takeIf { it >= 0 && it >= f - 20 } ?: f }
@@ -475,32 +504,56 @@ object SearchIndex {
      * Searches the indexed books ([docId] = one book only). Returns books with their hits, the book
      * with most hits first (in one book: in reading order).
      */
-    fun search(ctx: Context, raw: String, whole: Boolean, docId: Long? = null, perBook: Int = 6, maxUnits: Int = 3000): List<Pair<Long, Pair<Int, List<Hit>>>> {
+    fun search(ctx: Context, raw: String, whole: Boolean, docId: Long? = null, perBook: Int = 6, maxUnits: Int = 1500): List<Pair<Long, Pair<Int, List<Hit>>>> {
         val q = Query(raw, whole)
         if (q.isEmpty) return emptyList()
-        val sql = "SELECT u.doc_id, u.loc, u.href, u.label, u.text FROM fts JOIN units u ON u.id = fts.rowid WHERE fts MATCH ?" +
-            (if (docId != null) " AND u.doc_id = ?" else "") + " ORDER BY u.doc_id, u.id LIMIT $maxUnits"
-        val args = if (docId != null) arrayOf(q.fts(), docId.toString()) else arrayOf(q.fts())
-        val byDoc = LinkedHashMap<Long, Pair<Int, ArrayList<Hit>>>()
-        val occ = HashMap<String, Int>()
+        val t0 = System.currentTimeMillis()
+        val w = runCatching { db(ctx) }.getOrElse { return emptyList() }
+        // 1) Which pages match, per book (ids only: quick even for common words).
+        val pagesOf = LinkedHashMap<Long, ArrayList<Long>>()
+        val counts = HashMap<Long, Int>()
+        val keep = if (docId != null) maxUnits else perBook
         runCatching {
-            db(ctx).rawQuery(sql, args).use { c ->
+            val sql = "SELECT u.doc_id, u.id FROM fts JOIN units u ON u.id = fts.rowid WHERE fts MATCH ?" +
+                (if (docId != null) " AND u.doc_id = ?" else "") + " ORDER BY u.doc_id, u.id LIMIT 200000"
+            w.rawQuery(sql, if (docId != null) arrayOf(q.fts(), docId.toString()) else arrayOf(q.fts())).use { c ->
                 while (c.moveToNext()) {
-                    val doc = c.getLong(0); val loc = c.getInt(1); val href = c.getString(2).orEmpty(); val label = c.getString(3).orEmpty(); val text = c.getString(4).orEmpty()
-                    val snips = snippet(text, q)
-                    val cur = byDoc.getOrPut(doc) { 0 to ArrayList() }
-                    var count = cur.first
-                    snips.forEach { (s, a, b) ->
-                        val key = "$doc|$href"
-                        val o = occ.getOrDefault(key, 0); occ[key] = o + 1
-                        if (cur.second.size < (if (docId != null) 2000 else perBook)) cur.second += Hit(doc, loc, href, label, s, a, b, o)
-                        count++
-                    }
-                    byDoc[doc] = count to cur.second
+                    val doc = c.getLong(0)
+                    counts[doc] = (counts[doc] ?: 0) + 1
+                    val l = pagesOf.getOrPut(doc) { ArrayList() }
+                    if (l.size < keep) l += c.getLong(1)
                 }
             }
-        }.onFailure { Log.w(TAG, "Search failed for '$raw'", it) }
-        return byDoc.entries.map { it.key to (it.value.first to it.value.second.toList()) }.sortedByDescending { if (docId != null) 0 else it.second.first }
+        }.onFailure { Log.w(TAG, "Search failed for '$raw'", it); return emptyList() }
+        // Books with the most matching pages first; passages only for the pages shown.
+        val docs = if (docId != null) pagesOf.keys.toList() else pagesOf.keys.sortedByDescending { counts[it] ?: 0 }.take(200)
+        val out = ArrayList<Pair<Long, Pair<Int, List<Hit>>>>()
+        for (doc in docs) {
+            val ids = pagesOf[doc].orEmpty()
+            val hits = ArrayList<Hit>()
+            val occ = HashMap<String, Int>()
+            var occurrences = 0
+            ids.chunked(400).forEach { part ->
+                runCatching {
+                    w.rawQuery("SELECT loc, href, label, text FROM units WHERE id IN (${part.joinToString(",")}) ORDER BY id", null).use { c ->
+                        while (c.moveToNext()) {
+                            val loc = c.getInt(0); val href = c.getString(1).orEmpty(); val label = c.getString(2).orEmpty(); val text = c.getString(3).orEmpty()
+                            val snips = snippet(text, q).ifEmpty { listOf(Triple(collapse(text.take(160)).trim() + if (text.length > 160) "…" else "", 0, 0)) }
+                            snips.forEach { (s, a, b) ->
+                                val key = "$doc|$href"
+                                val o = occ.getOrDefault(key, 0); occ[key] = o + 1
+                                if (hits.size < (if (docId != null) 2000 else perBook)) hits += Hit(doc, loc, href, label, s, a, b, o)
+                                occurrences++
+                            }
+                        }
+                    }
+                }.onFailure { Log.w(TAG, "Search passages failed", it) }
+            }
+            // For the whole library the number shown is the matching pages; in a book, every place.
+            out += doc to ((if (docId != null) occurrences else counts[doc] ?: 0) to hits)
+        }
+        Log.i(TAG, "Search '$raw' (${q.fts()}): ${counts.values.sum()} pages in ${counts.size} books, ${System.currentTimeMillis() - t0} ms")
+        return out
     }
 
     /** The notes (title, quote and own words) that match, newest first. */

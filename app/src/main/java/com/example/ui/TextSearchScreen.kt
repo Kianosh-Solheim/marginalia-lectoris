@@ -99,7 +99,7 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
                 }
                 val total = books.sumOf { it.second }
                 Text(buildString {
-                    if (busy) append("Searching…") else if (query.trim().length >= 2) append("$total match${if (total == 1) "" else "es"} in ${books.size} book${if (books.size == 1) "" else "s"} · ${notes.size} note${if (notes.size == 1) "" else "s"}")
+                    if (busy) append("Searching…") else if (query.trim().length >= 2) append("Found on $total page${if (total == 1) "" else "s"} in ${books.size} book${if (books.size == 1) "" else "s"} · ${notes.size} note${if (notes.size == 1) "" else "s"}")
                     else append("Case, accents and line-break hyphens are ignored; words also find longer forms (vold → volden).")
                     if (progress.running) append("\nPreparing books for search: ${progress.done} of ${progress.total} ready · now “${progress.current}” " +
                         (if (progress.phase == "ocr") "(reading scanned pages with OCR: ${progress.page} of ${progress.pages})" else if (progress.pages > 0) "(page ${progress.page} of ${progress.pages})" else "") +
@@ -129,7 +129,7 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
                                     Text(d.title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.Black, maxLines = 2)
                                     if (d.author.isNotBlank()) Text(d.author.replace("; ", ", "), fontSize = 12.sp, color = TGrey, maxLines = 1)
                                 }
-                                Text("$count", fontFamily = FontFamily.Monospace, color = Color.Black)
+                                Text("$count p.", fontFamily = FontFamily.Monospace, color = Color.Black)
                             }
                             hits.forEach { h ->
                                 Column(Modifier.fillMaxWidth().clickable { open(d, h) }.padding(horizontal = 10.dp, vertical = 7.dp)) {
@@ -138,7 +138,7 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
                                     Text(marked(h.snippet, h.start, h.end), fontSize = 14.sp, color = Color.Black)
                                 }
                             }
-                            if (count > hits.size) Text("Open the book to see all $count →", fontSize = 12.sp, color = TGrey,
+                            if (count > hits.size) Text("Open the book to see all $count pages →", fontSize = 12.sp, color = TGrey,
                                 modifier = Modifier.fillMaxWidth().clickable { hits.firstOrNull()?.let { open(d, it) } }.padding(10.dp))
                         }
                     }
