@@ -670,3 +670,9 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .ixline.small { padding: 4px 6px; margin: 6px 0 0; background: transparent; border-style: solid; border-color: var(--rule); }
 .ixline.small.busy { border-color: var(--ink); background: #fffbeb; }
 .ixline:empty { display: none; }
+
+/* Fuzzy | Exact switch in search */
+.segsw { display: inline-flex; border: 1px solid var(--line, #000); border-radius: 4px; overflow: hidden; flex: none; }
+.segsw .seg { border: 0; border-radius: 0; padding: 4px 10px; font-size: 13px; white-space: nowrap; }
+.segsw .seg + .seg { border-left: 1px solid var(--line, #000); }
+.segsw .seg.on { background: var(--ink, #111); color: var(--paper, #fff); font-weight: 600; }

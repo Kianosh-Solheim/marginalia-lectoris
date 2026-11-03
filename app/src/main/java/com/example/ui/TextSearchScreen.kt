@@ -57,6 +57,7 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var whole by remember { mutableStateOf(context.getSharedPreferences("search", 0).getBoolean("whole", false)) }
+    var exact by remember { mutableStateOf(context.getSharedPreferences("search", 0).getBoolean("exact", false)) }
     var books by remember { mutableStateOf<List<Triple<DocumentEntity, Int, List<SearchIndex.Hit>>>>(emptyList()) }
     var notes by remember { mutableStateOf<List<SearchIndex.NoteHit>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
@@ -64,21 +65,23 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
     val focus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { SearchIndex.kick(context); runCatching { focus.requestFocus() } }
-    LaunchedEffect(query, whole) {
+    LaunchedEffect(query, whole, exact) {
         val q = query.trim()
         if (q.length < 2) { books = emptyList(); notes = emptyList(); return@LaunchedEffect }
         delay(300)
         busy = true
         val r = withContext(Dispatchers.IO) {
             val dao = AppDatabase.getInstance(context).documentDao()
-            SearchIndex.search(context, q, whole, perBook = 5).mapNotNull { (id, rr) -> dao.getDocumentById(id)?.let { Triple(it, rr.first, rr.second) } }
+            val pq = SearchIndex.prepare(context, q, whole, exact)
+            SearchIndex.search(context, q, whole, perBook = 5, prepared = pq).mapNotNull { (id, rr) -> dao.getDocumentById(id)?.let { Triple(it, rr.first, rr.second) } } to
+                SearchIndex.searchNotes(context, q, whole, limit = 60, prepared = pq)
         }
-        books = r
-        notes = SearchIndex.searchNotes(context, q, whole, limit = 60)
+        books = r.first
+        notes = r.second
         busy = false
     }
     fun open(d: DocumentEntity, hit: SearchIndex.Hit) {
-        pendingFind.value = PendingFind(d.id, query.trim(), whole, hit.loc, hit.label)
+        pendingFind.value = PendingFind(d.id, query.trim(), whole, hit.loc, hit.label, exact)
         textSearchOpen.value = false
         if (d.fileType.equals("PDF", true)) onOpenDocumentAtPage(d, hit.loc, null) else onOpenDocument(d)
     }
@@ -88,6 +91,8 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
             Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Search in the books", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = Color.Black, modifier = Modifier.weight(1f))
+                    InkChip("Fuzzy", !exact, { exact = false; context.getSharedPreferences("search", 0).edit().putBoolean("exact", false).apply() })
+                    InkChip("Exact", exact, { exact = true; context.getSharedPreferences("search", 0).edit().putBoolean("exact", true).apply() })
                     InkChip("Whole words", whole, { whole = !whole; context.getSharedPreferences("search", 0).edit().putBoolean("whole", whole).apply() })
                     InkChip("Close", false, { textSearchOpen.value = false })
                 }
@@ -95,12 +100,13 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
                     BasicTextField(query, { query = it }, singleLine = true, textStyle = TextStyle(fontSize = 18.sp, color = Color.Black), cursorBrush = SolidColor(Color.Black),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = {}),
                         modifier = Modifier.fillMaxWidth().focusRequester(focus))
-                    if (query.isEmpty()) Text("Words, or a \"quoted phrase\"…", color = Color(0xFF9CA3AF), fontSize = 18.sp)
+                    if (query.isEmpty()) Text("Words or a sentence…", color = Color(0xFF9CA3AF), fontSize = 18.sp)
                 }
                 val total = books.sumOf { it.second }
                 Text(buildString {
                     if (busy) append("Searching…") else if (query.trim().length >= 2) append("Found on $total page${if (total == 1) "" else "s"} in ${books.size} book${if (books.size == 1) "" else "s"} · ${notes.size} note${if (notes.size == 1) "" else "s"}")
-                    else append("Case, accents and line-break hyphens are ignored; words also find longer forms (vold → volden).")
+                    else append(if (exact) "Exact: the words in this order, as one sentence. Case, accents, punctuation and line-break hyphens are ignored."
+                        else "Fuzzy: the words close together, in any order; small misspellings are found too; words also find longer forms (vold → volden).")
                     if (progress.running) append("\nPreparing books for search: ${progress.done} of ${progress.total} ready · now “${progress.current}” " +
                         (if (progress.phase == "ocr") "(reading scanned pages with OCR: ${progress.page} of ${progress.pages})" else if (progress.pages > 0) "(page ${progress.page} of ${progress.pages})" else "") +
                         if (progress.ocrLeft > 0 && progress.phase != "ocr") " · ${progress.ocrLeft} scanned pages wait for OCR" else "")

@@ -79,7 +79,7 @@ object SearchIndex {
             db.execSQL("CREATE TABLE ocr_todo (doc_id INTEGER, page INTEGER, PRIMARY KEY(doc_id, page))")
         }
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            listOf("units", "fts", "docs", "ocr_todo").forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
+            listOf("fts_terms", "units", "fts", "docs", "ocr_todo").forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
             onCreate(db)
         }
         // Searching can read while the background reader writes.
@@ -136,70 +136,146 @@ object SearchIndex {
 
     fun norm(s: String): String = normWithMap(s).first
 
-    private fun tokens(s: String): List<String> = norm(s).split(Regex("[^\\p{L}\\p{N}']+")).map { it.trim('\'') }.filter { it.isNotBlank() }
+    private val TOK = Regex("[\\p{L}\\p{N}]+")
+    /** The words of [s] in their forgiving form (letters and digits; everything else separates). */
+    fun tokens(s: String): List<String> = TOK.findAll(norm(s)).map { it.value }.toList()
 
-    /** A search: words (matched as word beginnings unless [whole]) and "exact phrases". */
-    class Query(raw: String, val whole: Boolean) {
-        val phrases: List<List<String>>
-        val words: List<String>
+    /**
+     * A search. Fuzzy (default): each word, or "quoted phrase", must be on the page close to the others
+     * (in any order); words of four letters or more also match small misspellings. Exact: the whole
+     * search is one sentence: the same words in the same order (case, accents and punctuation ignored).
+     * Words match their longer forms unless [whole]; words of one or two letters only as whole words.
+     */
+    class Query(raw: String, val whole: Boolean, val exact: Boolean = false) {
+        /** Each part: one word, or a phrase (several words in order). */
+        val segs: List<List<String>>
         init {
-            val ph = ArrayList<List<String>>()
-            val rest = Regex("\"([^\"]+)\"").replace(raw) { m -> tokens(m.groupValues[1]).takeIf { it.isNotEmpty() }?.let { ph += it }; " " }
-            phrases = ph
-            words = tokens(rest)
+            segs = if (exact) listOf(tokens(raw.replace("\"", " "))).filter { it.isNotEmpty() }
+            else {
+                val ph = ArrayList<List<String>>()
+                val rest = Regex("\"([^\"]+)\"").replace(raw) { m -> tokens(m.groupValues[1]).takeIf { it.isNotEmpty() }?.let { ph += it }; " " }
+                ph + tokens(rest).map { listOf(it) }
+            }
         }
-        val isEmpty get() = phrases.isEmpty() && words.isEmpty()
-        /** Very short words ("i", "of") are matched as whole words: as word beginnings they match almost everything and are very slow. */
-        private fun prefix(w: String) = !whole && w.length > 2
-        fun fts(): String = (phrases.map { p -> "\"" + p.joinToString(" ") + "\"" } + words.map { w -> if (prefix(w)) "$w*" else w }).joinToString(" ")
+        /** Misspellings found in the books, per word (fuzzy only). */
+        var variants: Map<String, List<String>> = emptyMap()
+        val isEmpty get() = segs.isEmpty()
+        val totalWords get() = segs.sumOf { it.size }
+        fun prefix(w: String) = !whole && w.length > 2
+        fun typoOk(seg: List<String>) = !exact && seg.size == 1 && seg[0].length >= 4
 
-        /** The most telling part of the search, used to place passages: the first phrase, else the longest word. */
-        val key: String? get() = phrases.firstOrNull()?.joinToString(" ") ?: words.maxByOrNull { it.length }
+        /** The full-text query for one part (FTS4: a phrase, or a word OR its variants). */
+        fun ftsOf(seg: List<String>): String =
+            if (seg.size > 1) "\"" + seg.dropLast(1).joinToString(" ") + " " + seg.last() + (if (prefix(seg.last())) "*" else "") + "\""
+            else (listOf(seg[0]) + variants[seg[0]].orEmpty()).distinct().joinToString(" OR ") { if (prefix(seg[0])) "$it*" else it }
 
-        /** Where the search matches in [normText] (the forgiving form): ranges of the phrases and words. */
+        private fun tokOk(seg: List<String>, j: Int, tok: String): Boolean {
+            val t = seg[j]
+            val last = j == seg.size - 1
+            if (tok == t || (last && prefix(t) && tok.startsWith(t))) return true
+            if (seg.size == 1) variants[t]?.forEach { v -> if (tok == v || (prefix(t) && tok.startsWith(v))) return true }
+            return false
+        }
+
+        /** Where the search matches in [normText] (the forgiving form): one range per match. */
         fun ranges(normText: String): List<IntRange> {
-            val out = ArrayList<IntRange>()
-            fun boundaryBefore(i: Int) = i == 0 || !normText[i - 1].isLetterOrDigit()
-            fun boundaryAfter(i: Int) = i >= normText.length || !normText[i].isLetterOrDigit()
-            fun find(needle: String, prefixOk: Boolean) {
-                var from = 0
-                while (true) {
-                    val i = normText.indexOf(needle, from)
-                    if (i < 0) break
-                    var end = i + needle.length
-                    if (boundaryBefore(i) && (prefixOk || boundaryAfter(end))) {
-                        if (prefixOk) while (end < normText.length && normText[end].isLetterOrDigit()) end++
-                        out += i until end
+            if (segs.isEmpty()) return emptyList()
+            val toks = TOK.findAll(normText).toList()
+            if (toks.isEmpty()) return emptyList()
+            val words = toks.map { it.value }
+            // For each part: its places, as (first word, last word).
+            val occ = segs.map { seg ->
+                val l = ArrayList<IntArray>()
+                var i = 0
+                while (i + seg.size <= words.size) {
+                    var ok = true
+                    for (j in seg.indices) if (!tokOk(seg, j, words[i + j])) { ok = false; break }
+                    if (ok) l += intArrayOf(i, i + seg.size - 1)
+                    i++
+                }
+                l
+            }
+            if (occ.any { it.isEmpty() }) return emptyList()
+            val spans = ArrayList<IntArray>()
+            if (segs.size == 1) spans += occ[0]
+            else {
+                // Close to each other: all parts within a few words of the rarest one.
+                val window = totalWords + 10
+                val ai = occ.indices.minByOrNull { occ[it].size }!!
+                for (a in occ[ai]) {
+                    var lo = a[0]; var hi = a[1]; var ok = true
+                    for (k in occ.indices) {
+                        if (k == ai) continue
+                        val best = occ[k].minByOrNull { kotlin.math.abs(it[0] - a[0]) }!!
+                        if (kotlin.math.abs(best[0] - a[0]) > window) { ok = false; break }
+                        lo = minOf(lo, best[0]); hi = maxOf(hi, best[1])
                     }
-                    from = i + 1
+                    if (ok) spans += intArrayOf(lo, hi)
                 }
             }
-            phrases.forEach { p -> find(p.joinToString(" "), !whole) }
-            words.forEach { w -> find(w, prefix(w)) }
-            return out.sortedBy { it.first }
-        }
-
-        /** Where the [key] matches: one place per occurrence, for the passages shown. */
-        fun keyRanges(normText: String): List<IntRange> {
-            val k = key ?: return emptyList()
-            val isWord = phrases.isEmpty()
+            spans.sortBy { it[0] }
             val out = ArrayList<IntRange>()
-            var from = 0
-            while (out.size < 500) {
-                val i = normText.indexOf(k, from)
-                if (i < 0) break
-                var end = i + k.length
-                val okBefore = i == 0 || !normText[i - 1].isLetterOrDigit()
-                val pre = if (isWord) prefix(k) else !whole
-                val okAfter = pre || end >= normText.length || !normText[end].isLetterOrDigit()
-                if (okBefore && okAfter) {
-                    if (pre) while (end < normText.length && normText[end].isLetterOrDigit()) end++
-                    out += i until end
-                }
-                from = i + 1
+            var lastEnd = -1
+            for (sp in spans) {
+                if (sp[0] <= lastEnd) continue
+                lastEnd = sp[1]
+                out += toks[sp[0]].range.first..toks[sp[1]].range.last
+                if (out.size >= 500) break
             }
             return out
         }
+    }
+
+    // ------------------------------------------------------------------ misspellings
+
+    private val variantCache = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+
+    /** Edit distance up to [max] (with swapped neighbours as one edit); more than [max] → max + 1. */
+    private fun distance(a: String, b: String, max: Int): Int {
+        if (kotlin.math.abs(a.length - b.length) > max) return max + 1
+        var prev2 = IntArray(b.length + 1); var prev = IntArray(b.length + 1) { it }; var cur = IntArray(b.length + 1)
+        for (i in 1..a.length) {
+            cur[0] = i; var rowMin = cur[0]
+            for (j in 1..b.length) {
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                var v = minOf(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+                if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) v = minOf(v, prev2[j - 2] + 1)
+                cur[j] = v; if (v < rowMin) rowMin = v
+            }
+            if (rowMin > max) return max + 1
+            val t = prev2; prev2 = prev; prev = cur; cur = t
+        }
+        return prev[b.length]
+    }
+
+    /** Words in the books that are a small misspelling away from [w] (same first letter). */
+    private fun variantsOf(w: SQLiteDatabase, word: String): List<String> = variantCache.getOrPut(word) {
+        val max = if (word.length >= 9) 2 else 1
+        val first = word.substring(0, 1)
+        val next = (first[0] + 1).toString()
+        val found = ArrayList<Pair<String, Int>>()
+        runCatching {
+            w.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS fts_terms USING fts4aux(fts)")
+            w.rawQuery("SELECT term, documents FROM fts_terms WHERE col = '*' AND term >= ? AND term < ?", arrayOf(first, next)).use { c ->
+                while (c.moveToNext()) {
+                    val t = c.getString(0) ?: continue
+                    if (t == word || kotlin.math.abs(t.length - word.length) > max) continue
+                    if (TOK.matchEntire(t) == null) continue
+                    if (distance(word, t, max) <= max) found += t to c.getInt(1)
+                }
+            }
+        }.onFailure { Log.w(TAG, "Misspellings of '$word'", it) }
+        found.sortedByDescending { it.second }.take(12).map { it.first }
+    }
+
+    /** A search made ready: misspellings looked up in the books (fuzzy only). */
+    fun prepare(ctx: Context, raw: String, whole: Boolean, exact: Boolean): Query {
+        val q = Query(raw, whole, exact)
+        if (!exact && !q.isEmpty) {
+            val w = runCatching { db(ctx) }.getOrNull()
+            if (w != null) q.variants = q.segs.filter { q.typoOk(it) }.associate { it[0] to variantsOf(w, it[0]) }.filterValues { it.isNotEmpty() }
+        }
+        return q
     }
 
     // ------------------------------------------------------------------ reading the books
@@ -306,6 +382,7 @@ object SearchIndex {
     private fun insertChunk(w: SQLiteDatabase, id: Long, u: Chunk) {
         val rowId = w.insert("units", null, ContentValues().apply { put("doc_id", id); put("loc", u.loc); put("href", u.href); put("label", u.label); put("text", u.text) })
         w.execSQL("INSERT INTO fts(rowid, body) VALUES(?, ?)", arrayOf<Any>(rowId, norm(u.text)))
+        if (variantCache.isNotEmpty()) variantCache.clear()
     }
 
     private fun removeLocked(w: SQLiteDatabase, docId: Long) {
@@ -480,7 +557,7 @@ object SearchIndex {
     /** Short passages around each match: (text, match start, match end). */
     private fun snippet(text: String, q: Query): List<Triple<String, Int, Int>> {
         val (n, map) = normWithMap(text)
-        return q.keyRanges(n).map { r ->
+        return q.ranges(n).map { r ->
             val s = map.getOrElse(r.first) { 0 }
             val e = (map.getOrElse(r.last) { text.length - 1 } + 1).coerceIn(s, text.length)
             val from = (s - 70).coerceAtLeast(0).let { f -> text.lastIndexOf(' ', f).takeIf { it >= 0 && it >= f - 20 } ?: f }
@@ -494,83 +571,77 @@ object SearchIndex {
         }
     }
 
-    /** Matches of a search in any text (for books searched in memory, such as the tablet's EPUB pages). */
-    fun findIn(text: String, raw: String, whole: Boolean): List<Triple<String, Int, Int>> {
-        val q = Query(raw, whole)
-        return if (q.isEmpty) emptyList() else snippet(text, q)
-    }
+    /** Matches of a prepared search in any text (for books searched in memory, such as the tablet's EPUB pages). */
+    fun findIn(text: String, q: Query): List<Triple<String, Int, Int>> = if (q.isEmpty) emptyList() else snippet(text, q)
 
-    /**
-     * Searches the indexed books ([docId] = one book only). Returns books with their hits, the book
-     * with most hits first (in one book: in reading order).
-     */
-    fun search(ctx: Context, raw: String, whole: Boolean, docId: Long? = null, perBook: Int = 6, maxUnits: Int = 1500): List<Pair<Long, Pair<Int, List<Hit>>>> {
-        val q = Query(raw, whole)
-        if (q.isEmpty) return emptyList()
-        val t0 = System.currentTimeMillis()
-        val w = runCatching { db(ctx) }.getOrElse { return emptyList() }
-        // 1) Which pages match, per book (ids only: quick even for common words).
-        val pagesOf = LinkedHashMap<Long, ArrayList<Long>>()
-        val counts = HashMap<Long, Int>()
-        val keep = if (docId != null) maxUnits else perBook
-        runCatching {
-            val sql = "SELECT u.doc_id, u.id FROM fts JOIN units u ON u.id = fts.rowid WHERE fts MATCH ?" +
-                (if (docId != null) " AND u.doc_id = ?" else "") + " ORDER BY u.doc_id, u.id LIMIT 200000"
-            w.rawQuery(sql, if (docId != null) arrayOf(q.fts(), docId.toString()) else arrayOf(q.fts())).use { c ->
-                while (c.moveToNext()) {
-                    val doc = c.getLong(0)
-                    counts[doc] = (counts[doc] ?: 0) + 1
-                    val l = pagesOf.getOrPut(doc) { ArrayList() }
-                    if (l.size < keep) l += c.getLong(1)
-                }
-            }
-        }.onFailure { Log.w(TAG, "Search failed for '$raw'", it); return emptyList() }
-        // Books with the most matching pages first; passages only for the pages shown.
-        val docs = if (docId != null) pagesOf.keys.toList() else pagesOf.keys.sortedByDescending { counts[it] ?: 0 }.take(200)
-        val out = ArrayList<Pair<Long, Pair<Int, List<Hit>>>>()
-        for (doc in docs) {
-            val ids = pagesOf[doc].orEmpty()
-            val hits = ArrayList<Hit>()
-            val occ = HashMap<String, Int>()
-            var occurrences = 0
-            ids.chunked(400).forEach { part ->
-                runCatching {
-                    w.rawQuery("SELECT loc, href, label, text FROM units WHERE id IN (${part.joinToString(",")}) ORDER BY id", null).use { c ->
-                        while (c.moveToNext()) {
-                            val loc = c.getInt(0); val href = c.getString(1).orEmpty(); val label = c.getString(2).orEmpty(); val text = c.getString(3).orEmpty()
-                            val snips = snippet(text, q).ifEmpty { listOf(Triple(collapse(text.take(160)).trim() + if (text.length > 160) "…" else "", 0, 0)) }
-                            snips.forEach { (s, a, b) ->
-                                val key = "$doc|$href"
-                                val o = occ.getOrDefault(key, 0); occ[key] = o + 1
-                                if (hits.size < (if (docId != null) 2000 else perBook)) hits += Hit(doc, loc, href, label, s, a, b, o)
-                                occurrences++
-                            }
-                        }
-                    }
-                }.onFailure { Log.w(TAG, "Search passages failed", it) }
-            }
-            // For the whole library the number shown is the matching pages; in a book, every place.
-            out += doc to ((if (docId != null) occurrences else counts[doc] ?: 0) to hits)
-        }
-        Log.i(TAG, "Search '$raw' (${q.fts()}): ${counts.values.sum()} pages in ${counts.size} books, ${System.currentTimeMillis() - t0} ms")
+    /** Rows of the index that match one part of the search. */
+    private fun idsFor(w: SQLiteDatabase, fts: String, docId: Long?): LinkedHashSet<Long> {
+        val out = LinkedHashSet<Long>()
+        val sql = if (docId != null) "SELECT u.id FROM fts JOIN units u ON u.id = fts.rowid WHERE fts MATCH ? AND u.doc_id = ? LIMIT 300000"
+            else "SELECT rowid FROM fts WHERE fts MATCH ? LIMIT 300000"
+        w.rawQuery(sql, if (docId != null) arrayOf(fts, docId.toString()) else arrayOf(fts)).use { c -> while (c.moveToNext()) out += c.getLong(0) }
         return out
     }
 
+    /**
+     * Searches the index: per book (most matching pages first) the number of pages that match (or,
+     * within one book, every place) and the first passages.
+     */
+    fun search(ctx: Context, raw: String, whole: Boolean, docId: Long? = null, perBook: Int = 6, exact: Boolean = false, prepared: Query? = null): List<Pair<Long, Pair<Int, List<Hit>>>> {
+        val q = prepared ?: prepare(ctx, raw, whole, exact)
+        if (q.isEmpty) return emptyList()
+        val t0 = System.currentTimeMillis()
+        val w = runCatching { db(ctx) }.getOrElse { return emptyList() }
+        // 1) Pages that have every part (looked up by the telling parts; one- and two-letter words only when there is nothing else).
+        val telling = q.segs.filter { seg -> seg.size > 1 || seg[0].length > 2 }.ifEmpty { q.segs }.sortedByDescending { it.sumOf { t -> t.length } }.take(3)
+        var cand: Set<Long>? = null
+        runCatching {
+            for (seg in telling) {
+                val ids = idsFor(w, q.ftsOf(seg), docId)
+                cand = cand?.let { c -> if (c.size <= ids.size) c.filterTo(LinkedHashSet()) { it in ids } else ids.filterTo(LinkedHashSet()) { it in c } } ?: ids
+                if (cand!!.isEmpty()) break
+            }
+        }.onFailure { Log.w(TAG, "Search failed for '$raw'", it); return emptyList() }
+        val ids = cand.orEmpty().sorted().take(if (docId != null) 3000 else 6000)
+        // 2) Read those pages and keep the ones where the search really matches (close together, or the sentence in order).
+        val pages = HashMap<Long, Int>(); val occurrences = HashMap<Long, Int>()
+        val hits = LinkedHashMap<Long, ArrayList<Hit>>()
+        val occ = HashMap<String, Int>()
+        val keep = if (docId != null) 2000 else perBook
+        ids.chunked(300).forEach { part ->
+            runCatching {
+                w.rawQuery("SELECT doc_id, loc, href, label, text FROM units WHERE id IN (${part.joinToString(",")}) ORDER BY doc_id, id", null).use { c ->
+                    while (c.moveToNext()) {
+                        val doc = c.getLong(0); val loc = c.getInt(1); val href = c.getString(2).orEmpty(); val label = c.getString(3).orEmpty(); val text = c.getString(4).orEmpty()
+                        val snips = snippet(text, q)
+                        if (snips.isEmpty()) continue
+                        pages[doc] = (pages[doc] ?: 0) + 1
+                        val l = hits.getOrPut(doc) { ArrayList() }
+                        snips.forEach { (s, a, b) ->
+                            val key = "$doc|$href"
+                            val o = occ.getOrDefault(key, 0); occ[key] = o + 1
+                            if (l.size < keep) l += Hit(doc, loc, href, label, s, a, b, o)
+                            occurrences[doc] = (occurrences[doc] ?: 0) + 1
+                        }
+                    }
+                }
+            }.onFailure { Log.w(TAG, "Search passages failed", it) }
+        }
+        val docs = if (docId != null) hits.keys.toList() else hits.keys.sortedByDescending { pages[it] ?: 0 }.take(200)
+        Log.i(TAG, "Search '$raw' exact=$exact: ${ids.size} candidate pages, ${pages.values.sum()} matching, ${System.currentTimeMillis() - t0} ms")
+        // For the whole library the number shown is the matching pages; in a book, every place.
+        return docs.map { d -> d to ((if (docId != null) occurrences[d] ?: 0 else pages[d] ?: 0) to hits[d].orEmpty()) }
+    }
+
     /** The notes (title, quote and own words) that match, newest first. */
-    suspend fun searchNotes(ctx: Context, raw: String, whole: Boolean, docId: Long? = null, limit: Int = 200): List<NoteHit> = withContext(Dispatchers.IO) {
-        val q = Query(raw, whole)
+    suspend fun searchNotes(ctx: Context, raw: String, whole: Boolean, docId: Long? = null, limit: Int = 200, exact: Boolean = false, prepared: Query? = null): List<NoteHit> = withContext(Dispatchers.IO) {
+        val q = prepared ?: prepare(ctx, raw, whole, exact)
         if (q.isEmpty) return@withContext emptyList()
         val dao = AppDatabase.getInstance(ctx)
         val notes = dao.highlightDao().getAllHighlights().first().filter { docId == null || it.documentId == docId }
         val titles = HashMap<Long, String>()
         notes.mapNotNull { n ->
             val text = listOf(n.title, n.highlightedText, n.userNotes, n.tags).filter { it.isNotBlank() }.joinToString(" — ")
-            val needed = q.phrases.size + q.words.size
-            val nt = norm(text)
-            val found = q.ranges(nt)
-            // Every word or phrase must be there (as in the book search).
-            val all = (q.phrases.map { it.joinToString(" ") } + q.words).all { t -> found.any { r -> nt.substring(r.first, r.last + 1).startsWith(t) } }
-            if (!all || needed == 0) return@mapNotNull null
             val (s, a, b) = snippet(text, q).firstOrNull() ?: return@mapNotNull null
             val title = titles.getOrPut(n.documentId) { dao.documentDao().getDocumentById(n.documentId)?.title.orEmpty() }
             NoteHit(n, title, s, a, b)
@@ -578,8 +649,8 @@ object SearchIndex {
     }
 
     /** Searches one book in what is indexed so far; if it is not fully read yet, it is read next. */
-    suspend fun searchBook(ctx: Context, d: DocumentEntity, raw: String, whole: Boolean): List<Hit> = withContext(Dispatchers.IO) {
+    suspend fun searchBook(ctx: Context, d: DocumentEntity, raw: String, whole: Boolean, exact: Boolean = false, prepared: Query? = null): List<Hit> = withContext(Dispatchers.IO) {
         prioritize(ctx, d)
-        search(ctx, raw, whole, d.id).firstOrNull()?.second?.second.orEmpty()
+        search(ctx, raw, whole, d.id, exact = exact, prepared = prepared).firstOrNull()?.second?.second.orEmpty()
     }
 }

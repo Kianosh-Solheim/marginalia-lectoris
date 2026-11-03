@@ -1694,7 +1694,7 @@ fun ReaderScreen(
 
     // Search in this book: the find bar at the bottom.
     val findSearch: suspend (String, Boolean) -> List<FindHit> = { q, w ->
-        if (isPdfDocument) findInPdf(context, document, q, w) else findInPages(activeEpubPages, q, w)
+        if (isPdfDocument) findInPdf(context, document, q, w, findState.exact) else findInPages(context, activeEpubPages, q, w, findState.exact)
     }
     val findJump: (FindHit) -> Unit = { h ->
         if (isPdfDocument && isPdfEbookMode) {
@@ -1711,7 +1711,7 @@ fun ReaderScreen(
         val p = pendingFind.value ?: return@LaunchedEffect
         if (p.docId != document.id || (!isPdfDocument && activeEpubPages.isEmpty())) return@LaunchedEffect
         pendingFind.value = null
-        findState.query = p.query; findState.whole = p.whole; findState.open = true; findState.busy = true
+        findState.query = p.query; findState.whole = p.whole; findState.exact = p.exact; findState.open = true; findState.busy = true
         val hits = runCatching { findSearch(p.query, p.whole) }.getOrDefault(emptyList())
         findState.hits = hits; findState.searched = p.query; findState.busy = false
         val i = if (isPdfDocument) hits.indexOfFirst { it.page == p.loc }.takeIf { it >= 0 } ?: hits.indexOfFirst { it.page >= p.loc }

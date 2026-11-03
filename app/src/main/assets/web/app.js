@@ -2570,7 +2570,7 @@ async function openReader(id, params) {
   // From the library's search: open the search here, run it, and show the chosen match.
   const find = params.get('find');
   if (find && readerOpen) {
-    ctx.find = { q: find, whole: params.get('whole') === '1', hits: [], notes: [], i: -1 };
+    ctx.find = { q: find, whole: params.get('whole') === '1', exact: params.get('mode') === 'exact', hits: [], notes: [], i: -1 };
     if (side.hidden || sideMode !== 'search') toggleSide('search');
     await ctx.searchUi.run();
     const page = +params.get('page'), href = params.get('href'), occ = +params.get('occ') || 0;
@@ -2986,7 +2986,7 @@ async function openPdf(ctx, params) {
     el._text = { divs: textDivs, strs };
     el._textDiv = textDiv;
     paintHighlights(i);
-    if (ctx.find && ctx.find.q) markFindInTextLayer(textDiv, ctx.find.q, ctx.find.whole);
+    if (ctx.find && ctx.find.q) markFindInTextLayer(textDiv, ctx.find.q, optsOf(ctx.find));
     if (needsTablet(i)) applyTabletText(i, el, textDiv).catch(console.error); else badge(el, null);
   }
 

@@ -273,9 +273,11 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             what == "search" && m == "GET" -> {
                 val q = req.query["q"].orEmpty()
                 val whole = req.query["whole"] == "1"
-                val hits = com.example.reader.SearchIndex.searchBook(context, doc, q, whole)
-                val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, doc.id)
-                HttpResponse.json(JSONObject().put("q", q).put("count", hits.size).put("status", searchStatusJson(doc)).put("indexing", progressJson())
+                val exact = req.query["mode"] == "exact"
+                val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact) }
+                val hits = com.example.reader.SearchIndex.searchBook(context, doc, q, whole, exact, pq)
+                val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, doc.id, exact = exact, prepared = pq)
+                HttpResponse.json(JSONObject().put("q", q).put("count", hits.size).put("variants", variantsJson(pq)).put("status", searchStatusJson(doc)).put("indexing", progressJson())
                     .put("hits", JSONArray().apply { hits.forEach { put(hitJson(it)) } })
                     .put("notes", JSONArray().apply { notes.forEach { put(noteHitJson(it)) } }).toString())
             }
@@ -1087,13 +1089,18 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
     }
 
     /** /api/search?q=&whole=1 — the text of every book, and the notes. */
+    /** The misspellings a fuzzy search also matched, per word (the reader marks them too). */
+    private fun variantsJson(q: com.example.reader.SearchIndex.Query) = JSONObject().apply { q.variants.forEach { (k, v) -> put(k, JSONArray(v)) } }
+
     private suspend fun searchAll(req: HttpRequest): HttpResponse {
         val q = req.query["q"].orEmpty()
         val whole = req.query["whole"] == "1"
-        val books = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.search(context, q, whole, perBook = 5) }
-        val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, limit = 100)
+        val exact = req.query["mode"] == "exact"
+        val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact) }
+        val books = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.search(context, q, whole, perBook = 5, exact = exact, prepared = pq) }
+        val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, limit = 100, exact = exact, prepared = pq)
         com.example.reader.SearchIndex.kick(context)
-        return HttpResponse.json(JSONObject().put("q", q)
+        return HttpResponse.json(JSONObject().put("q", q).put("variants", variantsJson(pq))
             .put("indexing", progressJson())
             .put("books", JSONArray().apply {
                 books.take(200).forEach { (id, r) ->

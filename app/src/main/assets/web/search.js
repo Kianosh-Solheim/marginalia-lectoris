@@ -20,36 +20,91 @@ function normMap(s) {
 const foldText = s => normMap(s)[0];
 const tokensOf = s => foldText(s).split(/[^\p{L}\p{N}']+/u).map(t => t.replace(/^'+|'+$/g, '')).filter(Boolean);
 
-function parseQuery(raw, whole) {
-  const phrases = [];
-  const rest = raw.replace(/"([^"]+)"/g, (_, p) => { const t = tokensOf(p); if (t.length) phrases.push(t.join(' ')); return ' '; });
-  const words = tokensOf(rest);
-  const needles = [...phrases, ...words];
-  // Placed by one part of the search, as on the server: the first phrase, else the longest word.
-  const key = phrases[0] || words.slice().sort((a, b) => b.length - a.length)[0] || '';
-  // Very short words ("i", "of") count only as whole words.
-  const prefix = !whole && (phrases.length ? true : key.length > 2);
+const wordsOf = s => foldText(s).match(/[\p{L}\p{N}]+/gu) || [];
+
+/** The search options as one object: { whole, exact, variants } (a plain true/false is "whole words"). */
+function findOpts(o) { return o && typeof o === 'object' ? { whole: !!o.whole, exact: !!o.exact, variants: o.variants || {} } : { whole: !!o, exact: false, variants: {} }; }
+/** The options of the reader's or library's search state f. */
+const optsOf = f => ({ whole: !!f.whole, exact: !!f.exact, variants: f.variants || {} });
+const modeParam = o => (o.whole ? '&whole=1' : '') + (o.exact ? '&mode=exact' : '');
+
+/**
+ * A search, matched as on the tablet. Fuzzy: each word (or "quoted phrase") close to the others, in
+ * any order, with the small misspellings the tablet found (variants). Exact: the whole search as one
+ * sentence, word for word. Words match longer forms unless whole; one- and two-letter words only whole.
+ */
+function parseQuery(raw, opt) {
+  const o = findOpts(opt);
+  let segs;
+  if (o.exact) { const t = wordsOf(raw.replace(/"/g, ' ')); segs = t.length ? [t] : []; }
+  else {
+    const ph = [];
+    const rest = raw.replace(/"([^"]+)"/g, (_, p) => { const t = wordsOf(p); if (t.length) ph.push(t); return ' '; });
+    segs = [...ph, ...wordsOf(rest).map(w => [w])];
+  }
+  const total = segs.reduce((a, s) => a + s.length, 0);
+  const prefix = w => !o.whole && w.length > 2;
+  const tokOk = (seg, j, tok) => {
+    const t = seg[j], last = j === seg.length - 1;
+    if (tok === t || (last && prefix(t) && tok.startsWith(t))) return true;
+    if (seg.length === 1) for (const v of (o.variants[t] || [])) if (tok === v || (prefix(t) && tok.startsWith(v))) return true;
+    return false;
+  };
   return {
-    needles, whole, empty: !needles.length,
+    empty: !segs.length,
     /** Ranges [start, end) in a forgiving text where the search matches. */
     ranges(n) {
-      const out = [];
-      const isW = ch => /[\p{L}\p{N}]/u.test(ch || '');
-      if (key) {
-        let from = 0, i;
-        while ((i = n.indexOf(key, from)) >= 0 && out.length < 500) {
-          let end = i + key.length;
-          if (!isW(n[i - 1]) && (prefix || !isW(n[end]))) {
-            if (prefix) while (end < n.length && isW(n[end])) end++;
-            out.push([i, end]);
+      if (!segs.length) return [];
+      const toks = [...n.matchAll(/[\p{L}\p{N}]+/gu)].map(m => [m[0], m.index]);
+      const occ = segs.map(seg => {
+        const l = [];
+        for (let i = 0; i + seg.length <= toks.length; i++) {
+          let ok = true;
+          for (let j = 0; j < seg.length; j++) if (!tokOk(seg, j, toks[i + j][0])) { ok = false; break; }
+          if (ok) l.push([i, i + seg.length - 1]);
+        }
+        return l;
+      });
+      if (occ.some(l => !l.length)) return [];
+      let spans = [];
+      if (segs.length === 1) spans = occ[0];
+      else {
+        const win = total + 10;
+        let ai = 0; occ.forEach((l, k) => { if (l.length < occ[ai].length) ai = k; });
+        for (const a of occ[ai]) {
+          let lo = a[0], hi = a[1], ok = true;
+          for (let k = 0; k < occ.length && ok; k++) {
+            if (k === ai) continue;
+            let best = occ[k][0];
+            for (const x of occ[k]) if (Math.abs(x[0] - a[0]) < Math.abs(best[0] - a[0])) best = x;
+            if (Math.abs(best[0] - a[0]) > win) ok = false;
+            else { lo = Math.min(lo, best[0]); hi = Math.max(hi, best[1]); }
           }
-          from = i + 1;
+          if (ok) spans.push([lo, hi]);
         }
       }
-      return out.sort((a, b) => a[0] - b[0]);
+      spans.sort((x, y) => x[0] - y[0]);
+      const out = []; let lastEnd = -1;
+      for (const [x, y] of spans) {
+        if (x <= lastEnd) continue;
+        lastEnd = y;
+        out.push([toks[x][1], toks[y][1] + toks[y][0].length]);
+        if (out.length >= 500) break;
+      }
+      return out;
     },
   };
 }
+
+/** Fuzzy | Exact switch; onChange(exact). */
+function modeSwitch(exact, onChange) {
+  const mk = (label, v, title) => h('button', { class: 'btn quiet seg' + (exact === v ? ' on' : ''), title, onclick: () => { if (exact === v) return; exact = v; fz.classList.toggle('on', !v); ex.classList.toggle('on', v); onChange(v); } }, label);
+  const fz = mk('Fuzzy', false, 'The words close together, in any order; small misspellings are found too');
+  const ex = mk('Exact', true, 'The words in this order, as one sentence (case, accents and punctuation ignored)');
+  return h('span', { class: 'segsw' }, fz, ex);
+}
+const modeHelp = exact => exact ? 'Exact: the words in this order, as one sentence. Case, accents, punctuation and words broken over a line are ignored.'
+  : 'Fuzzy: the words close together, in any order; small misspellings are found too, and words find their longer forms (vold → volden). "Quote" a phrase to keep it together.';
 
 /** What the tablet's search indexer is doing, in words. */
 function indexingText(ix) {
@@ -82,14 +137,17 @@ async function showTextSearch(params) {
   app.appendChild(header());
   const main = h('main', { class: 'tsearch' });
   app.appendChild(main);
-  const input = h('input', { type: 'search', placeholder: 'Search the text of every book, and your notes…', value: params.get('q') || '', autofocus: true });
+  const input = h('input', { type: 'search', placeholder: 'Search the text of every book, and your notes — words or a sentence…', value: params.get('q') || '', autofocus: true });
   const whole = h('input', { type: 'checkbox', checked: localGet('ml.findWhole', '0') === '1' });
+  let exact = localGet('ml.findExact', '0') === '1';
+  const help = h('div', { class: 'muted', style: { fontSize: '12px', margin: '4px 0 10px' } }, modeHelp(exact));
+  const sw = modeSwitch(exact, v => { exact = v; localSet('ml.findExact', v ? '1' : '0'); help.textContent = modeHelp(v); run(); });
   const status = h('div', { class: 'muted mono', style: { fontSize: '12px', minHeight: '18px' } });
   const ixLine = h('div', { class: 'ixline', hidden: true });
   const out = h('div');
   main.append(h('h1', null, 'Search'),
-    h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } }, input, h('label', { class: 'row', style: { gap: '4px', fontSize: '13px', whiteSpace: 'nowrap' } }, whole, 'Whole words')),
-    h('div', { class: 'muted', style: { fontSize: '12px', margin: '4px 0 10px' } }, 'Case, accents and words broken over a line are ignored; words also find their longer forms (vold → volden). "Quote" an exact phrase.'),
+    h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } }, input, sw, h('label', { class: 'row', style: { gap: '4px', fontSize: '13px', whiteSpace: 'nowrap' } }, whole, 'Whole words')),
+    help,
     ixLine, status, out);
   let seq = 0, timer = 0, again = 0, ixTimer = 0;
   const showIx = ix => { ixLine.textContent = indexingText(ix); ixLine.hidden = !ixLine.textContent; };
@@ -105,7 +163,8 @@ async function showTextSearch(params) {
     const my = ++seq;
     if (quiet !== true) status.textContent = 'Searching…';
     let r;
-    try { r = await api(`search?q=${encodeURIComponent(q)}${whole.checked ? '&whole=1' : ''}`); } catch (e) { fail(e); return; }
+    const o = { whole: whole.checked, exact };
+    try { r = await api(`search?q=${encodeURIComponent(q)}${modeParam(o)}`); } catch (e) { fail(e); return; }
     if (my !== seq) return;
     const total = r.books.reduce((a, b) => a + b.count, 0);
     const ix = r.indexing;
@@ -121,8 +180,8 @@ async function showTextSearch(params) {
     }
     r.books.forEach(b => {
       const d = b.doc;
-      const link = hit => isPdf(d) ? `#/read/${d.id}?page=${hit.loc}&find=${encodeURIComponent(q)}${whole.checked ? '&whole=1' : ''}`
-        : `#/read/${d.id}?href=${encodeURIComponent(hit.href)}&pos=${hit.loc}&find=${encodeURIComponent(q)}&occ=${hit.occurrence}${whole.checked ? '&whole=1' : ''}`;
+      const link = hit => isPdf(d) ? `#/read/${d.id}?page=${hit.loc}&find=${encodeURIComponent(q)}${modeParam(o)}`
+        : `#/read/${d.id}?href=${encodeURIComponent(hit.href)}&pos=${hit.loc}&find=${encodeURIComponent(q)}&occ=${hit.occurrence}${modeParam(o)}`;
       out.append(h('div', { class: 'tsbook' },
         h('div', { class: 'tshead' }, h('a', { href: `#/book/${d.id}` }, h('b', null, d.title)), h('span', { class: 'muted' }, ' ' + (d.displayAuthor || d.author || '')),
           h('span', { class: 'muted mono', style: { marginLeft: 'auto' } }, `${b.count} page${b.count === 1 ? '' : 's'}`)),
@@ -144,7 +203,7 @@ async function showTextSearch(params) {
 
 /** The reader's search panel. ctx.find = { q, whole, hits, i }. */
 function readerSearchPanel(ctx, side) {
-  const f = ctx.find || (ctx.find = { q: '', whole: localGet('ml.findWhole', '0') === '1', hits: [], notes: [], i: -1 });
+  const f = ctx.find || (ctx.find = { q: '', whole: localGet('ml.findWhole', '0') === '1', exact: localGet('ml.findExact', '0') === '1', hits: [], notes: [], i: -1 });
   const input = h('input', { type: 'search', placeholder: 'Search in this book…', value: f.q });
   const whole = h('input', { type: 'checkbox', checked: f.whole });
   const info = h('div', { class: 'muted mono', style: { fontSize: '12px', margin: '6px 0' } });
@@ -154,7 +213,7 @@ function readerSearchPanel(ctx, side) {
     if (!f.hits.length) return;
     f.i = (i + f.hits.length) % f.hits.length;
     draw();
-    if (readerOpen && readerOpen.goToHit) readerOpen.goToHit(f.hits[f.i], f.q, f.whole);
+    if (readerOpen && readerOpen.goToHit) readerOpen.goToHit(f.hits[f.i], f.q, optsOf(f));
   };
   const draw = () => {
     info.textContent = f.q ? (f.busy ? 'Searching…' : `${f.hits.length} match${f.hits.length === 1 ? '' : 'es'}${f.i >= 0 ? ` · ${f.i + 1} of ${f.hits.length}` : ''}${f.notes.length ? ` · ${f.notes.length} in notes` : ''}` +
@@ -180,16 +239,16 @@ function readerSearchPanel(ctx, side) {
     if (!q) { f.hits = []; f.notes = []; if (readerOpen && readerOpen.clearFind) readerOpen.clearFind(); draw(); return; }
     const my = ++seq; if (!same) { f.busy = true; draw(); }
     try {
-      const r = await api(`doc/${ctx.d.id}/search?q=${encodeURIComponent(q)}${f.whole ? '&whole=1' : ''}`, { timeout: 60000 });
+      const r = await api(`doc/${ctx.d.id}/search?q=${encodeURIComponent(q)}${modeParam(f)}`, { timeout: 60000 });
       if (my !== seq) return;
-      f.hits = r.hits; f.notes = r.notes; f.status = r.status;
+      f.hits = r.hits; f.notes = r.notes; f.status = r.status; f.variants = r.variants || {};
     } catch (e) { fail(e); }
     f.busy = false;
     draw();
     // The book is still being read for search: look again in a moment (more matches come in).
     clearTimeout(again);
     if (f.status && f.status.state !== 'done' && f.status.state !== 'none') again = setTimeout(() => { if (document.body.contains(side) && f.q === q) run(true); }, 3000);
-    if (readerOpen && readerOpen.markFind) readerOpen.markFind(f.q, f.whole);
+    if (readerOpen && readerOpen.markFind) readerOpen.markFind(f.q, optsOf(f));
   };
   input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 300); });
   input.addEventListener('keydown', e => {
@@ -201,7 +260,9 @@ function readerSearchPanel(ctx, side) {
     h('div', { class: 'row', style: { gap: '4px' } }, input,
       h('button', { class: 'btn quiet', title: 'Previous (Shift+Enter)', onclick: () => go(f.i - 1) }, '↑'),
       h('button', { class: 'btn quiet', title: 'Next (Enter)', onclick: () => go(f.i + 1) }, '↓')),
-    h('label', { class: 'row', style: { gap: '4px', fontSize: '12px', marginTop: '4px' } }, whole, 'Whole words'),
+    h('div', { class: 'row', style: { gap: '8px', marginTop: '4px', alignItems: 'center' } },
+      modeSwitch(!!f.exact, v => { f.exact = v; localSet('ml.findExact', v ? '1' : '0'); run(); }),
+      h('label', { class: 'row', style: { gap: '4px', fontSize: '12px' } }, whole, 'Whole words')),
     stLine, info, list);
   if (!f.status) api(`doc/${ctx.d.id}/search?q=`).then(r => { f.status = r.status; draw(); }).catch(() => {});
   draw();
@@ -212,10 +273,10 @@ function readerSearchPanel(ctx, side) {
 // ------------------------------------------------------------------ marking matches on the page
 
 /** Marks matches in a PDF.js text layer: just the matching words, inside their spans. */
-function markFindInTextLayer(textDiv, q, whole) {
+function markFindInTextLayer(textDiv, q, opt) {
   if (!textDiv) return;
   textDiv.querySelectorAll('span.fspan').forEach(s => { s.textContent = s.textContent; s.classList.remove('fspan'); });
-  const query = q ? parseQuery(q, whole) : null;
+  const query = q ? parseQuery(q, opt) : null;
   if (!query || query.empty) return;
   const spans = [...textDiv.querySelectorAll('span')].filter(s => !s.querySelector('span'));
   let all = ''; const starts = [];
@@ -239,8 +300,8 @@ function markFindInTextLayer(textDiv, q, whole) {
 }
 
 /** DOM ranges in a document where the search matches (for EPUB sections). */
-function findRangesIn(doc, q, whole) {
-  const query = parseQuery(q, whole);
+function findRangesIn(doc, q, opt) {
+  const query = parseQuery(q, opt);
   if (query.empty || !doc || !doc.body) return [];
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
   const nodes = []; let all = '';
