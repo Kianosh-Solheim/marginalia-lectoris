@@ -1363,11 +1363,24 @@ function renderShelf() {
 
   const counts = {};
   state.docs.forEach(d => splitTags(d.tags).forEach(t => { const k = t.toLowerCase(); counts[k] = counts[k] || [t, 0]; counts[k][1]++; }));
-  const tags = Object.values(counts).sort((a, b) => b[1] - a[1]).slice(0, 40);
+  const tags = Object.values(counts).sort((a, b) => b[1] - a[1]);
+  // The chosen tag comes first, so it shows on the one line too.
+  const ci = tags.findIndex(([t]) => state.tag && t.toLowerCase() === state.tag.toLowerCase());
+  if (ci > 0) tags.unshift(tags.splice(ci, 1)[0]);
   clear(tagbar);
   if (tags.length) {
-    tagbar.append(h('button', { class: 'chip' + (state.tag ? '' : ' on'), onclick: () => { state.tag = ''; renderShelf(); } }, 'All tags'));
-    tags.forEach(([t, n]) => tagbar.append(h('button', { class: 'chip' + (state.tag.toLowerCase() === t.toLowerCase() ? ' on' : ''), onclick: () => { state.tag = t; renderShelf(); } }, `#${t} ${n}`)));
+    const open = localGet('ml.tagsOpen', '0') === '1';
+    const wrap = h('div', { class: 'tagline' + (open ? '' : ' one') });
+    wrap.append(h('button', { class: 'chip' + (state.tag ? '' : ' on'), onclick: () => { state.tag = ''; renderShelf(); } }, 'All tags'));
+    tags.forEach(([t, n]) => wrap.append(h('button', { class: 'chip' + (state.tag.toLowerCase() === t.toLowerCase() ? ' on' : ''), onclick: () => { state.tag = t; renderShelf(); } }, `#${t} ${n}`)));
+    const more = h('button', { class: 'chip tagmore', hidden: true, onclick: () => { localSet('ml.tagsOpen', open ? '0' : '1'); renderShelf(); } },
+      open ? 'Show less ▴' : `Show all ${tags.length} tags ▾`);
+    tagbar.append(wrap, more);
+    // Only offer it when the tags do not fit on one line.
+    requestAnimationFrame(() => {
+      if (open) { wrap.classList.add('one'); const over = wrap.scrollHeight > wrap.clientHeight + 2; wrap.classList.remove('one'); more.hidden = !over; }
+      else more.hidden = !(wrap.scrollHeight > wrap.clientHeight + 2);
+    });
   }
 
   clear(shelf);
