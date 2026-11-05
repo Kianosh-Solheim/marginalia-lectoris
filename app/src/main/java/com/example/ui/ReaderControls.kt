@@ -2029,7 +2029,7 @@ internal fun ReaderHighlightsBottomSheet(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = h.title,
+                                        text = h.title.ifBlank { "Note - Page ${h.pageNumber}" },
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = Color.Black,

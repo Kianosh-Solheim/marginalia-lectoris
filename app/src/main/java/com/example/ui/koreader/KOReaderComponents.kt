@@ -1413,10 +1413,10 @@ fun KOReaderObsidianHubDialog(
 
                                             Text(
                                                 text = h.title.ifBlank { "Note - Page ${h.pageNumber}" },
-                                                style = MaterialTheme.typography.labelMedium,
+                                                style = MaterialTheme.typography.titleSmall,
                                                 fontWeight = FontWeight.Bold,
                                                 color = Color.Black,
-                                                maxLines = 1,
+                                                maxLines = 3,
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                         }
