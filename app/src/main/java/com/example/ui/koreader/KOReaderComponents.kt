@@ -1398,21 +1398,8 @@ fun KOReaderObsidianHubDialog(
                                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                                             modifier = Modifier.weight(1f)
                                         ) {
-                                            Surface(
-                                                color = badgeColor,
-                                                shape = RoundedCornerShape(4.dp)
-                                            ) {
-                                                Text(
-                                                    text = pageBadgeText,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = Color.Black
-                                                )
-                                            }
-
                                             Text(
-                                                text = h.title.ifBlank { "Note - Page ${h.pageNumber}" },
+                                                text = h.title.ifBlank { "Note" },
                                                 style = MaterialTheme.typography.titleSmall,
                                                 fontWeight = FontWeight.Bold,
                                                 color = Color.Black,
@@ -1482,10 +1469,10 @@ fun KOReaderObsidianHubDialog(
                                     }
 
                                     Text(
-                                        text = "${h.chapterTitle.ifBlank { "General" }} • Tap to jump to highlight in book",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                        color = Color(0xFF71717A),
-                                        maxLines = 1,
+                                        text = listOf(pageBadgeText, h.chapterTitle).filter { it.isNotBlank() }.distinct().joinToString(" • "),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                        color = Color(0xFF52525B),
+                                        maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
