@@ -2530,9 +2530,10 @@ async function openReader(id, params) {
       if (!ctx.notes.length) side.append(h('div', { class: 'muted' }, 'Select text in the book to highlight it or add a note.'));
       ctx.notes.slice().sort((a, b) => a.pageNumber - b.pageNumber).forEach(n => {
         const ni = h('div', { class: 'nitem', onclick: () => readerOpen && readerOpen.goToNote(n) },
+          n.title ? h('div', { class: 'ntitle' }, n.title) : null,
           h('div', { class: 'q', style: { borderLeftColor: n.colorHex || '#E4E4E7' } }, n.highlightedText),
           n.userNotes ? h('div', { style: { fontSize: '13px', marginTop: '3px', whiteSpace: 'pre-wrap' } }, n.userNotes.length > 220 ? n.userNotes.slice(0, 220) + '…' : n.userNotes) : null,
-          h('div', { class: 'w' }, n.title, ' · ', noteLocus(n, d), ' · ', h('a', { href: 'javascript:void 0', onclick: e => { e.stopPropagation(); editNote(n, () => { ctx.refreshNotes(); }); } }, 'edit')));
+          h('div', { class: 'w' }, noteLocus(n, d), ' · ', h('a', { href: 'javascript:void 0', onclick: e => { e.stopPropagation(); editNote(n, () => { ctx.refreshNotes(); }); } }, 'edit')));
         onContext(ni, () => noteMenu(n, d, () => ctx.refreshNotes(), () => readerOpen && readerOpen.goToNote(n)));
         side.append(ni);
       });

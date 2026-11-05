@@ -676,3 +676,6 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .segsw .seg { border: 0; border-radius: 0; padding: 4px 10px; font-size: 13px; white-space: nowrap; }
 .segsw .seg + .seg { border-left: 1px solid var(--line, #000); }
 .segsw .seg.on { background: var(--ink, #111); color: var(--paper, #fff); font-weight: 600; }
+
+/* Reader notes panel: the note's title above it */
+.nitem .ntitle { font-weight: 700; font-size: 14px; line-height: 1.3; margin-bottom: 4px; }
