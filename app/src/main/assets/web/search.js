@@ -836,7 +836,7 @@ function aiSettingsEl() {
             : lRun ? h('button', { class: 'btn', onclick: () => post({ action: 'stop' }) }, 'Stop')
               : h('button', { class: 'btn', disabled: p.running, onclick: () => post({ action: 'start', src: 'local' }) }, l.done ? 'Update index' : 'Build index'),
           l.model ? h('button', { class: 'btn quiet', onclick: () => { if (confirm('Delete the offline model and its index?')) post({ action: 'delete', src: 'local', model: true }); } }, 'Delete model and index') : null)),
-      p.error && !p.running ? h('div', { class: 'mono', style: { fontSize: '12px', color: '#b91c1c' } }, 'Last error: ' + p.error) : null);
+      p.error && !p.running ? h('div', { class: 'mono', style: { fontSize: '12px', color: '#b91c1c' } }, 'Last error: ' + p.error) : '');
     clearTimeout(timer);
     if ((p.running || dl.running) && document.body.contains(box)) timer = setTimeout(() => api('ai-status').then(draw).catch(() => {}), 2500);
   };
