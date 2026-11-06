@@ -183,50 +183,186 @@ object SearchIndex {
      * search is one sentence: the same words in the same order (case, accents and punctuation ignored).
      * Words match their longer forms unless [whole]; words of one or two letters only as whole words.
      */
-    class Query(raw: String, val whole: Boolean, val exact: Boolean = false) {
-        /** Each part: one word, or a phrase (several words in order). */
-        val segs: List<List<String>>
+    /** One way a part of the search can match: words in order (one word, or a phrase); [stem]: any word starting with it (word forms). */
+    class Alt(val words: List<String>, val stem: String? = null)
+    /** One part of the search: it matches if any of its alternatives does (OR, synonyms). */
+    class Seg(val alts: List<Alt>) {
+        val size get() = alts.maxOf { it.words.size }
+        val key get() = alts.first().words.joinToString(" ")
+    }
+
+    // --- Word forms (light stemming for Norwegian and English): the ending is cut, and words that start with what is left match.
+    private val endings = listOf(
+        // English
+        "izations", "isations", "ization", "isation", "ations", "ation", "ingly", "edly", "ings", "ing", "ments", "ment", "ness",
+        "ities", "ity", "ical", "ics", "tic", "ic", "cy", "ists", "isms", "ist", "ism", "ives", "ive", "ally", "ies", "ied", "ers", "er", "ed", "es", "ly", "s", "y",
+        // Norwegian
+        "hetene", "heten", "heter", "het", "ingene", "ingen", "inger", "inga", "elige", "elig", "lige", "lig", "ende", "ene", "ane", "en", "et", "ar", "a", "e")
+    /** English -ence/-ent/-ance/-ant keep the "en"/"an": violence, violent, violently → violen. */
+    private val keepEn = listOf("ences" to 3, "ence" to 2, "ently" to 3, "ents" to 2, "ent" to 1, "ances" to 3, "ance" to 2, "antly" to 3, "ants" to 2, "ant" to 1)
+    private val shortOk = setOf("en", "et", "er", "ar")
+    fun stem(w: String): String? {
+        if (w.length < 5 || w.any { it.isDigit() }) return null
+        for ((e, cut) in keepEn) if (w.endsWith(e) && w.length - cut >= 5) return w.dropLast(cut)
+        // Short endings need a longer word left (states → state*, not stat*); Norwegian -en/-et/-er/-ar keep four letters (volden → vold*).
+        for (e in endings) if (w.endsWith(e) && w.length - e.length >= (if (e.length <= 2 && e !in shortOk) 5 else 4)) return w.dropLast(e.length)
+        return null
+    }
+
+    /**
+     * A search. Fuzzy (default): each word, or "quoted phrase", must be on the page close to the others
+     * (in any order); words also match their other forms (vold → volden, voldelig). Exact: the whole
+     * search is one sentence: the same words in the same order (case, accents and punctuation ignored).
+     * Both: -word leaves out pages with that word; word OR word matches either; author:, title:, tag:,
+     * year: and type: narrow the books (see [Filters]). Synonym groups (fuzzy) match each other.
+     */
+    class Query(raw: String, val whole: Boolean, val exact: Boolean = false, synonyms: List<List<String>> = emptyList()) {
+        val segs: List<Seg>
+        /** Words or phrases that must not be on the page. */
+        val exclude: List<List<String>>
+        /** The book filters typed in the search (author:, title:, tag:, year:, type:). */
+        val filters: Filters
         init {
-            segs = if (exact) listOf(tokens(raw.replace("\"", " "))).filter { it.isNotEmpty() }
-            else {
-                val ph = ArrayList<List<String>>()
-                val rest = Regex("\"([^\"]+)\"").replace(raw) { m -> tokens(m.groupValues[1]).takeIf { it.isNotEmpty() }?.let { ph += it }; " " }
-                ph + tokens(rest).map { listOf(it) }
+            var rest = raw
+            // Filters typed in the search.
+            val f = Filters()
+            rest = Regex("(?i)\\b(author|title|tag|year|type|forfatter|tittel|år|type):(\"[^\"]*\"|\\S+)").replace(rest) { m ->
+                val v = m.groupValues[2].trim('"')
+                when (m.groupValues[1].lowercase()) {
+                    "author", "forfatter" -> f.author = v
+                    "title", "tittel" -> f.title = v
+                    "tag" -> f.tag = v.removePrefix("#")
+                    "year", "år" -> Regex("(\\d{4})?\\s*(-|–|\\.\\.)?\\s*(\\d{4})?").matchEntire(v)?.let { y ->
+                        val a = y.groupValues[1].toIntOrNull(); val b = y.groupValues[3].toIntOrNull()
+                        if (y.groupValues[2].isEmpty()) { f.yearFrom = a; f.yearTo = a } else { f.yearFrom = a; f.yearTo = b }
+                    }
+                    "type" -> f.type = if (v.lowercase().startsWith("a")) "ARTICLE" else if (v.lowercase().startsWith("b")) "BOOK" else ""
+                }
+                " "
+            }
+            filters = f
+            // Items: "phrase", -word, -"phrase", OR, word.
+            val items = ArrayList<Pair<String, List<String>>>()   // kind (+, -, OR) and words
+            Regex("(-?)\"([^\"]*)\"|(\\S+)").findAll(rest).forEach { m ->
+                if (m.groupValues[2].isNotEmpty() || m.groupValues[0].startsWith("\"") || m.groupValues[0].startsWith("-\"")) {
+                    val t = tokens(m.groupValues[2]); if (t.isNotEmpty()) items += (if (m.groupValues[1] == "-") "-" else "+") to t
+                } else {
+                    val w = m.groupValues[3]
+                    when {
+                        w == "OR" || w == "ELLER" || w == "|" -> items += "OR" to emptyList()
+                        w.startsWith("-") && w.length > 1 -> tokens(w.drop(1)).takeIf { it.isNotEmpty() }?.let { items += "-" to it }
+                        else -> tokens(w).forEach { items += "+" to listOf(it) }
+                    }
+                }
+            }
+            exclude = items.filter { it.first == "-" }.map { it.second }
+            val pos = items.filter { it.first != "-" }
+            if (exact) {
+                val words = pos.filter { it.first == "+" }.flatMap { it.second }
+                segs = if (words.isEmpty()) emptyList() else listOf(Seg(listOf(Alt(words))))
+            } else {
+                // OR joins the parts on each side.
+                val raws = ArrayList<MutableList<List<String>>>()
+                var joinNext = false
+                for ((k, w) in pos) {
+                    if (k == "OR") { joinNext = raws.isNotEmpty(); continue }
+                    if (joinNext) raws.last() += w else raws += mutableListOf(w)
+                    joinNext = false
+                }
+                // Synonym groups: a part (or a run of single words) that is one of the group's terms matches all of them.
+                val groups = synonyms.map { g -> g.map { tokens(it) }.filter { it.isNotEmpty() } }.filter { it.size > 1 }
+                val merged = ArrayList<MutableList<List<String>>>()
+                var i = 0
+                while (i < raws.size) {
+                    var took = false
+                    if (raws[i].size == 1) for (g in groups) {
+                        val hit = g.firstOrNull { term ->
+                            if (raws[i][0].size > 1) raws[i][0] == term
+                            else term.size <= raws.size - i && term.indices.all { j -> raws[i + j].size == 1 && raws[i + j][0].size == 1 && raws[i + j][0][0] == term[j] }
+                        } ?: continue
+                        merged += g.toMutableList()
+                        i += if (raws[i][0].size > 1) 1 else hit.size
+                        took = true; break
+                    }
+                    if (!took) { merged += raws[i]; i++ }
+                }
+                segs = merged.map { alts -> Seg(alts.distinct().map { w -> Alt(w, if (w.size == 1 && !whole) stem(w[0]) else null) }) }
             }
         }
         /** Misspellings found in the books, per word (fuzzy only). */
         var variants: Map<String, List<String>> = emptyMap()
+        /** The books searched (null: all), and the filters in use (typed and chosen). */
+        var allowed: Set<Long>? = null
+        var applied: Filters = Filters()
         val isEmpty get() = segs.isEmpty()
         val totalWords get() = segs.sumOf { it.size }
         fun prefix(w: String) = !whole && w.length > 2
-        fun typoOk(seg: List<String>) = !exact && seg.size == 1 && seg[0].length >= 4
+        fun typoOk(seg: Seg) = !exact && seg.alts.size == 1 && seg.alts[0].words.size == 1 && seg.alts[0].words[0].length >= 4
+        val typoWords get() = segs.filter { typoOk(it) }.map { it.alts[0].words[0] }
 
-        /** The full-text query for one part (FTS4: a phrase, or a word OR its variants). */
-        fun ftsOf(seg: List<String>): String =
-            if (seg.size > 1) "\"" + seg.dropLast(1).joinToString(" ") + " " + seg.last() + (if (prefix(seg.last())) "*" else "") + "\""
-            else (listOf(seg[0]) + variants[seg[0]].orEmpty()).distinct().joinToString(" OR ") { if (prefix(seg[0])) "$it*" else it }
+        private fun altFts(a: Alt): String =
+            if (a.words.size > 1) "\"" + a.words.dropLast(1).joinToString(" ") + " " + a.words.last() + (if (prefix(a.words.last())) "*" else "") + "\""
+            else a.stem?.let { "$it*" } ?: if (prefix(a.words[0])) a.words[0] + "*" else a.words[0]
 
-        /** The whole search as one word-index query: a phrase, or the parts near each other. */
-        fun ftsMatch(): String {
-            val parts = segs.map { seg ->
-                if (seg.size > 1) "\"" + seg.dropLast(1).joinToString(" ") + " " + seg.last() + (if (prefix(seg.last())) "*" else "") + "\""
-                else if (prefix(seg[0])) seg[0] + "*" else seg[0]
-            }
-            return if (parts.size == 1) parts[0] else parts.joinToString(" NEAR/${totalWords + 10} ")
+        /** The full-text query for one part: its alternatives (and misspellings) joined with OR. */
+        fun ftsOf(seg: Seg): String {
+            val l = seg.alts.map { altFts(it) }.toMutableList()
+            if (seg.alts.size == 1 && seg.alts[0].words.size == 1) variants[seg.alts[0].words[0]]?.forEach { v -> l += if (prefix(seg.alts[0].words[0])) "$v*" else v }
+            return l.distinct().joinToString(" OR ")
         }
+        /** Word-index queries for leaving pages out. */
+        fun excludeFts(): List<String> = exclude.map { w -> if (w.size > 1) "\"" + w.joinToString(" ") + "\"" else if (prefix(w[0])) w[0] + "*" else w[0] }
+
+        /**
+         * The whole search as word-index queries (one per combination of alternatives): a phrase, or the
+         * parts near each other. Null when there are too many combinations (then the slower check is used).
+         */
+        fun ftsMatches(): List<String>? {
+            var combos = listOf(listOf<String>())
+            for (seg in segs) {
+                val alts = seg.alts.map { altFts(it) }
+                combos = combos.flatMap { c -> alts.map { c + it } }
+                if (combos.size > 24) return null
+            }
+            return combos.map { c -> if (c.size == 1) c[0] else c.joinToString(" NEAR/${totalWords + 10} ") }
+        }
+        /** (For the log.) */
+        fun ftsMatch(): String = ftsMatches()?.joinToString(" | ") ?: segs.joinToString(" & ") { ftsOf(it) }
 
         /** Where the longest part matches, alone (for placing a passage). */
         fun looseRanges(normText: String): List<IntRange> {
-            val seg = segs.maxByOrNull { it.sumOf { t -> t.length } } ?: return emptyList()
-            return Query("\"" + seg.joinToString(" ") + "\"", whole, false).also { it.variants = variants }.ranges(normText)
+            val seg = segs.maxByOrNull { it.key.length } ?: return emptyList()
+            val toks = TOK.findAll(normText).toList()
+            return occurrences(seg, toks.map { it.value }).map { toks[it[0]].range.first..toks[it[1]].range.last }
         }
 
-        private fun tokOk(seg: List<String>, j: Int, tok: String): Boolean {
-            val t = seg[j]
-            val last = j == seg.size - 1
+        private fun wordOk(a: Alt, j: Int, tok: String, single: Boolean): Boolean {
+            val t = a.words[j]
+            val last = j == a.words.size - 1
             if (tok == t || (last && prefix(t) && tok.startsWith(t))) return true
-            if (seg.size == 1) variants[t]?.forEach { v -> if (tok == v || (prefix(t) && tok.startsWith(v))) return true }
+            if (a.words.size == 1 && a.stem != null && tok.startsWith(a.stem)) return true
+            if (single && a.words.size == 1) variants[t]?.forEach { v -> if (tok == v || (prefix(t) && tok.startsWith(v))) return true }
             return false
+        }
+
+        /** The places of one part in the words of a page, as (first word, last word). */
+        private fun occurrences(seg: Seg, words: List<String>): List<IntArray> {
+            val l = ArrayList<IntArray>()
+            val single = seg.alts.size == 1
+            for (i in words.indices) {
+                for (a in seg.alts) {
+                    if (i + a.words.size > words.size) continue
+                    var ok = true
+                    for (j in a.words.indices) if (!wordOk(a, j, words[i + j], single)) { ok = false; break }
+                    if (ok) { l += intArrayOf(i, i + a.words.size - 1); break }
+                }
+            }
+            return l
+        }
+
+        /** True when the page has a word or phrase that is left out (-word). */
+        fun excluded(words: List<String>): Boolean = exclude.any { w ->
+            (0..words.size - w.size).any { i -> w.indices.all { j -> words[i + j] == w[j] || (j == w.size - 1 && prefix(w[j]) && words[i + j].startsWith(w[j])) } }
         }
 
         /** Where the search matches in [normText] (the forgiving form): one range per match. */
@@ -235,18 +371,8 @@ object SearchIndex {
             val toks = TOK.findAll(normText).toList()
             if (toks.isEmpty()) return emptyList()
             val words = toks.map { it.value }
-            // For each part: its places, as (first word, last word).
-            val occ = segs.map { seg ->
-                val l = ArrayList<IntArray>()
-                var i = 0
-                while (i + seg.size <= words.size) {
-                    var ok = true
-                    for (j in seg.indices) if (!tokOk(seg, j, words[i + j])) { ok = false; break }
-                    if (ok) l += intArrayOf(i, i + seg.size - 1)
-                    i++
-                }
-                l
-            }
+            if (exclude.isNotEmpty() && excluded(words)) return emptyList()
+            val occ = segs.map { occurrences(it, words) }
             if (occ.any { it.isEmpty() }) return emptyList()
             val spans = ArrayList<IntArray>()
             if (segs.size == 1) spans += occ[0]
@@ -276,6 +402,27 @@ object SearchIndex {
             }
             return out
         }
+
+        /** The search as the web page needs it to mark matches the same way. */
+        fun toJson(): org.json.JSONObject = org.json.JSONObject()
+            .put("segs", org.json.JSONArray().apply { segs.forEach { sg -> put(org.json.JSONArray().apply { sg.alts.forEach { a -> put(org.json.JSONObject().put("w", org.json.JSONArray(a.words)).put("stem", a.stem ?: "")) } }) } })
+            .put("exclude", org.json.JSONArray().apply { exclude.forEach { put(org.json.JSONArray(it)) } })
+            .put("variants", org.json.JSONObject().apply { variants.forEach { (k, v) -> put(k, org.json.JSONArray(v)) } })
+            .put("whole", whole).put("exact", exact)
+            .put("filters", applied.toJson())
+            .put("synonyms", org.json.JSONArray().apply { segs.filter { it.alts.size > 1 }.forEach { put(org.json.JSONArray(it.alts.map { a -> a.words.joinToString(" ") })) } })
+            .put("stems", org.json.JSONObject().apply { segs.forEach { sg -> sg.alts.forEach { a -> if (a.stem != null) put(a.words[0], a.stem) } } })
+    }
+
+    /** Which books to search: from the filter buttons and from author:/title:/tag:/year:/type: in the search. */
+    class Filters(var author: String = "", var title: String = "", var tag: String = "", var type: String = "",
+                  var yearFrom: Int? = null, var yearTo: Int? = null, var hasNotes: Boolean = false) {
+        val isEmpty get() = author.isBlank() && title.isBlank() && tag.isBlank() && type.isBlank() && yearFrom == null && yearTo == null && !hasNotes
+        /** Adds what is set in [o] (the buttons) to what was typed. */
+        fun merge(o: Filters): Filters = Filters(author.ifBlank { o.author }, title.ifBlank { o.title }, tag.ifBlank { o.tag }, type.ifBlank { o.type },
+            yearFrom ?: o.yearFrom, yearTo ?: o.yearTo, hasNotes || o.hasNotes)
+        fun toJson() = org.json.JSONObject().put("author", author).put("title", title).put("tag", tag).put("type", type)
+            .put("yearFrom", yearFrom ?: org.json.JSONObject.NULL).put("yearTo", yearTo ?: org.json.JSONObject.NULL).put("hasNotes", hasNotes)
     }
 
     // ------------------------------------------------------------------ misspellings
@@ -321,17 +468,70 @@ object SearchIndex {
     }
 
     /** A search made ready: misspellings looked up in the books (fuzzy only). */
-    fun prepare(ctx: Context, raw: String, whole: Boolean, exact: Boolean, typos: Boolean = false): Query {
-        val q = Query(raw, whole, exact)
+    fun prepare(ctx: Context, raw: String, whole: Boolean, exact: Boolean, typos: Boolean = false, filters: Filters? = null): Query {
+        val q = Query(raw, whole, exact, if (exact) emptyList() else synonyms(ctx))
+        val f = filters?.let { q.filters.merge(it) } ?: q.filters
+        q.applied = f
+        if (!f.isEmpty) q.allowed = runCatching { allowedDocs(ctx, f) }.onFailure { Log.w(TAG, "Filters", it) }.getOrNull()
         if (typos) addVariants(ctx, q)
         return q
+    }
+
+    /** The books that pass the filters. */
+    private fun allowedDocs(ctx: Context, f: Filters): Set<Long> = kotlinx.coroutines.runBlocking {
+        val db = AppDatabase.getInstance(ctx)
+        val noted = if (f.hasNotes) db.highlightDao().getAllHighlights().first().map { it.documentId }.toSet() else emptySet()
+        fun has(hay: String, needle: String) = needle.isBlank() || norm(hay).contains(norm(needle).trim())
+        db.documentDao().getAllDocumentsSnapshot().filter { d ->
+            has(d.author, f.author) && has(d.title, f.title) &&
+                (f.tag.isBlank() || d.tags.split(',', ';').any { norm(it.trim().removePrefix("#")) == norm(f.tag).trim() }) &&
+                (f.type.isBlank() || d.category.equals(f.type, true)) &&
+                (!f.hasNotes || d.id in noted) &&
+                (f.yearFrom == null && f.yearTo == null || run {
+                    val y = runCatching { BibStore.get(d.id)?.get(BibField.YEAR) }.getOrNull()?.let { Regex("\\d{4}").find(it)?.value?.toIntOrNull() }
+                    y != null && (f.yearFrom == null || y >= f.yearFrom!!) && (f.yearTo == null || y <= f.yearTo!!)
+                })
+        }.map { it.id }.toSet()
+    }
+
+    // --- Synonym groups (kept on the tablet; added from the search page, edited in Settings).
+    fun synonyms(ctx: Context): List<List<String>> = runCatching {
+        val a = org.json.JSONArray(ctx.getSharedPreferences("search", 0).getString("synonyms", "[]"))
+        (0 until a.length()).map { i -> a.getJSONArray(i).let { g -> (0 until g.length()).map { g.getString(it) } } }
+    }.getOrDefault(emptyList())
+    fun setSynonyms(ctx: Context, groups: List<List<String>>) {
+        val clean = groups.map { g -> g.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { norm(it) } }.filter { it.size > 1 }
+        ctx.getSharedPreferences("search", 0).edit().putString("synonyms", org.json.JSONArray().apply { clean.forEach { put(org.json.JSONArray(it)) } }.toString()).apply()
+    }
+
+    // --- Recent and saved searches (shared by the web page and the tablet).
+    fun savedSearches(ctx: Context): org.json.JSONObject = runCatching { org.json.JSONObject(ctx.getSharedPreferences("search", 0).getString("saved", "{}")!!) }.getOrDefault(org.json.JSONObject()).apply {
+        if (!has("recent")) put("recent", org.json.JSONArray()); if (!has("pinned")) put("pinned", org.json.JSONArray())
+    }
+    /** [action]: add (to recent), pin, unpin, remove (from recent), clear (recent). [e]: {q, mode, whole, typos, filters…}. */
+    fun updateSaved(ctx: Context, action: String, e: org.json.JSONObject?): org.json.JSONObject = synchronized(this) {
+        val o = savedSearches(ctx)
+        fun list(k: String) = o.getJSONArray(k).let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+        fun same(a: org.json.JSONObject, b: org.json.JSONObject) = a.optString("q").trim().equals(b.optString("q").trim(), true) && a.optString("mode") == b.optString("mode") &&
+            a.optJSONObject("filters")?.toString().orEmpty() == b.optJSONObject("filters")?.toString().orEmpty()
+        var recent = list("recent"); var pinned = list("pinned")
+        if (e != null && e.optString("q").isNotBlank() || action == "clear") when (action) {
+            "add" -> recent = (listOf(e!!.put("at", System.currentTimeMillis())) + recent.filter { !same(it, e!!) }).take(20)
+            "pin" -> { if (pinned.none { same(it, e!!) }) pinned = pinned + e!!.put("at", System.currentTimeMillis()) }
+            "unpin" -> pinned = pinned.filter { !same(it, e!!) }
+            "remove" -> recent = recent.filter { !same(it, e!!) }
+            "clear" -> recent = emptyList()
+        }
+        o.put("recent", org.json.JSONArray(recent)).put("pinned", org.json.JSONArray(pinned))
+        ctx.getSharedPreferences("search", 0).edit().putString("saved", o.toString()).apply()
+        o
     }
 
     /** Looks up similar spellings for the search's words (fuzzy only). True when any were found. */
     fun addVariants(ctx: Context, q: Query): Boolean {
         if (q.exact || q.isEmpty) return false
         val w = runCatching { db(ctx) }.getOrNull() ?: return false
-        q.variants = q.segs.filter { q.typoOk(it) }.associate { it[0] to variantsOf(w, it[0]) }.filterValues { it.isNotEmpty() }
+        q.variants = q.typoWords.associateWith { variantsOf(w, it) }.filterValues { it.isNotEmpty() }
         return q.variants.isNotEmpty()
     }
 
@@ -755,7 +955,8 @@ object SearchIndex {
             if (stale()) return emptyList()
             return try {
                 val q = prepared ?: prepare(ctx, raw, whole, exact)
-                if (q.variants.isNotEmpty()) return searchLocked(ctx, raw, whole, docId, perBook, exact, q, stale)
+                if (q.isEmpty || q.allowed?.isEmpty() == true) return emptyList()
+                if (q.variants.isNotEmpty() || q.ftsMatches() == null) return searchLocked(ctx, raw, whole, docId, perBook, exact, q, stale)
                 val r = searchFast(ctx, q, docId, perBook, stale)
                 // Nothing found: try similar spellings (fuzzy searches only).
                 if (r.isEmpty() && !stale() && addVariants(ctx, q)) searchLocked(ctx, raw, whole, docId, perBook, exact, q, stale) else r
@@ -771,18 +972,29 @@ object SearchIndex {
     private fun searchFast(ctx: Context, q: Query, docId: Long?, perBook: Int, stale: () -> Boolean): List<Pair<Long, Pair<Int, List<Hit>>>> {
         val t0 = System.currentTimeMillis()
         val w = db(ctx)
-        val match = q.ftsMatch()
+        val matches = q.ftsMatches() ?: return emptyList()
         val counts = LinkedHashMap<Long, Int>()
         val keepIds = HashMap<Long, ArrayList<Long>>()
         val keep = if (docId != null) 3000 else perBook
+        // Pages with a left-out word (-word).
+        val excl = HashSet<Long>()
+        q.excludeFts().forEach { e -> idsFor(w, e, docId, 300000).forEach { excl += it } }
+        val allowed = q.allowed
+        val seen = if (matches.size > 1) HashSet<Long>() else null
         val sql = "SELECT u.doc_id, u.id FROM fts JOIN units u ON u.id = fts.rowid WHERE fts MATCH ?" +
             (if (docId != null) " AND u.doc_id = ?" else "") + " ORDER BY u.doc_id, u.loc, u.id LIMIT 300000"
-        w.rawQuery(sql, if (docId != null) arrayOf(match, docId.toString()) else arrayOf(match)).use { c ->
-            while (c.moveToNext()) {
-                val doc = c.getLong(0)
-                counts[doc] = (counts[doc] ?: 0) + 1
-                val l = keepIds.getOrPut(doc) { ArrayList() }
-                if (l.size < keep) l += c.getLong(1)
+        for (match in matches) {
+            if (stale()) return emptyList()
+            w.rawQuery(sql, if (docId != null) arrayOf(match, docId.toString()) else arrayOf(match)).use { c ->
+                while (c.moveToNext()) {
+                    val doc = c.getLong(0); val id = c.getLong(1)
+                    if (allowed != null && doc !in allowed) continue
+                    if (id in excl) continue
+                    if (seen != null && !seen.add(id)) continue
+                    counts[doc] = (counts[doc] ?: 0) + 1
+                    val l = keepIds.getOrPut(doc) { ArrayList() }
+                    if (l.size < keep) l += id
+                }
             }
         }
         if (stale()) return emptyList()
@@ -827,7 +1039,7 @@ object SearchIndex {
         val w = db(ctx)
         val limit = if (docId != null) 3000 else 5000
         // 1) Candidate pages, from the most telling part (and the next one, to narrow it down).
-        val telling = q.segs.filter { seg -> seg.size > 1 || seg[0].length > 2 }.ifEmpty { q.segs }.sortedByDescending { it.sumOf { t -> t.length } }.take(2)
+        val telling = q.segs.filter { seg -> seg.size > 1 || seg.key.length > 2 }.ifEmpty { q.segs }.sortedByDescending { it.key.length }.take(2)
         var cand = idsFor(w, q.ftsOf(telling[0]), docId, if (telling.size > 1) 50000 else limit)
         if (telling.size > 1 && cand.isNotEmpty() && !stale()) {
             val other = idsFor(w, q.ftsOf(telling[1]), docId, 50000)
@@ -846,6 +1058,7 @@ object SearchIndex {
                 while (c.moveToNext()) {
                     read++
                     val doc = c.getLong(0); val loc = c.getInt(1); val href = c.getString(2).orEmpty(); val label = c.getString(3).orEmpty(); val text = c.getString(4).orEmpty()
+                    if (q.allowed?.contains(doc) == false) continue
                     val (n, map) = normWithMap(text)
                     val rs = q.ranges(n)
                     if (rs.isEmpty()) continue
@@ -871,7 +1084,7 @@ object SearchIndex {
         val q = prepared ?: prepare(ctx, raw, whole, exact)
         if (q.isEmpty) return@withContext emptyList()
         val dao = AppDatabase.getInstance(ctx)
-        val notes = dao.highlightDao().getAllHighlights().first().filter { docId == null || it.documentId == docId }
+        val notes = dao.highlightDao().getAllHighlights().first().filter { (docId == null || it.documentId == docId) && q.allowed?.contains(it.documentId) != false }
         val titles = HashMap<Long, String>()
         notes.mapNotNull { n ->
             val text = listOf(n.title, n.highlightedText, n.userNotes, n.tags).filter { it.isNotBlank() }.joinToString(" — ")

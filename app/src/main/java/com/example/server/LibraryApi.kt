@@ -112,6 +112,17 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s == listOf("upload") && m == "POST" -> return upload(req)
             s.firstOrNull() == "zotero" -> return zoteroApi.route(req, s.drop(1))
             s == listOf("search") && m == "GET" -> return searchAll(req)
+            s == listOf("search-saved") && m == "GET" -> return HttpResponse.json(com.example.reader.SearchIndex.savedSearches(context).toString())
+            s == listOf("search-saved") && m == "POST" -> {
+                val b = JSONObject(req.bodyText())
+                return HttpResponse.json(com.example.reader.SearchIndex.updateSaved(context, b.optString("action"), b.optJSONObject("entry")).toString())
+            }
+            s == listOf("search-synonyms") && m == "GET" -> return HttpResponse.json(JSONArray().apply { com.example.reader.SearchIndex.synonyms(context).forEach { put(JSONArray(it)) } }.toString())
+            s == listOf("search-synonyms") && m == "PUT" -> {
+                val a = JSONArray(req.bodyText())
+                com.example.reader.SearchIndex.setSynonyms(context, (0 until a.length()).map { i -> a.getJSONArray(i).let { g -> (0 until g.length()).map { g.getString(it) } } })
+                return HttpResponse.json(JSONArray().apply { com.example.reader.SearchIndex.synonyms(context).forEach { put(JSONArray(it)) } }.toString())
+            }
             s == listOf("search-status") && m == "GET" -> {
                 com.example.reader.SearchIndex.kick(context)
                 return HttpResponse.json(JSONObject().put("indexing", progressJson()).toString())
@@ -274,10 +285,10 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 val q = req.query["q"].orEmpty()
                 val whole = req.query["whole"] == "1"
                 val exact = req.query["mode"] == "exact"
-                val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact, req.query["typos"] == "1") }
+                val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact, req.query["typos"] == "1", searchFilters(req)) }
                 val hits = com.example.reader.SearchIndex.searchBook(context, doc, q, whole, exact, pq)
                 val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, doc.id, exact = exact, prepared = pq)
-                HttpResponse.json(JSONObject().put("q", q).put("count", hits.size).put("variants", variantsJson(pq)).put("status", searchStatusJson(doc)).put("indexing", progressJson())
+                HttpResponse.json(JSONObject().put("q", q).put("count", hits.size).put("variants", variantsJson(pq)).put("query", pq.toJson()).put("status", searchStatusJson(doc)).put("indexing", progressJson())
                     .put("hits", JSONArray().apply { hits.forEach { put(hitJson(it)) } })
                     .put("notes", JSONArray().apply { notes.forEach { put(noteHitJson(it)) } }).toString())
             }
@@ -961,7 +972,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         } else {
             val href = b.optString("href")
             val index = runCatching { EpubIndex.of(context, File(doc.filePath)) }.getOrNull()
-            val position = if (index != null && href.isNotBlank()) EpubIndex.positionFor(index, href, b.optDouble("progression", 0.0)) else b.optInt("page", 1)
+            // (A note made from a search result knows its position already.)
+            val position = if (b.has("position")) b.getInt("position") else if (index != null && href.isNotBlank()) EpubIndex.positionFor(index, href, b.optDouble("progression", 0.0)) else b.optInt("page", 1)
             val chapter = b.optString("chapter").ifBlank { index?.let { EpubIndex.resourceFor(it, href)?.title }.orEmpty() }.ifBlank { "Chapter" }
             val label = b.optString("pageLabel").trim()
             val pPrefix = if (label.contains('–') || label.contains('-')) "pp." else "p."
@@ -1092,15 +1104,21 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
     /** The misspellings a fuzzy search also matched, per word (the reader marks them too). */
     private fun variantsJson(q: com.example.reader.SearchIndex.Query) = JSONObject().apply { q.variants.forEach { (k, v) -> put(k, JSONArray(v)) } }
 
+    /** The filter buttons of the search page. */
+    private fun searchFilters(req: HttpRequest) = com.example.reader.SearchIndex.Filters(
+        author = req.query["fauthor"].orEmpty(), tag = req.query["ftag"].orEmpty(), type = req.query["ftype"].orEmpty().uppercase(),
+        yearFrom = req.query["yfrom"]?.toIntOrNull(), yearTo = req.query["yto"]?.toIntOrNull(), hasNotes = req.query["fnotes"] == "1")
+
     private suspend fun searchAll(req: HttpRequest): HttpResponse {
         val q = req.query["q"].orEmpty()
         val whole = req.query["whole"] == "1"
         val exact = req.query["mode"] == "exact"
-        val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact, req.query["typos"] == "1") }
-        val books = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.search(context, q, whole, perBook = 5, exact = exact, prepared = pq) }
+        val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact, req.query["typos"] == "1", searchFilters(req)) }
+        val per = (req.query["per"]?.toIntOrNull() ?: 5).coerceIn(1, 100)
+        val books = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.search(context, q, whole, perBook = per, exact = exact, prepared = pq) }
         val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, limit = 100, exact = exact, prepared = pq)
         com.example.reader.SearchIndex.kick(context)
-        return HttpResponse.json(JSONObject().put("q", q).put("variants", variantsJson(pq))
+        return HttpResponse.json(JSONObject().put("q", q).put("variants", variantsJson(pq)).put("query", pq.toJson())
             .put("indexing", progressJson())
             .put("books", JSONArray().apply {
                 books.take(200).forEach { (id, r) ->

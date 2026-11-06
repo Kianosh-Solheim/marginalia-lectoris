@@ -682,3 +682,43 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 
 /* Reader notes panel: the note's title above it */
 .nitem .ntitle { font-weight: 700; font-size: 14px; line-height: 1.3; margin-bottom: 4px; }
+
+/* Search: operators, filters, saved searches, concordance, notes from results, hit map */
+.sops { gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; align-items: center; }
+.shelp { border: 1px solid var(--ink); background: #fffbeb; padding: 10px 12px; margin: 0 0 10px; font-size: 13px; }
+.shelp table { border-collapse: collapse; margin-top: 6px; width: 100%; }
+.shelp td { padding: 3px 8px 3px 0; vertical-align: top; }
+.shelp td.mono { white-space: nowrap; font-size: 12px; font-weight: 700; width: 1%; }
+.sfilters { gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; font-size: 13px; }
+.sfilters select { font-size: 13px; padding: 3px 6px; }
+.sfilters input.yr { width: 70px; padding: 3px 6px; font-size: 13px; }
+.ssaved { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+.schip { display: inline-flex; border: 1px solid var(--ink); font-size: 12px; }
+.schip button { border: 0; background: var(--paper); padding: 2px 7px; cursor: pointer; font: inherit; }
+.schip button:hover { background: #f4f4f5; }
+.schip .x { border-left: 1px solid #d4d4d8; color: #71717a; }
+.schip.pinned button:first-child { font-weight: 700; }
+.tshit { position: relative; }
+.tshit .hnote, .fhit .hnote { float: right; font-size: 11px; padding: 1px 6px; margin-left: 6px; opacity: .55; }
+.tshit:hover .hnote, .fhit:hover .hnote, .kwrow:hover .hnote { opacity: 1; }
+.kwic { border: 1px solid var(--ink); font-size: 13px; }
+.kwrow { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 190px auto; gap: 6px; align-items: baseline; padding: 4px 8px; border-bottom: 1px solid #f0f0f0; color: inherit; text-decoration: none; }
+.kwrow:hover { background: #f4f4f5; }
+.kwl { text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
+.kwl::after { content: '\200E'; }
+.kwk { font-weight: 700; background: #fde047; white-space: nowrap; }
+.kwr { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kws { font-size: 11px; color: #71717a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kwrow .hnote { font-size: 11px; padding: 1px 6px; opacity: .4; }
+.syngroups { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.hmwrap { position: relative; flex: 1; display: flex; align-items: center; min-height: 18px; }
+.hmwrap input[type=range] { flex: 1; width: 100%; }
+.hitmap { position: absolute; left: 0; right: 0; top: -7px; height: 10px; pointer-events: none; }
+.hitmap .hmt { position: absolute; bottom: 0; min-width: 2px; background: #ca8a04; pointer-events: auto; cursor: pointer; }
+.hitmap .hmt.cur { background: #dc2626; }
+.sfilters > * { flex: none; }
+.sfilters select, .tsearch .sfilters select { width: auto; max-width: 260px; }
+.sfilters .label, .ssaved .label { display: inline; margin: 0; }
+.tsearch select:not(.sfilters select) { width: auto; }
+.fhit { position: relative; padding-right: 54px !important; }
+.fhit .hnote { float: none; position: absolute; right: 2px; top: 4px; margin: 0; }

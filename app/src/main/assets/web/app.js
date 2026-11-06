@@ -980,6 +980,7 @@ function renderSettings(main, data) {
   };
   const nav = h('nav', { class: 'set-nav' }, data.groups.map(g =>
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById(settingsSlug(g.name)).scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, g.name)),
+    h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-search').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Search'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-zotero').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Zotero'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-storage').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Storage & backup'));
   const body = h('div', { class: 'set-body' });
@@ -989,6 +990,7 @@ function renderSettings(main, data) {
     g.fields.forEach(f => sec.appendChild(settingRow(f, data, main, save)));
     body.appendChild(sec);
   });
+  body.appendChild(searchSettingsSection());
   body.appendChild(zoteroSettingsSection());
   body.appendChild(storageSection(data.info));
   main.append(h('div', { class: 'set-head' }, h('h1', null, 'Settings'),
@@ -3089,7 +3091,18 @@ async function openPdf(ctx, params) {
     h('button', { class: 'btn quiet', title: 'Larger', onclick: () => setZoom(Math.min(3, +(scale() + 0.15).toFixed(2))) }, '+'),
     h('button', { class: 'btn quiet', title: 'Fit the width', onclick: () => setZoom(0) }, 'Fit'));
   zl.textContent = Math.round(scale() * 100) + '%';
-  ctx.status.append(where, slider, h('span', null, d.fileType));
+  // The hit map (where the search's matches are) sits on the slider.
+  const hmEl = h('span', { class: 'hitmap', hidden: true });
+  ctx.hitMap = { el: hmEl, total: n };
+  ctx.status.append(where, h('span', { class: 'hmwrap' }, slider, hmEl), h('span', null, d.fileType));
+  // "This chapter only" in the search: the chapter (or part) from the bookmarks around the page being read.
+  ctx.chapterRange = () => {
+    const items = ctx.tocItems; if (!items.length) return null;
+    const c = items.filter(t => t.level <= 1 && t.page <= current).pop(); if (!c) return null;
+    const next = items.find(t => t.page > c.page && t.level <= c.level);
+    const end = next ? next.page - 1 : n;
+    return { label: c.title, test: hit => hit.loc >= c.page && hit.loc <= end };
+  };
   if (tcfg) ctx.zoomBox.prepend(pdfTextButton());
 
   /** “Text & OCR”: the book's text mode, OCR language, a fix for this page, a page check and exports. */
@@ -3448,7 +3461,16 @@ async function openEpub(ctx, params) {
   rsListeners.add(now => { fl.textContent = Math.round(now.fontSizeSp) + ' pt'; });
   const setFont = sp => setReaderSettings({ fontSizeSp: Math.max(10, Math.min(40, Math.round(sp))) });
   ctx.zoomBox.append(viewSwitch(), h('button', { class: 'btn quiet', title: 'Smaller text', onclick: () => setFont(RS.fontSizeSp - 1) }, 'A−'), fl, h('button', { class: 'btn quiet', title: 'Larger text', onclick: () => setFont(RS.fontSizeSp + 1) }, 'A+'));
-  ctx.status.append(where, h('span', { class: 'spacer' }), h('span', null, 'EPUB'), fontBox);
+  const hmEl = h('span', { class: 'hitmap', hidden: true });
+  ctx.hitMap = { el: hmEl, total: index && index.total ? index.total : 0 };
+  ctx.status.append(where, h('span', { class: 'hmwrap spacer' }, hmEl), h('span', null, 'EPUB'), fontBox);
+  // "This chapter only" in the search: the file (chapter) being read.
+  ctx.chapterRange = () => {
+    const href = lastLoc && lastLoc.start && lastLoc.start.href; if (!href) return null;
+    const f = fileOf(href); const t = tocFor(href);
+    const same = x => { const g = fileOf(x); return g === f || g.endsWith('/' + f) || f.endsWith('/' + g); };
+    return { label: t ? t.title : '', test: hit => !!hit.href && same(hit.href) };
+  };
   const endCard = endOfChapterCard(ctx);
   if (endCard) { endCard.style.position = 'absolute'; endCard.style.left = '50%'; endCard.style.bottom = '18px'; endCard.style.transform = 'translateX(-50%)'; endCard.style.zIndex = '25'; endCard.hidden = true; ctx.mainArea.append(endCard); }
   rendition.on('relocated', loc => {
