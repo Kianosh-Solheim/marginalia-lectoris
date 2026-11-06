@@ -37,6 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /** The library's full-text search is open. */
 val textSearchOpen = mutableStateOf(false)
@@ -51,76 +52,191 @@ private fun marked(s: String, a: Int, b: Int) = buildAnnotatedString {
 }
 
 /** Search the text of every book, and the notes. Opens a match in the book with the find bar showing it. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPage: (DocumentEntity, Int, HighlightEntity?) -> Unit) {
     if (!textSearchOpen.value) return
     val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("search", 0) }
     var query by remember { mutableStateOf("") }
-    var whole by remember { mutableStateOf(context.getSharedPreferences("search", 0).getBoolean("whole", false)) }
-    var exact by remember { mutableStateOf(context.getSharedPreferences("search", 0).getBoolean("exact", false)) }
-    var typos by remember { mutableStateOf(context.getSharedPreferences("search", 0).getBoolean("typos", false)) }
+    var whole by remember { mutableStateOf(prefs.getBoolean("whole", false)) }
+    var exact by remember { mutableStateOf(prefs.getBoolean("exact", false)) }
+    var typos by remember { mutableStateOf(prefs.getBoolean("typos", false)) }
     var usedTypos by remember { mutableStateOf(false) }
+    // Filters, order and view (kept on the tablet)
+    var fTag by remember { mutableStateOf(prefs.getString("f_tag", "").orEmpty()) }
+    var fType by remember { mutableStateOf(prefs.getString("f_type", "").orEmpty()) }
+    var fFrom by remember { mutableStateOf(prefs.getString("f_from", "").orEmpty()) }
+    var fTo by remember { mutableStateOf(prefs.getString("f_to", "").orEmpty()) }
+    var fNotes by remember { mutableStateOf(prefs.getBoolean("f_notes", false)) }
+    var sort by remember { mutableStateOf(prefs.getString("sort", "relevance").orEmpty()) }
+    var kwic by remember { mutableStateOf(prefs.getBoolean("kwic", false)) }
+    var showFilters by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
+    var showSynonyms by remember { mutableStateOf(false) }
+    var noteFor by remember { mutableStateOf<Pair<DocumentEntity, SearchIndex.Hit>?>(null) }
+    var savedRefresh by remember { mutableIntStateOf(0) }
+    var rerun by remember { mutableIntStateOf(0) }
+    var info by remember { mutableStateOf("") }
+    fun saveF() { prefs.edit().putString("f_tag", fTag).putString("f_type", fType).putString("f_from", fFrom).putString("f_to", fTo).putBoolean("f_notes", fNotes).apply() }
     var books by remember { mutableStateOf<List<Triple<DocumentEntity, Int, List<SearchIndex.Hit>>>>(emptyList()) }
     var notes by remember { mutableStateOf<List<SearchIndex.NoteHit>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     val progress by SearchIndex.progress.collectAsState()
     val focus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) { SearchIndex.kick(context); runCatching { focus.requestFocus() } }
-    LaunchedEffect(query, whole, exact, typos) {
+    var allTags by remember { mutableStateOf<List<String>>(emptyList()) }
+    val years = remember { HashMap<Long, Int>() }
+    LaunchedEffect(Unit) {
+        SearchIndex.kick(context); runCatching { focus.requestFocus() }
+        allTags = withContext(Dispatchers.IO) { AppDatabase.getInstance(context).documentDao().getAllDocumentsSnapshot().flatMap { it.tags.split(',', ';').map { t -> t.trim().removePrefix("#") } }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }.sortedBy { it.lowercase() } }
+    }
+    fun entryNow() = JSONObject().put("q", query.trim()).put("mode", if (exact) "exact" else "fuzzy").put("whole", whole).put("typos", typos)
+        .put("filters", JSONObject().put("tag", fTag).put("type", fType).put("yfrom", fFrom).put("yto", fTo).put("notes", fNotes))
+    fun addRecent() { if (query.trim().length >= 2) { SearchIndex.updateSaved(context, "add", entryNow()); savedRefresh++ } }
+    LaunchedEffect(query, whole, exact, typos, fTag, fType, fFrom, fTo, fNotes, kwic, rerun) {
         val q = query.trim()
-        if (q.length < 2) { books = emptyList(); notes = emptyList(); return@LaunchedEffect }
+        if (q.length < 2) { books = emptyList(); notes = emptyList(); info = ""; return@LaunchedEffect }
         delay(300)
         busy = true
+        val filters = SearchIndex.Filters(tag = fTag, type = fType, yearFrom = fFrom.toIntOrNull(), yearTo = fTo.toIntOrNull(), hasNotes = fNotes)
         val r = withContext(Dispatchers.IO) {
             val dao = AppDatabase.getInstance(context).documentDao()
-            val pq = SearchIndex.prepare(context, q, whole, exact, typos && !exact)
-            val b = SearchIndex.search(context, q, whole, perBook = 5, prepared = pq).mapNotNull { (id, rr) -> dao.getDocumentById(id)?.let { Triple(it, rr.first, rr.second) } }
+            val pq = SearchIndex.prepare(context, q, whole, exact, typos && !exact, filters)
+            val b = SearchIndex.search(context, q, whole, perBook = if (kwic) 40 else 5, prepared = pq).mapNotNull { (id, rr) -> dao.getDocumentById(id)?.let { Triple(it, rr.first, rr.second) } }
             usedTypos = pq.variants.isNotEmpty()
-            b to SearchIndex.searchNotes(context, q, whole, limit = 60, prepared = pq)
+            b.forEach { (d, _, _) -> if (d.id !in years) years[d.id] = runCatching { com.example.reader.BibStore.get(d.id)?.get(com.example.reader.BibField.YEAR) }.getOrNull()?.let { Regex("\\d{4}").find(it)?.value?.toIntOrNull() } ?: 0 }
+            Triple(b, SearchIndex.searchNotes(context, q, whole, limit = 60, prepared = pq), pq.toJson())
         }
         books = r.first
         notes = r.second
+        info = run {
+            val P = r.third; val parts = ArrayList<String>()
+            P.optJSONArray("synonyms")?.let { a -> for (i in 0 until a.length()) parts += a.getJSONArray(i).let { g -> (0 until g.length()).joinToString(" = ") { g.getString(it) } } }
+            P.optJSONObject("stems")?.let { o -> if (o.length() > 0) parts += "word forms: " + o.keys().asSequence().joinToString(", ") { "$it → ${o.getString(it)}…" } }
+            P.optJSONArray("exclude")?.let { a -> if (a.length() > 0) parts += "leaving out: " + (0 until a.length()).joinToString(", ") { i -> a.getJSONArray(i).let { w -> (0 until w.length()).joinToString(" ") { w.getString(it) } } } }
+            val f = P.optJSONObject("filters")
+            val fl = listOfNotNull(f?.optString("author")?.takeIf { it.isNotBlank() }?.let { "author $it" }, f?.optString("title")?.takeIf { it.isNotBlank() }?.let { "title $it" },
+                f?.optString("tag")?.takeIf { it.isNotBlank() }?.let { "#$it" }, f?.optString("type")?.takeIf { it.isNotBlank() }?.let { if (it == "BOOK") "books" else "articles" },
+                if (f != null && (!f.isNull("yearFrom") || !f.isNull("yearTo"))) "years ${f.opt("yearFrom").takeIf { it != JSONObject.NULL } ?: "…"}–${f.opt("yearTo").takeIf { it != JSONObject.NULL } ?: "…"}" else null,
+                if (f?.optBoolean("hasNotes") == true) "with notes" else null)
+            if (fl.isNotEmpty()) parts += "only " + fl.joinToString(", ")
+            if (parts.isEmpty()) "" else "Also: " + parts.joinToString(" · ")
+        }
         busy = false
     }
     fun open(d: DocumentEntity, hit: SearchIndex.Hit) {
+        addRecent()
         pendingFind.value = PendingFind(d.id, query.trim(), whole, hit.loc, hit.label, exact, usedTypos)
         textSearchOpen.value = false
         if (d.fileType.equals("PDF", true)) onOpenDocumentAtPage(d, hit.loc, null) else onOpenDocument(d)
     }
+    fun apply(e: JSONObject) {
+        query = e.optString("q"); exact = e.optString("mode") == "exact"; whole = e.optBoolean("whole"); typos = e.optBoolean("typos")
+        e.optJSONObject("filters")?.let { f -> fTag = f.optString("tag"); fType = f.optString("type"); fFrom = f.optString("yfrom"); fTo = f.optString("yto"); fNotes = f.optBoolean("notes") }
+        saveF()
+    }
+    fun insert(t: String) { query = (if (query.isBlank() || query.endsWith(" ")) query else "$query ") + t }
+    fun where(d: DocumentEntity, h: SearchIndex.Hit) = if (d.fileType.equals("PDF", true)) "p. ${h.label.ifBlank { h.loc.toString() }}" else h.label.ifBlank { "pos. ${h.loc}" }
+    val sorted = remember(books, sort) {
+        when (sort) {
+            "title" -> books.sortedBy { it.first.title.lowercase() }
+            "author" -> books.sortedWith(compareBy({ it.first.author.lowercase() }, { it.first.title.lowercase() }))
+            "year" -> books.sortedByDescending { years[it.first.id] ?: 0 }
+            "yearold" -> books.sortedBy { (years[it.first.id] ?: 0).takeIf { y -> y > 0 } ?: 9999 }
+            "lastread" -> books.sortedByDescending { it.first.lastReadTimestamp }
+            else -> books.sortedByDescending { it.second }
+        }
+    }
+    val filtersOn = fTag.isNotBlank() || fType.isNotBlank() || fFrom.isNotBlank() || fTo.isNotBlank() || fNotes
 
     Dialog(onDismissRequest = { textSearchOpen.value = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.92f).border(1.5.dp, Color.Black), color = Color.White) {
             Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Search in the books", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = Color.Black, modifier = Modifier.weight(1f))
-                    InkChip("Fuzzy", !exact, { exact = false; context.getSharedPreferences("search", 0).edit().putBoolean("exact", false).apply() })
-                    InkChip("Exact", exact, { exact = true; context.getSharedPreferences("search", 0).edit().putBoolean("exact", true).apply() })
-                    if (!exact) InkChip("Typos", typos, { typos = !typos; context.getSharedPreferences("search", 0).edit().putBoolean("typos", typos).apply() })
-                    InkChip("Whole words", whole, { whole = !whole; context.getSharedPreferences("search", 0).edit().putBoolean("whole", whole).apply() })
+                    InkChip("Fuzzy", !exact, { exact = false; prefs.edit().putBoolean("exact", false).apply() })
+                    InkChip("Exact", exact, { exact = true; prefs.edit().putBoolean("exact", true).apply() })
+                    if (!exact) InkChip("Typos", typos, { typos = !typos; prefs.edit().putBoolean("typos", typos).apply() })
+                    InkChip("Whole words", whole, { whole = !whole; prefs.edit().putBoolean("whole", whole).apply() })
                     InkChip("Close", false, { textSearchOpen.value = false })
                 }
                 Box(Modifier.fillMaxWidth().border(1.5.dp, Color.Black).padding(10.dp)) {
                     BasicTextField(query, { query = it }, singleLine = true, textStyle = TextStyle(fontSize = 18.sp, color = Color.Black), cursorBrush = SolidColor(Color.Black),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = {}),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { addRecent() }),
                         modifier = Modifier.fillMaxWidth().focusRequester(focus))
                     if (query.isEmpty()) Text("Words or a sentence…", color = Color(0xFF9CA3AF), fontSize = 18.sp)
+                }
+                // Operators, as buttons
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    InkChip("“ ” Phrase", false, { insert("\"\"") })
+                    InkChip("− Leave out", false, { insert("-") })
+                    InkChip("OR", false, { insert("OR ") })
+                    InkChip("author:", false, { insert("author:") })
+                    InkChip("tag:", false, { insert("tag:") })
+                    InkChip("year:", false, { insert("year:") })
+                    InkChip(if (filtersOn) "Filters ●" else "Filters", showFilters, { showFilters = !showFilters })
+                    InkChip("+ Synonym", false, { showSynonyms = true })
+                    InkChip("☆ Save search", false, { if (query.isNotBlank()) { SearchIndex.updateSaved(context, "pin", entryNow()); savedRefresh++ } })
+                    InkChip("? How to search", false, { showHelp = true })
+                }
+                if (showFilters) {
+                    FlowRow(Modifier.fillMaxWidth().border(1.dp, Color.Black).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("ONLY", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TGrey, modifier = Modifier.align(Alignment.CenterVertically))
+                        InkChip("All", fType.isBlank(), { fType = ""; saveF() }); InkChip("Books", fType == "BOOK", { fType = "BOOK"; saveF() }); InkChip("Articles", fType == "ARTICLE", { fType = "ARTICLE"; saveF() })
+                        InkChip("With notes", fNotes, { fNotes = !fNotes; saveF() })
+                        InkField(fFrom, { fFrom = it.filter(Char::isDigit).take(4); saveF() }, "Year from", Modifier.width(110.dp))
+                        InkField(fTo, { fTo = it.filter(Char::isDigit).take(4); saveF() }, "Year to", Modifier.width(110.dp))
+                        if (filtersOn) InkChip("Clear filters", false, { fTag = ""; fType = ""; fFrom = ""; fTo = ""; fNotes = false; saveF() })
+                        Text("TAG", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TGrey, modifier = Modifier.align(Alignment.CenterVertically))
+                        InkChip("Any", fTag.isBlank(), { fTag = ""; saveF() })
+                        allTags.forEach { t -> InkChip("#$t", fTag.equals(t, true), { fTag = if (fTag.equals(t, true)) "" else t; saveF() }) }
+                    }
+                }
+                SavedSearchesRow(savedRefresh) { apply(it) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("SORT", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TGrey)
+                    listOf("relevance" to "Most matches", "title" to "Title", "author" to "Author", "year" to "Newest", "yearold" to "Oldest", "lastread" to "Last read").forEach { (k, l) ->
+                        InkChip(l, sort == k, { sort = k; prefs.edit().putString("sort", k).apply() })
+                    }
+                    Spacer(Modifier.weight(1f))
+                    InkChip("Results", !kwic, { kwic = false; prefs.edit().putBoolean("kwic", false).apply() })
+                    InkChip("Concordance", kwic, { kwic = true; prefs.edit().putBoolean("kwic", true).apply() })
                 }
                 val total = books.sumOf { it.second }
                 Text(buildString {
                     if (busy) append("Searching…") else if (query.trim().length >= 2) append("Found on $total page${if (total == 1) "" else "s"} in ${books.size} book${if (books.size == 1) "" else "s"} · ${notes.size} note${if (notes.size == 1) "" else "s"}" + if (usedTypos) " · including similar spellings" else "")
                     else append(if (exact) "Exact: the words in this order, as one sentence. Case, accents, punctuation and line-break hyphens are ignored."
-                        else "Fuzzy: the words close together, in any order; words also find longer forms (vold → volden). Typos: also similar spellings.")
+                        else "Fuzzy: the words close together, in any order; other word forms count too (vold → volden). Tap “? How to search” for more.")
+                    if (info.isNotBlank() && !busy) append("\n$info")
                     if (progress.running && progress.phase == "update") append("\nUpdating the search index for better matching: ${progress.page} of ${progress.pages} pages")
                     else if (progress.running) append("\nPreparing books for search: ${progress.done} of ${progress.total} ready · now “${progress.current}” " +
                         (if (progress.phase == "ocr") "(reading scanned pages with OCR: ${progress.page} of ${progress.pages})" else if (progress.pages > 0) "(page ${progress.page} of ${progress.pages})" else "") +
                         if (progress.ocrLeft > 0 && progress.phase != "ocr") " · ${progress.ocrLeft} scanned pages wait for OCR" else "")
                 }, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TGrey)
                 LazyColumn(Modifier.fillMaxSize()) {
+                    if (kwic) {
+                        // Concordance: every match with the search term in the middle.
+                        val lines = sorted.flatMap { (d, _, hits) -> hits.map { h -> d to h } }
+                        items(lines.size) { i ->
+                            val (d, h) = lines[i]
+                            val t = h.snippet; val a = h.start.coerceIn(0, t.length); val b = h.end.coerceIn(a, t.length)
+                            Row(Modifier.fillMaxWidth().clickable { open(d, h) }.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(t.substring(0, a).takeLast(70), fontSize = 13.sp, color = Color.Black, maxLines = 1, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.weight(1f),
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Clip)
+                                Text(t.substring(a, b), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.Black, maxLines = 1, modifier = Modifier.background(Color(0xFFFDE047)).padding(horizontal = 3.dp))
+                                Text(t.substring(b).take(70), fontSize = 13.sp, color = Color.Black, maxLines = 1, modifier = Modifier.weight(1f), overflow = androidx.compose.ui.text.style.TextOverflow.Clip)
+                                Text("${d.author.split(';', ',').first().trim()} · ${where(d, h)}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TGrey, maxLines = 1, modifier = Modifier.width(170.dp).padding(start = 8.dp))
+                                InkChip("+ Note", false, { noteFor = d to h })
+                            }
+                            HorizontalDivider(color = Color(0xFFF0F0F0))
+                        }
+                    } else {
                     if (notes.isNotEmpty()) {
                         item { Text("YOUR NOTES", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.Black, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)) }
                         items(notes.take(30), key = { "n" + it.note.id }) { n ->
                             Column(Modifier.fillMaxWidth().clickable {
+                                addRecent()
                                 scope.launch {
                                     val d = withContext(Dispatchers.IO) { AppDatabase.getInstance(context).documentDao().getDocumentById(n.note.documentId) }
                                     textSearchOpen.value = false
@@ -133,28 +249,35 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
                             HorizontalDivider(color = Color(0xFFE4E4E7))
                         }
                     }
-                    items(books, key = { "b" + it.first.id }) { (d, count, hits) ->
+                    items(sorted, key = { "b" + it.first.id }) { (d, count, hits) ->
                         Column(Modifier.fillMaxWidth().padding(top = 12.dp).border(1.dp, Color.Black)) {
                             Row(Modifier.fillMaxWidth().background(Color(0xFFFAFAFA)).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
                                     Text(d.title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.Black, maxLines = 2)
-                                    if (d.author.isNotBlank()) Text(d.author.replace("; ", ", "), fontSize = 12.sp, color = TGrey, maxLines = 1)
+                                    val y = years[d.id]?.takeIf { it > 0 }
+                                    if (d.author.isNotBlank() || y != null) Text(listOfNotNull(d.author.replace("; ", ", ").takeIf { it.isNotBlank() }, y?.toString()).joinToString(" · "), fontSize = 12.sp, color = TGrey, maxLines = 1)
                                 }
                                 Text("$count p.", fontFamily = FontFamily.Monospace, color = Color.Black)
                             }
                             hits.forEach { h ->
-                                Column(Modifier.fillMaxWidth().clickable { open(d, h) }.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                                    Text(if (d.fileType.equals("PDF", true)) "p. ${h.label.ifBlank { h.loc.toString() }}" else h.label.ifBlank { "pos. ${h.loc}" },
-                                        fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TGrey)
-                                    Text(marked(h.snippet, h.start, h.end), fontSize = 14.sp, color = Color.Black)
+                                Row(Modifier.fillMaxWidth().clickable { open(d, h) }.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.Top) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(where(d, h), fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TGrey)
+                                        Text(marked(h.snippet, h.start, h.end), fontSize = 14.sp, color = Color.Black)
+                                    }
+                                    InkChip("+ Note", false, { noteFor = d to h })
                                 }
                             }
                             if (count > hits.size) Text("Open the book to see all $count pages →", fontSize = 12.sp, color = TGrey,
                                 modifier = Modifier.fillMaxWidth().clickable { hits.firstOrNull()?.let { open(d, it) } }.padding(10.dp))
                         }
                     }
+                    }
                 }
             }
         }
     }
+    if (showHelp) SearchHelpDialog { showHelp = false }
+    if (showSynonyms) SynonymDialog(query, { showSynonyms = false }, { rerun++ })
+    noteFor?.let { (d, h) -> NoteFromHitDialog(d, h.loc, h.label, if (d.fileType.equals("PDF", true)) "" else h.label, h.snippet, h.start, h.end, { noteFor = null }) }
 }

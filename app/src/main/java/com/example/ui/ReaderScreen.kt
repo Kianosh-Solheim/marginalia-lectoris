@@ -1718,10 +1718,38 @@ fun ReaderScreen(
             else hits.indexOfFirst { p.label.isNotBlank() && it.where == p.label }.takeIf { it >= 0 } ?: 0
         if (i >= 0 && i < hits.size) { findState.index = i; findJump(hits[i]) }
     }
+    // "This chapter only": the chapter around the page being read (PDF bookmarks, or the EPUB's chapter).
+    var findPdfChapters by remember(document.id) { mutableStateOf<List<com.example.reader.BookChapter>>(emptyList()) }
+    LaunchedEffect(document.id, findState.open) {
+        if (findState.open && isPdfDocument && findPdfChapters.isEmpty()) findPdfChapters = withContext(Dispatchers.IO) {
+            runCatching { com.example.reader.PdfChapterHelper.extractOrGenerateChapters(File(document.filePath), activeTotalPages.coerceAtLeast(1), document.chaptersJson) }.getOrDefault(emptyList())
+        }
+    }
+    val findChapterOf: () -> Pair<String, IntRange>? = {
+        if (isPdfDocument) {
+            val p = currentActivePage
+            val c = findPdfChapters.filter { it.level <= 1 && it.pageNumber <= p }.lastOrNull()
+            if (c == null) null else {
+                val next = findPdfChapters.firstOrNull { it.pageNumber > c.pageNumber && it.level <= c.level }
+                c.title to (c.pageNumber..(next?.pageNumber?.minus(1) ?: activeTotalPages))
+            }
+        } else {
+            val i = (currentActivePage - 1).coerceIn(0, (activeEpubPages.size - 1).coerceAtLeast(0))
+            val page = activeEpubPages.getOrNull(i)
+            if (page == null) null else {
+                var a = i; var b = i
+                while (a > 0 && activeEpubPages[a - 1].chapterIndex == page.chapterIndex) a--
+                while (b < activeEpubPages.size - 1 && activeEpubPages[b + 1].chapterIndex == page.chapterIndex) b++
+                page.chapterTitle to ((a + 1)..(b + 1))
+            }
+        }
+    }
     if (findState.open) {
         Box(Modifier.fillMaxSize().navigationBarsPadding().padding(start = 8.dp, end = 8.dp, bottom = if (isUiVisible) 60.dp else 8.dp), contentAlignment = Alignment.BottomCenter) {
             FindBar(findState, findSearch, findJump, Modifier.widthIn(max = 760.dp),
-                statusOf = if (isPdfDocument) ({ com.example.reader.SearchIndex.status(context, document) }) else null)
+                statusOf = if (isPdfDocument) ({ com.example.reader.SearchIndex.status(context, document) }) else null,
+                doc = document, totalPages = if (isPdfDocument) activeTotalPages else activeEpubPages.size,
+                chapterOf = findChapterOf)
         }
     }
 

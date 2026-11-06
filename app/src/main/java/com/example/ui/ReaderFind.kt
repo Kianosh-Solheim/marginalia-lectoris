@@ -37,7 +37,9 @@ data class PendingFind(val docId: Long, val query: String, val whole: Boolean, v
 val pendingFind = mutableStateOf<PendingFind?>(null)
 
 /** One match in the open book: [page] is the reader's page (1-based). */
-data class FindHit(val page: Int, val where: String, val snippet: String, val start: Int, val end: Int)
+data class FindHit(val page: Int, val where: String, val snippet: String, val start: Int, val end: Int,
+                   /** For a note made from the match: the book's position (PDF page, EPUB position), printed page label, chapter. */
+                   val loc: Int = page, val label: String = "", val chapter: String = "")
 
 /** The find bar's state, kept per book while it is open. */
 class FindState {
@@ -49,6 +51,9 @@ class FindState {
     /** Also similar spellings (fuzzy only; otherwise tried only when nothing is found). */
     var typos by mutableStateOf(false)
     var hits by mutableStateOf<List<FindHit>>(emptyList())
+    /** All matches in the book ([hits] may be only those in the chapter being read). */
+    var all by mutableStateOf<List<FindHit>>(emptyList())
+    var chapterOnly by mutableStateOf(false)
     var index by mutableIntStateOf(-1)
     var busy by mutableStateOf(false)
     var searched by mutableStateOf("")
@@ -62,7 +67,8 @@ suspend fun findInPages(ctx: android.content.Context, pages: List<com.example.re
         pages.forEachIndexed { i, p ->
             val text = p.paragraphs.joinToString("\n")
             if (text.isBlank()) return@forEachIndexed
-            SearchIndex.findIn(text, q).forEach { (s, a, b) -> out += FindHit(i + 1, p.pageEquivalentLabel.takeIf { it.isNotBlank() }?.let { "p. $it" } ?: p.chapterTitle, s, a, b) }
+            SearchIndex.findIn(text, q).forEach { (s, a, b) -> out += FindHit(i + 1, p.pageEquivalentLabel.takeIf { it.isNotBlank() }?.let { "p. $it" } ?: p.chapterTitle, s, a, b,
+                loc = p.startStableLocation, label = p.pageEquivalentLabel, chapter = p.chapterTitle) }
         }
         return out
     }
@@ -73,7 +79,7 @@ suspend fun findInPages(ctx: android.content.Context, pages: List<com.example.re
 
 /** Matches in a PDF, from the full-text index (the book is read first if it has not been yet). */
 suspend fun findInPdf(ctx: android.content.Context, doc: DocumentEntity, query: String, whole: Boolean, exact: Boolean, typos: Boolean = false): List<FindHit> =
-    SearchIndex.searchBook(ctx, doc, query, whole, exact, kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { SearchIndex.prepare(ctx, query, whole, exact, typos) }).map { h -> FindHit(h.loc, if (h.label.isNotBlank() && h.label != h.loc.toString()) "p. ${h.label} (PDF ${h.loc})" else "p. ${h.loc}", h.snippet, h.start, h.end) }
+    SearchIndex.searchBook(ctx, doc, query, whole, exact, kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { SearchIndex.prepare(ctx, query, whole, exact, typos) }).map { h -> FindHit(h.loc, if (h.label.isNotBlank() && h.label != h.loc.toString()) "p. ${h.label} (PDF ${h.loc})" else "p. ${h.loc}", h.snippet, h.start, h.end, loc = h.loc, label = h.label) }
 
 private fun snippetText(h: FindHit) = buildAnnotatedString {
     append(h.snippet.substring(0, h.start.coerceIn(0, h.snippet.length)))
@@ -87,7 +93,14 @@ private fun snippetText(h: FindHit) = buildAnnotatedString {
  */
 @Composable
 fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>, onJump: (FindHit) -> Unit, modifier: Modifier = Modifier,
-            statusOf: (() -> SearchIndex.Status)? = null) {
+            statusOf: (() -> SearchIndex.Status)? = null, doc: DocumentEntity? = null, totalPages: Int = 0,
+            chapterOf: (() -> Pair<String, IntRange>?)? = null) {
+    var showHelp by remember { mutableStateOf(false) }
+    var noteFor by remember { mutableStateOf<FindHit?>(null) }
+    val latestChapterOf by rememberUpdatedState(chapterOf)
+    /** The matches shown: all, or only those in the chapter being read. */
+    fun scoped(all: List<FindHit>): List<FindHit> =
+        if (state.chapterOnly) latestChapterOf?.invoke()?.let { (_, r) -> all.filter { it.page in r } } ?: all else all
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     LaunchedEffect(Unit) { if (state.searched.isBlank() && state.query.isBlank()) { state.exact = context.getSharedPreferences("search", 0).getBoolean("exact", false); state.typos = context.getSharedPreferences("search", 0).getBoolean("typos", false) } }
@@ -103,8 +116,10 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
         if (q.isEmpty()) { state.hits = emptyList(); state.index = -1; return }
         state.busy = true
         scope.launch {
-            state.hits = runCatching { search(q, state.whole) }.getOrDefault(emptyList())
+            state.all = runCatching { search(q, state.whole) }.getOrDefault(emptyList())
+            state.hits = scoped(state.all)
             state.searched = q; state.busy = false; state.index = -1
+            if (q.length >= 2) SearchIndex.updateSaved(context, "add", org.json.JSONObject().put("q", q).put("mode", if (state.exact) "exact" else "fuzzy").put("whole", state.whole).put("typos", state.typos))
             if (thenGo && state.hits.isNotEmpty()) go(0)
         }
     }
@@ -121,7 +136,8 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
             status = st
             if (changed && state.searched.isNotBlank() && !state.busy) {
                 val keep = state.index
-                state.hits = runCatching { search(state.searched, state.whole) }.getOrDefault(state.hits)
+                state.all = runCatching { search(state.searched, state.whole) }.getOrDefault(state.all)
+                state.hits = scoped(state.all)
                 state.index = keep.coerceAtMost(state.hits.size - 1)
             }
             kotlinx.coroutines.delay(if (st.state == "done" || st.state == "none") 15000 else 2500)
@@ -156,6 +172,19 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
             InkChip("List", listOpen, { listOpen = true })
             InkChip("×", false, { state.open = false })
         }
+        // This chapter only · the hit map (where the matches are in the book) · help
+        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (chapterOf != null) {
+                val ch = remember(state.chapterOnly, state.index, state.hits) { if (state.chapterOnly) chapterOf()?.first.orEmpty() else "" }
+                InkChip(if (state.chapterOnly && ch.isNotBlank()) "This chapter: ${ch.take(28)}" else "This chapter only", state.chapterOnly, {
+                    state.chapterOnly = !state.chapterOnly; state.hits = scoped(state.all.ifEmpty { state.hits }); state.index = -1
+                })
+            }
+            Box(Modifier.weight(1f)) {
+                HitMapStrip(state.hits.map { it.page }, totalPages, state.index, { go(it) })
+            }
+            InkChip("?", showHelp, { showHelp = true })
+        }
         status?.let { st ->
             val line = when (st.state) {
                 "done" -> null
@@ -183,10 +212,13 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
             text = {
                 LazyColumn(Modifier.heightIn(max = 520.dp)) {
                     itemsIndexed(state.hits.take(1000)) { i, h ->
-                        Column(Modifier.fillMaxWidth().background(if (i == state.index) Color(0xFFFEF9C3) else Color.White)
-                            .clickable { listOpen = false; go(i) }.padding(vertical = 7.dp)) {
-                            Text(h.where, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF52525B))
-                            Text(snippetText(h), fontSize = 14.sp, color = Color.Black)
+                        Row(Modifier.fillMaxWidth().background(if (i == state.index) Color(0xFFFEF9C3) else Color.White)
+                            .clickable { listOpen = false; go(i) }.padding(vertical = 7.dp), verticalAlignment = Alignment.Top) {
+                            Column(Modifier.weight(1f)) {
+                                Text(h.where, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color(0xFF52525B))
+                                Text(snippetText(h), fontSize = 14.sp, color = Color.Black)
+                            }
+                            if (doc != null) InkChip("+ Note", false, { noteFor = h })
                         }
                         HorizontalDivider(color = Color(0xFFE4E4E7))
                     }
@@ -194,4 +226,6 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
             },
             confirmButton = { TextButton(onClick = { listOpen = false }) { Text("Close", color = Color.Black) } })
     }
+    if (showHelp) SearchHelpDialog { showHelp = false }
+    noteFor?.let { h -> if (doc != null) NoteFromHitDialog(doc, h.loc, h.label, h.chapter, h.snippet, h.start, h.end, { noteFor = null }) }
 }
