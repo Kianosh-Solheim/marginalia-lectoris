@@ -274,7 +274,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 val q = req.query["q"].orEmpty()
                 val whole = req.query["whole"] == "1"
                 val exact = req.query["mode"] == "exact"
-                val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact) }
+                val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact, req.query["typos"] == "1") }
                 val hits = com.example.reader.SearchIndex.searchBook(context, doc, q, whole, exact, pq)
                 val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, doc.id, exact = exact, prepared = pq)
                 HttpResponse.json(JSONObject().put("q", q).put("count", hits.size).put("variants", variantsJson(pq)).put("status", searchStatusJson(doc)).put("indexing", progressJson())
@@ -1096,7 +1096,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         val q = req.query["q"].orEmpty()
         val whole = req.query["whole"] == "1"
         val exact = req.query["mode"] == "exact"
-        val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact) }
+        val pq = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.prepare(context, q, whole, exact, req.query["typos"] == "1") }
         val books = withContext(Dispatchers.IO) { com.example.reader.SearchIndex.search(context, q, whole, perBook = 5, exact = exact, prepared = pq) }
         val notes = com.example.reader.SearchIndex.searchNotes(context, q, whole, limit = 100, exact = exact, prepared = pq)
         com.example.reader.SearchIndex.kick(context)

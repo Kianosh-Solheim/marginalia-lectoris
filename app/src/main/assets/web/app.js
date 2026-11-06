@@ -2584,7 +2584,7 @@ async function openReader(id, params) {
   // From the library's search: open the search here, run it, and show the chosen match.
   const find = params.get('find');
   if (find && readerOpen) {
-    ctx.find = { q: find, whole: params.get('whole') === '1', exact: params.get('mode') === 'exact', hits: [], notes: [], i: -1 };
+    ctx.find = { q: find, whole: params.get('whole') === '1', exact: params.get('mode') === 'exact', typos: params.get('typos') === '1', hits: [], notes: [], i: -1 };
     if (side.hidden || sideMode !== 'search') toggleSide('search');
     await ctx.searchUi.run();
     const page = +params.get('page'), href = params.get('href'), occ = +params.get('occ') || 0;

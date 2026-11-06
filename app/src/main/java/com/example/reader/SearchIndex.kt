@@ -71,8 +71,9 @@ object SearchIndex {
 
     /** Every word in the index, once: for finding misspellings quickly. */
     private const val VOCAB = "CREATE TABLE IF NOT EXISTS vocab (term TEXT PRIMARY KEY) WITHOUT ROWID"
+    private const val META = "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)"
 
-    private class Db(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, "search_index.db", null, 2) {
+    private class Db(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, "search_index.db", null, 3) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE units (id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL, loc INTEGER, href TEXT, label TEXT, text TEXT)")
             db.execSQL("CREATE INDEX units_doc ON units(doc_id)")
@@ -81,15 +82,26 @@ object SearchIndex {
             // phase: text (being read) · ocr (text done, scanned pages left) · done
             db.execSQL("CREATE TABLE docs (doc_id INTEGER PRIMARY KEY, sig TEXT, phase TEXT, pages INTEGER, pages_done INTEGER, ocr_done INTEGER, updated INTEGER)")
             db.execSQL("CREATE TABLE ocr_todo (doc_id INTEGER, page INTEGER, PRIMARY KEY(doc_id, page))")
+            db.execSQL(META)
         }
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            listOf("fts_terms", "vocab", "units", "fts", "docs", "ocr_todo").forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
+            if (oldVersion == 2) {
+                // Better word splitting: the word index is made again from the text already read (no new OCR).
+                listOf("fts_terms", "vocab", "fts").forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
+                db.execSQL("CREATE VIRTUAL TABLE fts USING fts4(body, tokenize=simple)")
+                db.execSQL(VOCAB)
+                db.execSQL(META)
+                db.execSQL("INSERT OR REPLACE INTO meta(k, v) VALUES('rebuild', '0')")
+                return
+            }
+            listOf("fts_terms", "vocab", "units", "fts", "docs", "ocr_todo", "meta").forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
             onCreate(db)
         }
         // Searching can read while the background reader writes.
         override fun onConfigure(db: SQLiteDatabase) { runCatching { db.enableWriteAheadLogging() } }
         override fun onOpen(db: SQLiteDatabase) {
             runCatching { db.execSQL(VOCAB) }
+            runCatching { db.execSQL(META) }
             runCatching { db.execSQL("DROP TABLE IF EXISTS fts_terms") }
         }
     }
@@ -120,7 +132,8 @@ object SearchIndex {
         while (i < s.length) {
             val c = s[i]
             // A word broken over a line with a hyphen: "vol-\nden" → "volden".
-            if ((c == '-' || c == '\u00AD') && i > 0 && s[i - 1].isLetter()) {
+            if (c == '\u00AD') { i++; continue }   // soft hyphen: never part of the word
+            if ((c == '-' || c == '\u2010' || c == '\u2011') && i > 0 && s[i - 1].isLetter()) {
                 var j = i + 1
                 while (j < s.length && (s[j] == ' ' || s[j] == '\t' || s[j] == '\r')) j++
                 if (j < s.length && s[j] == '\n') {
@@ -128,7 +141,6 @@ object SearchIndex {
                     while (j < s.length && s[j].isWhitespace()) j++
                     if (j < s.length && s[j].isLowerCase()) { i = j; continue }
                 }
-                if (c == '\u00AD') { i++; continue }
             }
             val f = if (c.isWhitespace()) " " else foldChar(c)
             for (ch in f) {
@@ -143,6 +155,23 @@ object SearchIndex {
     }
 
     fun norm(s: String): String = normWithMap(s).first
+
+    /** What goes into the word index: only the words, separated by single spaces (quotes, dashes and the like are not part of any word). */
+    fun ftsBody(normText: String): String = TOK.findAll(normText).joinToString(" ") { it.value }
+
+    /**
+     * A PDF page whose text layer looks broken: garbled symbols, or words run together without spaces.
+     * Such pages are read again with OCR.
+     */
+    fun weakText(t: String): Boolean {
+        val letters = t.count { it.isLetter() }
+        if (letters < 20) return false   // (nearly empty pages are handled as scanned pages)
+        val nonSpace = t.count { !it.isWhitespace() }
+        if (t.count { it == '\uFFFD' } > 5) return true
+        if (letters.toDouble() / nonSpace < 0.4) return true
+        val words = TOK.findAll(t).count()
+        return words > 0 && letters.toDouble() / words > 14.0
+    }
 
     private val TOK = Regex("[\\p{L}\\p{N}]+")
     /** The words of [s] in their forgiving form (letters and digits; everything else separates). */
@@ -176,6 +205,21 @@ object SearchIndex {
         fun ftsOf(seg: List<String>): String =
             if (seg.size > 1) "\"" + seg.dropLast(1).joinToString(" ") + " " + seg.last() + (if (prefix(seg.last())) "*" else "") + "\""
             else (listOf(seg[0]) + variants[seg[0]].orEmpty()).distinct().joinToString(" OR ") { if (prefix(seg[0])) "$it*" else it }
+
+        /** The whole search as one word-index query: a phrase, or the parts near each other. */
+        fun ftsMatch(): String {
+            val parts = segs.map { seg ->
+                if (seg.size > 1) "\"" + seg.dropLast(1).joinToString(" ") + " " + seg.last() + (if (prefix(seg.last())) "*" else "") + "\""
+                else if (prefix(seg[0])) seg[0] + "*" else seg[0]
+            }
+            return if (parts.size == 1) parts[0] else parts.joinToString(" NEAR/${totalWords + 10} ")
+        }
+
+        /** Where the longest part matches, alone (for placing a passage). */
+        fun looseRanges(normText: String): List<IntRange> {
+            val seg = segs.maxByOrNull { it.sumOf { t -> t.length } } ?: return emptyList()
+            return Query("\"" + seg.joinToString(" ") + "\"", whole, false).also { it.variants = variants }.ranges(normText)
+        }
 
         private fun tokOk(seg: List<String>, j: Int, tok: String): Boolean {
             val t = seg[j]
@@ -277,13 +321,18 @@ object SearchIndex {
     }
 
     /** A search made ready: misspellings looked up in the books (fuzzy only). */
-    fun prepare(ctx: Context, raw: String, whole: Boolean, exact: Boolean): Query {
+    fun prepare(ctx: Context, raw: String, whole: Boolean, exact: Boolean, typos: Boolean = false): Query {
         val q = Query(raw, whole, exact)
-        if (!exact && !q.isEmpty) {
-            val w = runCatching { db(ctx) }.getOrNull()
-            if (w != null) q.variants = q.segs.filter { q.typoOk(it) }.associate { it[0] to variantsOf(w, it[0]) }.filterValues { it.isNotEmpty() }
-        }
+        if (typos) addVariants(ctx, q)
         return q
+    }
+
+    /** Looks up similar spellings for the search's words (fuzzy only). True when any were found. */
+    fun addVariants(ctx: Context, q: Query): Boolean {
+        if (q.exact || q.isEmpty) return false
+        val w = runCatching { db(ctx) }.getOrNull() ?: return false
+        q.variants = q.segs.filter { q.typoOk(it) }.associate { it[0] to variantsOf(w, it[0]) }.filterValues { it.isNotEmpty() }
+        return q.variants.isNotEmpty()
     }
 
     // ------------------------------------------------------------------ reading the books
@@ -390,7 +439,7 @@ object SearchIndex {
     private fun insertChunk(w: SQLiteDatabase, id: Long, u: Chunk) {
         val rowId = w.insert("units", null, ContentValues().apply { put("doc_id", id); put("loc", u.loc); put("href", u.href); put("label", u.label); put("text", u.text) })
         val n = norm(u.text)
-        w.execSQL("INSERT INTO fts(rowid, body) VALUES(?, ?)", arrayOf<Any>(rowId, n))
+        w.execSQL("INSERT INTO fts(rowid, body) VALUES(?, ?)", arrayOf<Any>(rowId, ftsBody(n)))
         addVocab(w, n)
         if (variantCache.isNotEmpty()) variantCache.clear()
     }
@@ -400,6 +449,53 @@ object SearchIndex {
         TOK.findAll(normText).forEach { m -> if (m.value.length in 4..40) terms += m.value }
         if (terms.isEmpty()) return
         runCatching { w.compileStatement("INSERT OR IGNORE INTO vocab(term) VALUES(?)").use { st -> terms.forEach { t -> st.bindString(1, t); st.executeInsert(); st.clearBindings() } } }
+    }
+
+    private fun meta(w: SQLiteDatabase, k: String): String? = runCatching { w.rawQuery("SELECT v FROM meta WHERE k=?", arrayOf(k)).use { if (it.moveToFirst()) it.getString(0) else null } }.getOrNull()
+
+    /**
+     * After an update with better word splitting: makes the word index again from the text already read
+     * (no PDF is opened again). PDF pages whose text layer looks broken are queued for OCR on the way.
+     */
+    private suspend fun rebuildIfNeeded(app: Context, pdfIds: Set<Long>) {
+        val w = db(app)
+        var last = meta(w, "rebuild")?.toLongOrNull() ?: return
+        val total = w.rawQuery("SELECT COUNT(*) FROM units", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        var done = w.rawQuery("SELECT COUNT(*) FROM units WHERE id <= ?", arrayOf(last.toString())).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        val weakDocs = HashSet<Long>()
+        while (true) {
+            val batch = w.rawQuery("SELECT id, doc_id, loc, href, text FROM units WHERE id > ? ORDER BY id LIMIT 200", arrayOf(last.toString())).use { c ->
+                buildList { while (c.moveToNext()) add(listOf(c.getLong(0), c.getLong(1), c.getInt(2), c.getString(3).orEmpty(), c.getString(4).orEmpty())) }
+            }
+            if (batch.isEmpty()) break
+            mutex.withLock {
+                w.beginTransaction()
+                try {
+                    batch.forEach { r ->
+                        val id = r[0] as Long; val doc = r[1] as Long; val text = r[4] as String
+                        val n = norm(text)
+                        w.execSQL("INSERT OR REPLACE INTO fts(rowid, body) VALUES(?, ?)", arrayOf<Any>(id, ftsBody(n)))
+                        addVocab(w, n)
+                        if (doc in pdfIds && (r[3] as String).isEmpty() && weakText(text)) {
+                            w.execSQL("INSERT OR IGNORE INTO ocr_todo(doc_id, page) VALUES(?, ?)", arrayOf<Any>(doc, r[2] as Int))
+                            weakDocs += doc
+                        }
+                    }
+                    last = batch.last()[0] as Long
+                    w.execSQL("INSERT OR REPLACE INTO meta(k, v) VALUES('rebuild', ?)", arrayOf<Any>(last.toString()))
+                    w.setTransactionSuccessful()
+                } finally { w.endTransaction() }
+            }
+            done += batch.size
+            _progress.value = _progress.value.copy(running = true, current = "Updating the search index for better matching", currentId = 0, phase = "update", page = done, pages = total)
+            yield()
+        }
+        mutex.withLock {
+            weakDocs.forEach { d -> w.execSQL("UPDATE docs SET phase='ocr' WHERE doc_id=? AND phase='done'", arrayOf<Any>(d)) }
+            w.execSQL("DELETE FROM meta WHERE k='rebuild'")
+        }
+        variantCache.clear()
+        Log.i(TAG, "Search index rebuilt: $total pages, ${weakDocs.size} books with pages queued for OCR")
     }
 
     /** Books read for search before the word list existed: fill it in once, in the background. */
@@ -481,7 +577,11 @@ object SearchIndex {
                 try {
                     batch.forEach { (p, text) ->
                         if (text.count { it.isLetterOrDigit() } < 20) w.execSQL("INSERT OR IGNORE INTO ocr_todo(doc_id, page) VALUES(?, ?)", arrayOf<Any>(d.id, p))
-                        else insertChunk(w, d.id, Chunk(p, "", labels?.getOrNull(p - 1)?.takeIf { it != p.toString() }.orEmpty(), text))
+                        else {
+                            insertChunk(w, d.id, Chunk(p, "", labels?.getOrNull(p - 1)?.takeIf { it != p.toString() }.orEmpty(), text))
+                            // Searchable now as it is; read again with OCR later if the text layer looks broken.
+                            if (weakText(text)) w.execSQL("INSERT OR IGNORE INTO ocr_todo(doc_id, page) VALUES(?, ?)", arrayOf<Any>(d.id, p))
+                        }
                     }
                     setRow(w, d.id, sig, if (end >= n) "ocr" else "text", n, end, 0)
                     w.setTransactionSuccessful()
@@ -511,7 +611,17 @@ object SearchIndex {
                 val w = db(ctx)
                 w.beginTransaction()
                 try {
-                    if (text.count { it.isLetterOrDigit() } >= 10) insertChunk(w, d.id, Chunk(p, "", "", text))
+                    if (text.count { it.isLetterOrDigit() } >= 10) {
+                        // A page that had a broken text layer: the OCR text replaces it, unless OCR did no better.
+                        val old = w.rawQuery("SELECT id, label, text FROM units WHERE doc_id=? AND loc=? AND href=''", arrayOf(d.id.toString(), p.toString())).use { c ->
+                            if (c.moveToFirst()) Triple(c.getLong(0), c.getString(1).orEmpty(), c.getString(2).orEmpty()) else null }
+                        if (old == null) insertChunk(w, d.id, Chunk(p, "", "", text))
+                        else if (!weakText(text)) {
+                            w.execSQL("DELETE FROM fts WHERE rowid=?", arrayOf<Any>(old.first))
+                            w.execSQL("DELETE FROM units WHERE id=?", arrayOf<Any>(old.first))
+                            insertChunk(w, d.id, Chunk(p, "", old.second, text))
+                        }
+                    }
                     w.execSQL("DELETE FROM ocr_todo WHERE doc_id=? AND page=?", arrayOf<Any>(d.id, p))
                     doneHere++
                     val rr = row(ctx, d.id)
@@ -565,6 +675,7 @@ object SearchIndex {
                 val ids = all.map { it.id }.toSet()
                 val known = db(app).rawQuery("SELECT doc_id FROM docs", null).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
                 mutex.withLock { val w = db(app); known.filter { it !in ids }.forEach { removeLocked(w, it) } }
+                runCatching { rebuildIfNeeded(app, all.filter { isPdf(it) }.map { it.id }.toSet()) }.onFailure { Log.w(TAG, "Rebuild", it) }
                 runCatching { buildVocabIfMissing(app) }.onFailure { Log.w(TAG, "Word list", it) }
                 while (isActive) {
                     val docs = dao.getAllDocumentsSnapshot().filter { indexable(it) }
@@ -642,9 +753,71 @@ object SearchIndex {
         val stale = { gen.get() != my }
         synchronized(searchLock) {
             if (stale()) return emptyList()
-            return try { searchLocked(ctx, raw, whole, docId, perBook, exact, prepared, stale) }
+            return try {
+                val q = prepared ?: prepare(ctx, raw, whole, exact)
+                if (q.variants.isNotEmpty()) return searchLocked(ctx, raw, whole, docId, perBook, exact, q, stale)
+                val r = searchFast(ctx, q, docId, perBook, stale)
+                // Nothing found: try similar spellings (fuzzy searches only).
+                if (r.isEmpty() && !stale() && addVariants(ctx, q)) searchLocked(ctx, raw, whole, docId, perBook, exact, q, stale) else r
+            }
             catch (e: Throwable) { Log.w(TAG, "Search failed for '$raw'", e); emptyList() }
         }
+    }
+
+    /**
+     * The quick search, answered by the word index itself: an exact sentence as a phrase, fuzzy words as
+     * "near each other". Only the pages shown are read, for their passages.
+     */
+    private fun searchFast(ctx: Context, q: Query, docId: Long?, perBook: Int, stale: () -> Boolean): List<Pair<Long, Pair<Int, List<Hit>>>> {
+        val t0 = System.currentTimeMillis()
+        val w = db(ctx)
+        val match = q.ftsMatch()
+        val counts = LinkedHashMap<Long, Int>()
+        val keepIds = HashMap<Long, ArrayList<Long>>()
+        val keep = if (docId != null) 3000 else perBook
+        val sql = "SELECT u.doc_id, u.id FROM fts JOIN units u ON u.id = fts.rowid WHERE fts MATCH ?" +
+            (if (docId != null) " AND u.doc_id = ?" else "") + " ORDER BY u.doc_id, u.loc, u.id LIMIT 300000"
+        w.rawQuery(sql, if (docId != null) arrayOf(match, docId.toString()) else arrayOf(match)).use { c ->
+            while (c.moveToNext()) {
+                val doc = c.getLong(0)
+                counts[doc] = (counts[doc] ?: 0) + 1
+                val l = keepIds.getOrPut(doc) { ArrayList() }
+                if (l.size < keep) l += c.getLong(1)
+            }
+        }
+        if (stale()) return emptyList()
+        val docs = if (docId != null) counts.keys.toList() else counts.keys.sortedByDescending { counts[it] ?: 0 }.take(200)
+        // Passages for the pages shown (in the library: the books listed first).
+        val withPassages = if (docId != null) docs else docs.take(100)
+        val ids = withPassages.flatMap { keepIds[it].orEmpty() }
+        val hits = HashMap<Long, ArrayList<Hit>>()
+        val occurrences = HashMap<Long, Int>()
+        val occ = HashMap<String, Int>()
+        for (part in ids.chunked(200)) {
+            if (stale()) return emptyList()
+            w.rawQuery("SELECT doc_id, loc, href, label, text FROM units WHERE id IN (${part.joinToString(",")}) ORDER BY doc_id, loc, id", null).use { c ->
+                while (c.moveToNext()) {
+                    val doc = c.getLong(0); val loc = c.getInt(1); val href = c.getString(2).orEmpty(); val label = c.getString(3).orEmpty(); val text = c.getString(4).orEmpty()
+                    val (n, map) = normWithMap(text)
+                    // The index found the page; place the passage (if the exact place cannot be told, at the most telling word).
+                    val rs = q.ranges(n).ifEmpty { q.looseRanges(n).take(1) }
+                    val l = hits.getOrPut(doc) { ArrayList() }
+                    val key = "$doc|$href"
+                    if (rs.isEmpty()) {
+                        l += Hit(doc, loc, href, label, collapse(text.take(160)).trim() + if (text.length > 160) "…" else "", 0, 0, 0)
+                        occurrences[doc] = (occurrences[doc] ?: 0) + 1
+                    }
+                    rs.forEach { r ->
+                        val o = occ.getOrDefault(key, 0); occ[key] = o + 1
+                        val (sn, a, b) = passage(text, map, r)
+                        if (l.size < (if (docId != null) 2000 else perBook)) l += Hit(doc, loc, href, label, sn, a, b, o)
+                        occurrences[doc] = (occurrences[doc] ?: 0) + 1
+                    }
+                }
+            }
+        }
+        Log.i(TAG, "Search '${q.ftsMatch()}': ${counts.values.sum()} pages in ${counts.size} books, ${System.currentTimeMillis() - t0} ms")
+        return docs.map { d -> d to ((if (docId != null) occurrences[d] ?: counts[d] ?: 0 else counts[d] ?: 0) to hits[d].orEmpty()) }
     }
 
     private fun searchLocked(ctx: Context, raw: String, whole: Boolean, docId: Long?, perBook: Int, exact: Boolean, prepared: Query?, stale: () -> Boolean): List<Pair<Long, Pair<Int, List<Hit>>>> {
@@ -669,7 +842,7 @@ object SearchIndex {
         var read = 0
         for (part in cand.asList().chunked(200)) {
             if (stale()) { Log.i(TAG, "Search '$raw' overtaken"); return emptyList() }
-            w.rawQuery("SELECT doc_id, loc, href, label, text FROM units WHERE id IN (${part.joinToString(",")}) ORDER BY id", null).use { c ->
+            w.rawQuery("SELECT doc_id, loc, href, label, text FROM units WHERE id IN (${part.joinToString(",")}) ORDER BY doc_id, loc, id", null).use { c ->
                 while (c.moveToNext()) {
                     read++
                     val doc = c.getLong(0); val loc = c.getInt(1); val href = c.getString(2).orEmpty(); val label = c.getString(3).orEmpty(); val text = c.getString(4).orEmpty()

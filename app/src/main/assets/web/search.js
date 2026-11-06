@@ -26,7 +26,8 @@ const wordsOf = s => foldText(s).match(/[\p{L}\p{N}]+/gu) || [];
 function findOpts(o) { return o && typeof o === 'object' ? { whole: !!o.whole, exact: !!o.exact, variants: o.variants || {} } : { whole: !!o, exact: false, variants: {} }; }
 /** The options of the reader's or library's search state f. */
 const optsOf = f => ({ whole: !!f.whole, exact: !!f.exact, variants: f.variants || {} });
-const modeParam = o => (o.whole ? '&whole=1' : '') + (o.exact ? '&mode=exact' : '');
+const modeParam = o => (o.whole ? '&whole=1' : '') + (o.exact ? '&mode=exact' : (o.typos ? '&typos=1' : ''));
+const usedVariants = r => r && r.variants && Object.keys(r.variants).length > 0;
 
 /**
  * A search, matched as on the tablet. Fuzzy: each word (or "quoted phrase") close to the others, in
@@ -99,16 +100,17 @@ function parseQuery(raw, opt) {
 /** Fuzzy | Exact switch; onChange(exact). */
 function modeSwitch(exact, onChange) {
   const mk = (label, v, title) => h('button', { class: 'btn quiet seg' + (exact === v ? ' on' : ''), title, onclick: () => { if (exact === v) return; exact = v; fz.classList.toggle('on', !v); ex.classList.toggle('on', v); onChange(v); } }, label);
-  const fz = mk('Fuzzy', false, 'The words close together, in any order; small misspellings are found too');
+  const fz = mk('Fuzzy', false, 'The words close together, in any order');
   const ex = mk('Exact', true, 'The words in this order, as one sentence (case, accents and punctuation ignored)');
   return h('span', { class: 'segsw' }, fz, ex);
 }
 const modeHelp = exact => exact ? 'Exact: the words in this order, as one sentence. Case, accents, punctuation and words broken over a line are ignored.'
-  : 'Fuzzy: the words close together, in any order; small misspellings are found too, and words find their longer forms (vold → volden). "Quote" a phrase to keep it together.';
+  : 'Fuzzy: the words close together, in any order; words find their longer forms (vold → volden). "Quote" a phrase to keep it together. Similar spellings: tick Typos (tried by itself when nothing is found).';
 
 /** What the tablet's search indexer is doing, in words. */
 function indexingText(ix) {
   if (!ix || !ix.running) return '';
+  if (ix.phase === 'update') return `Updating the search index for better matching: ${ix.page} of ${ix.pages} pages (searches may miss some results until it is done)`;
   const what = ix.phase === 'ocr' ? `reading scanned pages with OCR: ${ix.page} of ${ix.pages}` : ix.pages ? `page ${ix.page} of ${ix.pages}` : 'reading';
   return `Preparing books for search: ${ix.done} of ${ix.total} ready · now “${ix.current}” (${what})` + (ix.ocrLeft && ix.phase !== 'ocr' ? ` · ${ix.ocrLeft} scanned pages wait for OCR` : '');
 }
@@ -139,14 +141,17 @@ async function showTextSearch(params) {
   app.appendChild(main);
   const input = h('input', { type: 'search', placeholder: 'Search the text of every book, and your notes — words or a sentence…', value: params.get('q') || '', autofocus: true });
   const whole = h('input', { type: 'checkbox', checked: localGet('ml.findWhole', '0') === '1' });
+  const typos = h('input', { type: 'checkbox', checked: localGet('ml.findTypos', '0') === '1' });
+  const typosLbl = h('label', { class: 'row', title: 'Also find similar spellings (and OCR mistakes). Without this, they are only tried when nothing else is found.', style: { gap: '4px', fontSize: '13px', whiteSpace: 'nowrap' } }, typos, 'Typos');
   let exact = localGet('ml.findExact', '0') === '1';
   const help = h('div', { class: 'muted', style: { fontSize: '12px', margin: '4px 0 10px' } }, modeHelp(exact));
-  const sw = modeSwitch(exact, v => { exact = v; localSet('ml.findExact', v ? '1' : '0'); help.textContent = modeHelp(v); run(); });
+  const sw = modeSwitch(exact, v => { exact = v; localSet('ml.findExact', v ? '1' : '0'); help.textContent = modeHelp(v); typosLbl.hidden = v; run(); });
+  typosLbl.hidden = exact;
   const status = h('div', { class: 'muted mono', style: { fontSize: '12px', minHeight: '18px' } });
   const ixLine = h('div', { class: 'ixline', hidden: true });
   const out = h('div');
   main.append(h('h1', null, 'Search'),
-    h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } }, input, sw, h('label', { class: 'row', style: { gap: '4px', fontSize: '13px', whiteSpace: 'nowrap' } }, whole, 'Whole words')),
+    h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } }, input, sw, h('label', { class: 'row', style: { gap: '4px', fontSize: '13px', whiteSpace: 'nowrap' } }, whole, 'Whole words'), typosLbl),
     help,
     ixLine, status, out);
   let seq = 0, timer = 0, again = 0, ixTimer = 0;
@@ -163,12 +168,14 @@ async function showTextSearch(params) {
     const my = ++seq;
     if (quiet !== true) status.textContent = 'Searching…';
     let r;
-    const o = { whole: whole.checked, exact };
+    const o = { whole: whole.checked, exact, typos: typos.checked };
     try { r = await api(`search?q=${encodeURIComponent(q)}${modeParam(o)}`); } catch (e) { fail(e); return; }
     if (my !== seq) return;
+    if (usedVariants(r)) o.typos = true;   // similar spellings were used: the book opens with them too
     const total = r.books.reduce((a, b) => a + b.count, 0);
     const ix = r.indexing;
-    status.textContent = `Found on ${total} page${total === 1 ? '' : 's'} in ${r.books.length} book${r.books.length === 1 ? '' : 's'} · ${r.notes.length} note${r.notes.length === 1 ? '' : 's'}`;
+    status.textContent = `Found on ${total} page${total === 1 ? '' : 's'} in ${r.books.length} book${r.books.length === 1 ? '' : 's'} · ${r.notes.length} note${r.notes.length === 1 ? '' : 's'}` +
+      (usedVariants(r) ? ` · including similar spellings (${Object.entries(r.variants).map(([k, v]) => k + ' → ' + v.slice(0, 4).join(', ')).join('; ')})` : '');
     showIx(ix);
     // While books are still being read, search again now and then: more results come in.
     clearTimeout(again); if (ix && ix.running) again = setTimeout(() => { if (document.body.contains(main)) run(true); }, 5000);
@@ -195,6 +202,7 @@ async function showTextSearch(params) {
   input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 450); });
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(timer); run(); } });
   whole.addEventListener('change', () => { localSet('ml.findWhole', whole.checked ? '1' : '0'); run(); });
+  typos.addEventListener('change', () => { localSet('ml.findTypos', typos.checked ? '1' : '0'); run(); });
   input.focus();
   if (input.value) run();
 }
@@ -203,9 +211,12 @@ async function showTextSearch(params) {
 
 /** The reader's search panel. ctx.find = { q, whole, hits, i }. */
 function readerSearchPanel(ctx, side) {
-  const f = ctx.find || (ctx.find = { q: '', whole: localGet('ml.findWhole', '0') === '1', exact: localGet('ml.findExact', '0') === '1', hits: [], notes: [], i: -1 });
+  const f = ctx.find || (ctx.find = { q: '', whole: localGet('ml.findWhole', '0') === '1', exact: localGet('ml.findExact', '0') === '1', typos: localGet('ml.findTypos', '0') === '1', hits: [], notes: [], i: -1 });
   const input = h('input', { type: 'search', placeholder: 'Search in this book…', value: f.q });
   const whole = h('input', { type: 'checkbox', checked: f.whole });
+  const typos = h('input', { type: 'checkbox', checked: !!f.typos });
+  const typosLbl = h('label', { class: 'row', title: 'Also find similar spellings (and OCR mistakes)', style: { gap: '4px', fontSize: '12px' } }, typos, 'Typos');
+  typosLbl.hidden = !!f.exact;
   const info = h('div', { class: 'muted mono', style: { fontSize: '12px', margin: '6px 0' } });
   const list = h('div', { class: 'fhits' });
   const stLine = h('div', { class: 'ixline small' });
@@ -217,7 +228,7 @@ function readerSearchPanel(ctx, side) {
   };
   const draw = () => {
     info.textContent = f.q ? (f.busy ? 'Searching…' : `${f.hits.length} match${f.hits.length === 1 ? '' : 'es'}${f.i >= 0 ? ` · ${f.i + 1} of ${f.hits.length}` : ''}${f.notes.length ? ` · ${f.notes.length} in notes` : ''}` +
-      (f.status && f.status.state !== 'done' ? ' so far' : '')) : '';
+      (f.status && f.status.state !== 'done' ? ' so far' : '') + (!f.busy && usedVariants(f) ? ' · including similar spellings' : '')) : '';
     stLine.textContent = bookIndexText(f.status);
     stLine.classList.toggle('busy', !!f.status && f.status.state !== 'done');
     clear(list);
@@ -235,7 +246,7 @@ function readerSearchPanel(ctx, side) {
   const run = async quiet => {
     const q = input.value.trim();
     const same = quiet === true && q === f.q;
-    f.q = q; f.whole = whole.checked; if (!same) f.i = -1;
+    f.q = q; f.whole = whole.checked; f.typos = typos.checked; if (!same) f.i = -1;
     if (!q) { f.hits = []; f.notes = []; if (readerOpen && readerOpen.clearFind) readerOpen.clearFind(); draw(); return; }
     const my = ++seq; if (!same) { f.busy = true; draw(); }
     try {
@@ -256,13 +267,14 @@ function readerSearchPanel(ctx, side) {
     e.stopPropagation();
   });
   whole.addEventListener('change', () => { localSet('ml.findWhole', whole.checked ? '1' : '0'); run(); });
+  typos.addEventListener('change', () => { localSet('ml.findTypos', typos.checked ? '1' : '0'); run(); });
   side.append(h('h3', null, 'Search in this book'),
     h('div', { class: 'row', style: { gap: '4px' } }, input,
       h('button', { class: 'btn quiet', title: 'Previous (Shift+Enter)', onclick: () => go(f.i - 1) }, '↑'),
       h('button', { class: 'btn quiet', title: 'Next (Enter)', onclick: () => go(f.i + 1) }, '↓')),
     h('div', { class: 'row', style: { gap: '8px', marginTop: '4px', alignItems: 'center' } },
-      modeSwitch(!!f.exact, v => { f.exact = v; localSet('ml.findExact', v ? '1' : '0'); run(); }),
-      h('label', { class: 'row', style: { gap: '4px', fontSize: '12px' } }, whole, 'Whole words')),
+      modeSwitch(!!f.exact, v => { f.exact = v; localSet('ml.findExact', v ? '1' : '0'); typosLbl.hidden = v; run(); }),
+      h('label', { class: 'row', style: { gap: '4px', fontSize: '12px' } }, whole, 'Whole words'), typosLbl),
     stLine, info, list);
   if (!f.status) api(`doc/${ctx.d.id}/search?q=`).then(r => { f.status = r.status; draw(); }).catch(() => {});
   draw();
