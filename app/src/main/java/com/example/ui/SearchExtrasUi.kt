@@ -211,3 +211,64 @@ fun SavedSearchesRow(refresh: Int, onApply: (JSONObject) -> Unit) {
         if (recent.isNotEmpty()) InkChip("Clear recent", false, { saved = SearchIndex.updateSaved(context, "clear", null) })
     }
 }
+
+/** The AI search methods: key, label, what it does. */
+val aiMethods = listOf(
+    Triple("guided", "Guided", "The AI chosen in Settings → AI turns your question into the words authors would use (Norwegian and English), the normal search finds passages with them, and the AI picks the best and says why. Only those passages are sent to the AI."),
+    Triple("gemini", "Meaning · Gemini", "Compares the meaning of your question with every page, so passages count even when no words match. Needs the Gemini meaning index (below); your question is sent to Google."),
+    Triple("local", "Meaning · offline", "The same, with a small model on the tablet: nothing leaves the tablet. Needs the offline model and its index (below)."))
+
+/** Runs an AI search (on a background thread). */
+fun runAiSearch(ctx: android.content.Context, method: String, q: String, docId: Long?, filters: SearchIndex.Filters?): com.example.reader.AiSearch.Answer = when (method) {
+    "gemini" -> com.example.reader.AiSearch.semantic(ctx, q, com.example.reader.AiSearch.GEMINI, docId, filters)
+    "local" -> com.example.reader.AiSearch.semantic(ctx, q, com.example.reader.AiSearch.LOCAL, docId, filters)
+    else -> com.example.reader.AiSearch.guided(ctx, q, docId, filters)
+}
+
+/** The meaning indexes (Gemini and offline): how far, and the buttons to build, stop, download and delete. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AiIndexPanel() {
+    val context = LocalContext.current
+    val p by com.example.reader.AiSearch.progress.collectAsState()
+    val dl by com.example.reader.AiSearch.download.collectAsState()
+    var counts by remember { mutableStateOf<Pair<Pair<Int, Int>, Pair<Int, Int>>?>(null) }
+    var hasKey by remember { mutableStateOf(false) }
+    var model by remember { mutableStateOf(false) }
+    LaunchedEffect(p.running, p.done, dl.running) {
+        while (true) {
+            withContext(Dispatchers.IO) {
+                counts = com.example.reader.AiSearch.counts(context, com.example.reader.AiSearch.GEMINI) to com.example.reader.AiSearch.counts(context, com.example.reader.AiSearch.LOCAL)
+                hasKey = com.example.reader.AiPreferences(context).readKey(com.example.reader.AiProvider.GEMINI).isNotBlank()
+                model = com.example.reader.LocalEmbedder.installed(context.filesDir)
+            }
+            if (!p.running && !dl.running) break
+            kotlinx.coroutines.delay(3000)
+        }
+    }
+    val (g, l) = counts ?: ((0 to 0) to (0 to 0))
+    Column(Modifier.fillMaxWidth().border(1.dp, Color.Black).padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("MEANING INDEXES", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+        Text("Gemini: ${g.first} of ${g.second} pages" + (if (p.running && p.src == "gemini") " · ${p.note}" else "") + (if (!hasKey) " · add a Gemini API key in Settings → AI first" else ""),
+            fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.Black)
+        Text("Sends every page's text to Google once. The free quota is limited, so a big library can take hours (it waits and continues by itself); a paid key is quick and costs about one or two dollars.", fontSize = 12.sp, color = SGrey)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (p.running && p.src == "gemini") InkChip("Stop", false, { com.example.reader.AiSearch.stop() })
+            else if (hasKey && !p.running) InkChip(if (g.first > 0) "Update Gemini index" else "Build Gemini index", false, { com.example.reader.AiSearch.start(context, com.example.reader.AiSearch.GEMINI) })
+            if (g.first > 0 && !(p.running && p.src == "gemini")) InkChip("Delete Gemini index", false, { com.example.reader.AiSearch.delete(context, com.example.reader.AiSearch.GEMINI); counts = null })
+        }
+        HorizontalDivider(color = Color(0xFFE4E4E7))
+        Text(if (!model) "Offline: model not downloaded" else "Offline: ${l.first} of ${l.second} pages" + (if (p.running && p.src == "local") " · ${p.note}" else ""),
+            fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.Black)
+        if (dl.running) Text("Downloading the model: ${dl.done / 1048576} of ${dl.total / 1048576} MB", fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.Black)
+        if (dl.error.isNotBlank()) Text("Download: ${dl.error}", fontSize = 12.sp, color = Color(0xFFB91C1C))
+        Text("A small multilingual model (about 135 MB) on the tablet: nothing leaves it. Building the index takes a few hours on the tablet; it runs in the background and can be stopped and continued.", fontSize = 12.sp, color = SGrey)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (!model) { if (!dl.running) InkChip("Download the model (135 MB)", false, { com.example.reader.AiSearch.downloadModel(context) }) }
+            else if (p.running && p.src == "local") InkChip("Stop", false, { com.example.reader.AiSearch.stop() })
+            else if (!p.running) InkChip(if (l.first > 0) "Update offline index" else "Build offline index", false, { com.example.reader.AiSearch.start(context, com.example.reader.AiSearch.LOCAL) })
+            if (model && !(p.running && p.src == "local")) InkChip("Delete model and index", false, { com.example.reader.AiSearch.delete(context, com.example.reader.AiSearch.LOCAL, model = true); model = false; counts = null })
+        }
+        if (p.error.isNotBlank() && !p.running) Text("Last error: ${p.error}", fontSize = 12.sp, color = Color(0xFFB91C1C))
+    }
+}

@@ -1725,6 +1725,21 @@ fun ReaderScreen(
             runCatching { com.example.reader.PdfChapterHelper.extractOrGenerateChapters(File(document.filePath), activeTotalPages.coerceAtLeast(1), document.chaptersJson) }.getOrDefault(emptyList())
         }
     }
+    // AI search in this book: passages found by what they are about; an EPUB passage is placed on its reader page by its words.
+    val findAi: suspend (String, String) -> List<FindHit> = { method, q ->
+        withContext(Dispatchers.IO) {
+            val ans = runAiSearch(context, method, q, document.id, null)
+            ans.results.map { r ->
+                val page = if (isPdfDocument) r.loc else {
+                    val words = com.example.reader.SearchIndex.tokens(if (r.end > r.start) r.snippet.substring(r.start, r.end) else r.snippet.removePrefix("…")).take(7)
+                    val pq = com.example.reader.SearchIndex.Query("\"" + words.joinToString(" ") + "\"", false, true)
+                    activeEpubPages.indexOfFirst { p -> com.example.reader.SearchIndex.findIn(p.paragraphs.joinToString("\n"), pq).isNotEmpty() }.let { if (it < 0) 1 else it + 1 }
+                }
+                val where = (if (isPdfDocument) "p. ${r.label.ifBlank { r.loc.toString() }}" else r.label.ifBlank { "page $page" }) + " · ${(r.score * 100).toInt()}%" + (if (r.why.isNotBlank()) " · ✦ ${r.why}" else "")
+                FindHit(page, where, r.snippet, r.start, r.end, loc = r.loc, label = r.label)
+            }
+        }
+    }
     val findChapterOf: () -> Pair<String, IntRange>? = {
         if (isPdfDocument) {
             val p = currentActivePage
@@ -1749,7 +1764,7 @@ fun ReaderScreen(
             FindBar(findState, findSearch, findJump, Modifier.widthIn(max = 760.dp),
                 statusOf = if (isPdfDocument) ({ com.example.reader.SearchIndex.status(context, document) }) else null,
                 doc = document, totalPages = if (isPdfDocument) activeTotalPages else activeEpubPages.size,
-                chapterOf = findChapterOf)
+                chapterOf = findChapterOf, aiSearch = findAi)
         }
     }
 

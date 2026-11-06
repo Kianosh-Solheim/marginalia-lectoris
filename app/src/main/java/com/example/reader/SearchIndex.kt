@@ -72,6 +72,8 @@ object SearchIndex {
     /** Every word in the index, once: for finding misspellings quickly. */
     private const val VOCAB = "CREATE TABLE IF NOT EXISTS vocab (term TEXT PRIMARY KEY) WITHOUT ROWID"
     private const val META = "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)"
+    /** Meaning vectors for AI search (see AiSearch): per page part, from Gemini or the offline model. */
+    private const val EMB = "CREATE TABLE IF NOT EXISTS emb (src TEXT, unit_id INTEGER, part INTEGER, a INTEGER, b INTEGER, vec BLOB, PRIMARY KEY(src, unit_id, part))"
 
     private class Db(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, "search_index.db", null, 3) {
         override fun onCreate(db: SQLiteDatabase) {
@@ -94,7 +96,7 @@ object SearchIndex {
                 db.execSQL("INSERT OR REPLACE INTO meta(k, v) VALUES('rebuild', '0')")
                 return
             }
-            listOf("fts_terms", "vocab", "units", "fts", "docs", "ocr_todo", "meta").forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
+            listOf("fts_terms", "vocab", "units", "fts", "docs", "ocr_todo", "meta", "emb").forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
             onCreate(db)
         }
         // Searching can read while the background reader writes.
@@ -102,12 +104,13 @@ object SearchIndex {
         override fun onOpen(db: SQLiteDatabase) {
             runCatching { db.execSQL(VOCAB) }
             runCatching { db.execSQL(META) }
+            runCatching { db.execSQL(EMB); db.execSQL("CREATE INDEX IF NOT EXISTS emb_src ON emb(src, unit_id)") }
             runCatching { db.execSQL("DROP TABLE IF EXISTS fts_terms") }
         }
     }
 
     @Volatile private var db: Db? = null
-    private fun db(ctx: Context): SQLiteDatabase = (db ?: synchronized(this) { db ?: Db(ctx).also { db = it } }).writableDatabase
+    internal fun db(ctx: Context): SQLiteDatabase = (db ?: synchronized(this) { db ?: Db(ctx).also { db = it } }).writableDatabase
 
     // ------------------------------------------------------------------ forgiving text
 
@@ -476,6 +479,9 @@ object SearchIndex {
         if (typos) addVariants(ctx, q)
         return q
     }
+
+    /** The books that pass [f] (null: no filter). */
+    fun allowedFor(ctx: Context, f: Filters?): Set<Long>? = if (f == null || f.isEmpty) null else runCatching { allowedDocs(ctx, f) }.getOrNull()
 
     /** The books that pass the filters. */
     private fun allowedDocs(ctx: Context, f: Filters): Set<Long> = kotlinx.coroutines.runBlocking {
@@ -903,7 +909,7 @@ object SearchIndex {
 
     // ------------------------------------------------------------------ searching
 
-    private fun collapse(s: String) = s.replace(Regex("\\s+"), " ")
+    internal fun collapse(s: String) = s.replace(Regex("\\s+"), " ")
 
     /** A passage around one match [r] (in the forgiving form [n] of [text], with [map] back): (text, match start, match end). */
     private fun passage(text: String, map: IntArray, r: IntRange): Triple<String, Int, Int> {

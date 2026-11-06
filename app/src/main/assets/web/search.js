@@ -170,6 +170,42 @@ function snippetEl(text, start, end) {
   return h('span', { class: 'snip' }, text.slice(0, start), h('mark', null, text.slice(start, end)), text.slice(end));
 }
 
+// ------------------------------------------------------------------ AI search
+
+const AI_METHODS = [
+  ['guided', 'Guided', 'The AI chosen in Settings → AI turns your question into the words authors would use (Norwegian and English), the normal search finds passages with them, and the AI picks the best and says why. Only those passages are sent to the AI.'],
+  ['gemini', 'Meaning · Gemini', 'Compares the meaning of your question with every page, so passages count even when no words match. Needs the Gemini meaning index (Settings → Search); your question is sent to Google.'],
+  ['local', 'Meaning · offline', 'The same, with a small model on the tablet: nothing leaves the tablet. Needs the offline model and its index (Settings → Search).'],
+];
+/** A short exact phrase from a passage, to find and mark it in the book. */
+function phraseOf(r) {
+  const t = r.end > r.start ? r.snippet.slice(r.start, r.end) : r.snippet.replace(/^…/, '');
+  const w = wordsOf(t).slice(0, r.end > r.start ? 12 : 7);
+  return w.length >= 2 ? '"' + w.join(' ') + '"' : '';
+}
+const aiLink = (d, r) => {
+  const ph = phraseOf(r); const f = ph ? `&find=${encodeURIComponent(ph)}&mode=exact` : '';
+  return isPdf(d) ? `#/read/${d.id}?page=${r.loc}${f}` : `#/read/${d.id}?href=${encodeURIComponent(r.href)}&pos=${r.loc}${f}&occ=0`;
+};
+function aiIndexText(st) {
+  if (!st) return '';
+  const g = st.gemini, l = st.local, p = st.progress;
+  const parts = [`Gemini meaning index: ${g.done} of ${g.total} pages`, l.model ? `offline index: ${l.done} of ${l.total} pages` : 'offline model: not downloaded'];
+  if (p.running) parts.push(`now ${p.src === 'local' ? 'offline' : 'Gemini'}: ${p.done} of ${p.total} – ${p.note}`);
+  else if (p.error) parts.push('last error: ' + p.error);
+  return parts.join(' · ');
+}
+/** One AI result: book, page, passage, and why it fits. */
+function aiResultEl(r, onNote) {
+  const d = r.doc;
+  return h('a', { class: 'tshit aihit', href: aiLink(d, r) },
+    h('div', null, h('b', null, d.title), h('span', { class: 'muted' }, ' · ' + (d.displayAuthor || d.author || '') + ' · ' + (isPdf(d) ? 'p. ' + (r.label || r.loc) : (r.label || 'pos. ' + r.loc))),
+      h('span', { class: 'mono aiscore', title: 'How well it fits' }, Math.round(r.score * 100) + '%')),
+    r.why ? h('div', { class: 'aiwhy' }, '✦ ' + r.why) : null,
+    snippetEl(r.snippet, r.start, r.end),
+    h('button', { class: 'btn quiet hnote', title: 'Make a note from this passage', onclick: e => { e.preventDefault(); e.stopPropagation(); onNote(d, r); } }, '+ Note'));
+}
+
 // ------------------------------------------------------------------ the library's text
 
 // ------------------------------------------------------------------ shared helpers
@@ -362,6 +398,8 @@ async function showTextSearch(params) {
   let saved = { recent: [], pinned: [] };
   const entryNow = () => ({ q: input.value.trim(), mode: exact ? 'exact' : 'fuzzy', whole: whole.checked, typos: typos.checked, filters: F });
   const applyEntry = e => {
+    if (e.mode === 'ai') { input.value = e.q; aiMethod = e.method || 'guided'; aiMethodBtns.forEach((b, i) => b.classList.toggle('on', AI_METHODS[i][0] === aiMethod)); setAi(true); return; }
+    if (ai) setAi(false);
     input.value = e.q; exact = e.mode === 'exact'; localSet('ml.findExact', exact ? '1' : '0');
     sw.querySelectorAll('.seg').forEach((b, i) => b.classList.toggle('on', i === (exact ? 1 : 0))); help.textContent = modeHelp(exact); typosLbl.hidden = exact;
     whole.checked = !!e.whole; typos.checked = !!e.typos; F = Object.assign({}, e.filters || {});
@@ -369,7 +407,7 @@ async function showTextSearch(params) {
     typeBtns.forEach((b, i) => b.classList.toggle('on', ['', 'BOOK', 'ARTICLE'][i] === (F.type || '')));
     localSet('ml.searchFilters', JSON.stringify(F)); run();
   };
-  const label = e => e.q + (e.mode === 'exact' ? ' (exact)' : '') + (e.filters && (e.filters.tag || e.filters.type || e.filters.yfrom || e.filters.yto || e.filters.notes) ? ' ⧩' : '');
+  const label = e => (e.mode === 'ai' ? '✦ ' : '') + e.q + (e.mode === 'exact' ? ' (exact)' : '') + (e.filters && (e.filters.tag || e.filters.type || e.filters.yfrom || e.filters.yto || e.filters.notes) ? ' ⧩' : '');
   const drawSaved = () => {
     clear(savedRow);
     if (saved.pinned.length) savedRow.append(h('span', { class: 'label' }, 'Saved'), ...saved.pinned.map(e => h('span', { class: 'schip pinned' },
@@ -390,13 +428,56 @@ async function showTextSearch(params) {
   const qinfo = h('div', { class: 'muted', style: { fontSize: '12px' } });
   const ixLine = h('div', { class: 'ixline', hidden: true });
   const out = h('div');
+
+  // AI search: a mode of its own; it runs only when "Ask AI" is pressed.
+  let ai = localGet('ml.aiMode', '0') === '1', aiMethod = localGet('ml.aiMethod', 'guided');
+  const aiDesc = h('div', { class: 'muted', style: { fontSize: '12px' } });
+  const aiIx = h('div', { class: 'muted mono', style: { fontSize: '11px' } });
+  const aiMethodBtns = AI_METHODS.map(([k, l]) => h('button', { class: 'btn quiet seg' + (aiMethod === k ? ' on' : ''), onclick: e => {
+    aiMethod = k; localSet('ml.aiMethod', k); aiMethodBtns.forEach(b => b.classList.toggle('on', b === e.currentTarget)); aiDesc.textContent = AI_METHODS.find(m => m[0] === k)[2]; } }, l));
+  aiDesc.textContent = AI_METHODS.find(m => m[0] === aiMethod)?.[2] || '';
+  const askBtn = h('button', { class: 'btn fill', onclick: () => runAi() }, '✦ Ask AI');
+  const aiBox = h('div', { class: 'aibox' },
+    h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, h('span', { class: 'segsw' }, ...aiMethodBtns), askBtn,
+      h('a', { href: '#/settings', class: 'muted', style: { fontSize: '12px', marginLeft: 'auto' }, onclick: () => setTimeout(() => { const el = document.getElementById('set-search'); if (el) el.scrollIntoView(); }, 400) }, 'Set up meaning indexes →')),
+    aiDesc, aiIx);
+  const aiToggle = h('button', { class: 'btn quiet seg' + (ai ? ' on' : ''), title: 'Search by what passages are about, with AI (runs only when you press Ask AI)', onclick: () => setAi(!ai) }, '✦ AI');
+  const normalOnly = [];
+  function setAi(v) {
+    ai = v; localSet('ml.aiMode', v ? '1' : '0'); aiToggle.classList.toggle('on', v);
+    aiBox.hidden = !v; normalOnly.forEach(el => { el.hidden = v; });
+    input.placeholder = v ? 'Describe what you are looking for, e.g. arguments that repression leads to radicalisation — then press Ask AI' : 'Search the text of every book, and your notes — words or a sentence…';
+    clear(out); status.textContent = ''; qinfo.textContent = '';
+    if (v) api('ai-status').then(st => { aiIx.textContent = aiIndexText(st); }).catch(() => {}); else run();
+  }
+  let aiSeq = 0;
+  async function runAi() {
+    const q = input.value.trim();
+    if (!q) { toast('Describe what you are looking for first'); return; }
+    const my = ++aiSeq;
+    clear(out); qinfo.textContent = '';
+    status.textContent = aiMethod === 'guided' ? 'Asking the AI for search words, searching, and asking it to pick the best passages… (10–40 s)' : 'Comparing meanings…';
+    askBtn.disabled = true;
+    let r;
+    try { r = await api(`ai-search?q=${encodeURIComponent(q)}&method=${aiMethod}${filterParams()}`, { timeout: 180000 }); }
+    catch (e) { if (my === aiSeq) { status.textContent = ''; fail(e); } askBtn.disabled = false; return; }
+    askBtn.disabled = false;
+    if (my !== aiSeq) return;
+    status.textContent = `${r.results.length} passage${r.results.length === 1 ? '' : 's'}` + (r.note ? ' · ' + r.note : '');
+    qinfo.textContent = r.terms && r.terms.length ? 'Searched for: ' + r.terms.join(' · ') : '';
+    r.results.forEach(x => out.append(aiResultEl(x, (d, hit) => noteFromHit(d, hit))));
+    savedApi('add', { q, mode: 'ai', method: aiMethod, filters: F }).then(x => { saved = x; drawSaved(); }).catch(() => {});
+  }
+  const wholeLbl = h('label', { class: 'row', style: { gap: '4px', fontSize: '13px', whiteSpace: 'nowrap' } }, whole, 'Whole words');
+  const sortLbl = h('span', { class: 'label' }, 'Sort'), viewSw = h('span', { class: 'segsw' }, ...viewBtns);
+  normalOnly.push(sw, wholeLbl, typosLbl, help, ops, sortLbl, sortSel, viewSw, kwSortSel, ixLine);
   main.append(h('h1', null, 'Search'),
-    h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } }, input, sw, h('label', { class: 'row', style: { gap: '4px', fontSize: '13px', whiteSpace: 'nowrap' } }, whole, 'Whole words'), typosLbl),
-    help, ops, helpBox,
+    h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } }, input, sw, h('span', { class: 'segsw' }, aiToggle), wholeLbl, typosLbl),
+    help, ops, helpBox, aiBox,
     h('div', { class: 'row sfilters' }, h('span', { class: 'label' }, 'Only'), tagSel, h('span', { class: 'segsw' }, ...typeBtns),
       h('span', { class: 'row', style: { gap: '4px', alignItems: 'center' } }, 'Year', yFrom, '–', yTo),
       h('label', { class: 'row', style: { gap: '4px', fontSize: '13px' } }, hasNotes, 'With notes'), clearF,
-      h('span', { style: { flex: 1 } }), h('span', { class: 'label' }, 'Sort'), sortSel, h('span', { class: 'segsw' }, ...viewBtns), kwSortSel),
+      h('span', { style: { flex: 1 } }), sortLbl, sortSel, viewSw, kwSortSel),
     savedRow, ixLine, status, qinfo, out);
   let seq = 0, timer = 0, again = 0, ixTimer = 0, last = null, lastO = null, lastQ = '';
   const showIx = ix => { ixLine.textContent = indexingText(ix); ixLine.hidden = !ixLine.textContent; };
@@ -460,6 +541,7 @@ async function showTextSearch(params) {
   }
 
   const run = async quiet => {
+    if (ai) return;
     const q = input.value.trim();
     history.replaceState(null, '', '#/search' + (q ? '?q=' + encodeURIComponent(q) : ''));
     if (!q) { clear(out); status.textContent = ''; qinfo.textContent = ''; return; }
@@ -484,11 +566,12 @@ async function showTextSearch(params) {
     clearTimeout(recentTimer); if (quiet !== true && (r.books.length || r.notes.length)) recentTimer = setTimeout(addRecent, 4000);
   };
   input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 450); });
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(timer); run().then(addRecent); } });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(timer); if (ai) runAi(); else run().then(addRecent); } });
   whole.addEventListener('change', () => { localSet('ml.findWhole', whole.checked ? '1' : '0'); run(); });
   typos.addEventListener('change', () => { localSet('ml.findTypos', typos.checked ? '1' : '0'); run(); });
   input.focus();
-  if (input.value) run();
+  setAi(ai && !params.get('q'));
+  if (input.value && !ai) run();
 }
 
 // ------------------------------------------------------------------ in the open book
@@ -514,6 +597,27 @@ function readerSearchPanel(ctx, side) {
   chap.addEventListener('change', () => { f.chapter = chap.checked; applyScope(); f.i = -1; draw(); });
   const qinfo = h('div', { class: 'muted', style: { fontSize: '11px' } });
   const helpBox = searchHelpEl(); helpBox.hidden = true;
+  // AI search in this book (only when the button is pressed).
+  const aiOut = h('div', { class: 'aiinbook' });
+  const aiSel = h('select', { title: 'How the AI searches' }, AI_METHODS.map(([k, l]) => h('option', { value: k, selected: localGet('ml.aiMethod', 'guided') === k }, l)));
+  aiSel.addEventListener('change', () => localSet('ml.aiMethod', aiSel.value));
+  const drawAi = () => {
+    clear(aiOut);
+    if (!f.ai) return;
+    aiOut.append(h('div', { class: 'label', style: { marginTop: '8px' } }, `✦ AI: ${f.ai.results.length} passage${f.ai.results.length === 1 ? '' : 's'}` + (f.ai.note ? ' · ' + f.ai.note : '')),
+      ...f.ai.results.map(r => h('div', { class: 'fhit', onclick: () => { if (readerOpen && readerOpen.goToHit) readerOpen.goToHit({ loc: r.loc, href: r.href, occurrence: 0 }, phraseOf(r), { exact: true }); } },
+        h('span', { class: 'tsloc mono' }, (isPdf(ctx.d) ? 'p. ' + (r.label || r.loc) : (r.label || 'pos. ' + r.loc)) + ' · ' + Math.round(r.score * 100) + '%'),
+        r.why ? h('div', { class: 'aiwhy' }, '✦ ' + r.why) : null, snippetEl(r.snippet, r.start, r.end),
+        h('button', { class: 'btn quiet hnote', onclick: e => { e.stopPropagation(); noteFromHit(ctx.d, r, () => { if (ctx.refreshNotes) ctx.refreshNotes(); }); } }, '+ Note'))),
+      h('button', { class: 'btn quiet', style: { fontSize: '11px' }, onclick: () => { f.ai = null; drawAi(); } }, 'Hide AI results'));
+  };
+  const askAi = async () => {
+    const q = input.value.trim(); if (!q) { toast('Describe what you are looking for first'); return; }
+    clear(aiOut); aiOut.append(h('div', { class: 'muted', style: { fontSize: '12px' } }, '✦ Asking the AI… (10–40 s)'));
+    try { f.ai = await api(`ai-search?q=${encodeURIComponent(q)}&method=${aiSel.value}&doc=${ctx.d.id}`, { timeout: 180000 }); } catch (e) { clear(aiOut); fail(e); return; }
+    drawAi();
+  };
+  const aiRow = h('div', { class: 'row', style: { gap: '6px', marginTop: '4px', alignItems: 'center' } }, h('button', { class: 'btn quiet', title: 'Find passages in this book by what they are about (AI; runs only now)', onclick: askAi }, '✦ Ask AI'), aiSel);
   const info = h('div', { class: 'muted mono', style: { fontSize: '12px', margin: '6px 0' } });
   const list = h('div', { class: 'fhits' });
   const stLine = h('div', { class: 'ixline small' });
@@ -582,10 +686,10 @@ function readerSearchPanel(ctx, side) {
       h('label', { class: 'row', style: { gap: '4px', fontSize: '12px' } }, whole, 'Whole words'), typosLbl),
     h('div', { class: 'row', style: { gap: '8px', marginTop: '2px', alignItems: 'center' } }, ctx.chapterRange ? chapLbl : null,
       h('span', { style: { flex: 1 } }), h('button', { class: 'btn quiet', style: { fontSize: '11px' }, onclick: () => { helpBox.hidden = !helpBox.hidden; } }, '? How to search')),
-    helpBox, stLine, info, qinfo, list);
+    helpBox, aiRow, aiOut, stLine, info, qinfo, list);
   if (!f.status) api(`doc/${ctx.d.id}/search?q=`).then(r => { f.status = r.status; draw(); }).catch(() => {});
   applyScope();
-  draw();
+  draw(); drawAi();
   setTimeout(() => input.focus(), 0);
   return { run, go, input };
 }
@@ -693,8 +797,49 @@ function searchSettingsSection() {
     h('div', { class: 'set-row' }, h('div', null, h('b', null, 'Synonyms'), h('div', { class: 'muted', style: { fontSize: '13px' } },
       'Terms that mean the same in every Fuzzy search: searching for one also finds the others. One group per line, terms separated by commas.'))),
     groupsEl, h('div', { class: 'row', style: { gap: '6px', margin: '8px 0 18px' } }, add, h('button', { class: 'btn', onclick: addIt }, 'Add group')),
-    h('div', { class: 'set-row' }, h('div', null, h('b', null, 'Saved searches'))), savedEl);
+    h('div', { class: 'set-row' }, h('div', null, h('b', null, 'Saved searches'))), savedEl, aiSettingsEl());
   api('search-synonyms').then(g => { groups = g; draw(); }).catch(() => {});
   api('search-saved').then(drawSaved).catch(() => {});
   return sec;
+}
+
+/** Settings → Search → AI search: the meaning indexes (Gemini and offline). */
+function aiSettingsEl() {
+  const box = h('div', { class: 'aiset' });
+  let timer = 0;
+  const post = async json => { try { draw(await api('ai-index', { method: 'POST', json })); } catch (e) { fail(e); } };
+  const draw = st => {
+    clear(box);
+    const p = st.progress, dl = st.download;
+    const pct = (a, b) => b ? Math.floor(a * 100 / b) + '%' : '0%';
+    const g = st.gemini, l = st.local;
+    const gRun = p.running && p.src === 'gemini', lRun = p.running && p.src === 'local';
+    box.append(
+      h('div', { class: 'set-row' }, h('div', null, h('b', null, 'AI search'), h('div', { class: 'muted', style: { fontSize: '13px' } },
+        `Guided AI search uses ${st.provider} (Settings → AI) and needs nothing more. The two meaning searches need an index of the whole library, built once here (and updated when you press the button again).`))),
+      h('div', { class: 'aiidx' },
+        h('b', null, 'Meaning · Gemini'), h('div', { class: 'muted', style: { fontSize: '12px' } },
+          'Sends the text of every page to Google once to get its meaning. Gemini’s free quota is limited, so a big library can take hours (it waits and continues by itself); with a paid key it is quick and costs about one or two dollars for the whole library.' + (st.hasGeminiKey ? '' : ' Add a Gemini API key in Settings → AI first.')),
+        h('div', { class: 'mono', style: { fontSize: '12px' } }, `${g.done} of ${g.total} pages (${pct(g.done, g.total)})` + (gRun ? ` · ${p.note}` : '')),
+        h('div', { class: 'row', style: { gap: '6px' } },
+          gRun ? h('button', { class: 'btn', onclick: () => post({ action: 'stop' }) }, 'Stop')
+            : h('button', { class: 'btn', disabled: !st.hasGeminiKey || p.running, onclick: () => post({ action: 'start', src: 'gemini' }) }, g.done ? 'Update index' : 'Build index'),
+          g.done ? h('button', { class: 'btn quiet', onclick: () => { if (confirm('Delete the Gemini meaning index?')) post({ action: 'delete', src: 'gemini' }); } }, 'Delete index') : null)),
+      h('div', { class: 'aiidx' },
+        h('b', null, 'Meaning · offline'), h('div', { class: 'muted', style: { fontSize: '12px' } },
+          'A small multilingual model (multilingual-e5-small, about 135 MB to download) runs on the tablet: nothing leaves it. Building the index is slow on an e-ink tablet (likely a few hours for the whole library; it runs in the background and can be stopped and continued).'),
+        dl.running ? h('div', { class: 'mono', style: { fontSize: '12px' } }, `Downloading the model: ${Math.round(dl.done / 1048576)} of ${Math.round(dl.total / 1048576)} MB`) : null,
+        dl.error ? h('div', { class: 'mono', style: { fontSize: '12px', color: '#b91c1c' } }, 'Download: ' + dl.error) : null,
+        l.model ? h('div', { class: 'mono', style: { fontSize: '12px' } }, `${l.done} of ${l.total} pages (${pct(l.done, l.total)})` + (lRun ? ` · ${p.note}` : '')) : null,
+        h('div', { class: 'row', style: { gap: '6px' } },
+          !l.model ? h('button', { class: 'btn', disabled: dl.running, onclick: () => post({ action: 'download' }) }, 'Download the model (135 MB)')
+            : lRun ? h('button', { class: 'btn', onclick: () => post({ action: 'stop' }) }, 'Stop')
+              : h('button', { class: 'btn', disabled: p.running, onclick: () => post({ action: 'start', src: 'local' }) }, l.done ? 'Update index' : 'Build index'),
+          l.model ? h('button', { class: 'btn quiet', onclick: () => { if (confirm('Delete the offline model and its index?')) post({ action: 'delete', src: 'local', model: true }); } }, 'Delete model and index') : null)),
+      p.error && !p.running ? h('div', { class: 'mono', style: { fontSize: '12px', color: '#b91c1c' } }, 'Last error: ' + p.error) : null);
+    clearTimeout(timer);
+    if ((p.running || dl.running) && document.body.contains(box)) timer = setTimeout(() => api('ai-status').then(draw).catch(() => {}), 2500);
+  };
+  api('ai-status').then(draw).catch(() => box.append(h('div', { class: 'muted' }, 'AI search status not available.')));
+  return box;
 }

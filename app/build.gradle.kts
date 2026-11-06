@@ -80,7 +80,11 @@ android {
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   packaging {
-    jniLibs { pickFirsts += "lib/*/libc++_shared.so" }
+    jniLibs {
+      pickFirsts += "lib/*/libc++_shared.so"
+      // ONNX Runtime for emulators is not needed on the tablet.
+      excludes += listOf("lib/x86/libonnxruntime*.so", "lib/x86_64/libonnxruntime*.so")
+    }
     resources { excludes += setOf("META-INF/DEPENDENCIES", "META-INF/ASL2.0", "META-INF/NOTICE*", "META-INF/LICENSE*") }
   }
   dependenciesInfo {
@@ -147,6 +151,8 @@ dependencies {
   implementation(libs.mlkit.digital.ink)
   // BOOX pen SDK: near-paper pen latency on BOOX e-ink tablets (Speech mode's pen page).
   implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.4.4")
+  // Offline meaning search (AI search without the internet): runs multilingual-e5-small on the tablet.
+  implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
   implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
   implementation(libs.readium.streamer)
   implementation(libs.readium.navigator)

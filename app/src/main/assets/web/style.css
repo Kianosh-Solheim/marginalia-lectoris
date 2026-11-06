@@ -722,3 +722,10 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .tsearch select:not(.sfilters select) { width: auto; }
 .fhit { position: relative; padding-right: 54px !important; }
 .fhit .hnote { float: none; position: absolute; right: 2px; top: 4px; margin: 0; }
+/* AI search */
+.aibox { border: 1px solid var(--ink); background: #f5f3ff; padding: 8px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 6px; }
+.aihit .aiscore { float: right; font-size: 11px; color: #6d28d9; }
+.aiwhy { font-size: 13px; color: #5b21b6; margin: 2px 0; }
+.aiset { margin-top: 18px; display: flex; flex-direction: column; gap: 12px; }
+.aiidx { border: 1px solid var(--ink); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.aiinbook select { font-size: 12px; }

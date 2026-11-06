@@ -94,7 +94,9 @@ private fun snippetText(h: FindHit) = buildAnnotatedString {
 @Composable
 fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>, onJump: (FindHit) -> Unit, modifier: Modifier = Modifier,
             statusOf: (() -> SearchIndex.Status)? = null, doc: DocumentEntity? = null, totalPages: Int = 0,
-            chapterOf: (() -> Pair<String, IntRange>?)? = null) {
+            chapterOf: (() -> Pair<String, IntRange>?)? = null, aiSearch: (suspend (String, String) -> List<FindHit>)? = null) {
+    var aiMethod by remember { mutableStateOf("guided") }
+    var aiNote by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
     var noteFor by remember { mutableStateOf<FindHit?>(null) }
     val latestChapterOf by rememberUpdatedState(chapterOf)
@@ -103,6 +105,7 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
         if (state.chapterOnly) latestChapterOf?.invoke()?.let { (_, r) -> all.filter { it.page in r } } ?: all else all
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    LaunchedEffect(Unit) { aiMethod = context.getSharedPreferences("search", 0).getString("ai_method", "guided") ?: "guided" }
     LaunchedEffect(Unit) { if (state.searched.isBlank() && state.query.isBlank()) { state.exact = context.getSharedPreferences("search", 0).getBoolean("exact", false); state.typos = context.getSharedPreferences("search", 0).getBoolean("typos", false) } }
     var listOpen by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
@@ -116,6 +119,7 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
         if (q.isEmpty()) { state.hits = emptyList(); state.index = -1; return }
         state.busy = true
         scope.launch {
+            aiNote = ""
             state.all = runCatching { search(q, state.whole) }.getOrDefault(emptyList())
             state.hits = scoped(state.all)
             state.searched = q; state.busy = false; state.index = -1
@@ -183,6 +187,25 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
             Box(Modifier.weight(1f)) {
                 HitMapStrip(state.hits.map { it.page }, totalPages, state.index, { go(it) })
             }
+            if (aiSearch != null) {
+                InkChip(aiMethods.first { it.first == aiMethod }.second.replace("Meaning · ", ""), false, {
+                    aiMethod = aiMethods[(aiMethods.indexOfFirst { it.first == aiMethod } + 1) % aiMethods.size].first
+                    context.getSharedPreferences("search", 0).edit().putString("ai_method", aiMethod).apply()
+                })
+                InkChip(if (state.busy && aiNote.isNotBlank()) "✦ Asking…" else "✦ Ask AI", false, {
+                    val q = state.query.trim()
+                    if (q.isNotEmpty() && !state.busy) {
+                        state.busy = true; aiNote = "AI"
+                        scope.launch {
+                            val r = runCatching { aiSearch(aiMethod, q) }
+                            state.all = r.getOrDefault(emptyList()); state.hits = scoped(state.all)
+                            state.searched = q; state.busy = false; state.index = -1
+                            aiNote = r.exceptionOrNull()?.message?.let { "✦ $it" } ?: "✦ AI: ${state.all.size} passages for “$q” (by what they are about)"
+                            if (state.hits.isNotEmpty()) go(0)
+                        }
+                    }
+                })
+            }
             InkChip("?", showHelp, { showHelp = true })
         }
         status?.let { st ->
@@ -197,8 +220,9 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
             if (line != null) Text(line, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Color.Black,
                 modifier = Modifier.padding(top = 4.dp).fillMaxWidth().background(Color(0xFFFFFBEB)).border(1.dp, Color.Black).padding(horizontal = 6.dp, vertical = 3.dp))
         }
+        if (aiNote.isNotBlank() && !state.busy) Text(aiNote, fontSize = 12.sp, color = Color(0xFF5B21B6), modifier = Modifier.padding(top = 2.dp))
         Text(when {
-            state.busy -> "Searching…"
+            state.busy -> if (aiNote.isNotBlank()) "Asking the AI… (10–40 s)" else "Searching…"
             state.searched.isBlank() -> if (state.exact) "Exact: the words in this order, as one sentence (case, accents and punctuation ignored)."
                 else "Fuzzy: the words close together, in any order. \"Quotes\" keep a phrase together. Typos: also similar spellings (tried by itself when nothing is found)."
             state.hits.isEmpty() -> "Nothing found for “${state.searched}”."

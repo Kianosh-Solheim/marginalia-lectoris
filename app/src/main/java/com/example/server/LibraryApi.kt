@@ -112,6 +112,18 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s == listOf("upload") && m == "POST" -> return upload(req)
             s.firstOrNull() == "zotero" -> return zoteroApi.route(req, s.drop(1))
             s == listOf("search") && m == "GET" -> return searchAll(req)
+            s == listOf("ai-status") && m == "GET" -> return HttpResponse.json(com.example.reader.AiSearch.statusJson(context).toString())
+            s == listOf("ai-index") && m == "POST" -> {
+                val b = JSONObject(req.bodyText()); val src = b.optString("src")
+                when (b.optString("action")) {
+                    "start" -> com.example.reader.AiSearch.start(context, src)
+                    "stop" -> com.example.reader.AiSearch.stop()
+                    "delete" -> com.example.reader.AiSearch.delete(context, src, b.optBoolean("model"))
+                    "download" -> com.example.reader.AiSearch.downloadModel(context)
+                }
+                return HttpResponse.json(com.example.reader.AiSearch.statusJson(context).toString())
+            }
+            s == listOf("ai-search") && m == "GET" -> return aiSearch(req)
             s == listOf("search-saved") && m == "GET" -> return HttpResponse.json(com.example.reader.SearchIndex.savedSearches(context).toString())
             s == listOf("search-saved") && m == "POST" -> {
                 val b = JSONObject(req.bodyText())
@@ -1103,6 +1115,32 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
     /** /api/search?q=&whole=1 — the text of every book, and the notes. */
     /** The misspellings a fuzzy search also matched, per word (the reader marks them too). */
     private fun variantsJson(q: com.example.reader.SearchIndex.Query) = JSONObject().apply { q.variants.forEach { (k, v) -> put(k, JSONArray(v)) } }
+
+    /** AI search (guided, or by meaning with Gemini or the offline model); runs only when asked. */
+    private suspend fun aiSearch(req: HttpRequest): HttpResponse {
+        val q = req.query["q"].orEmpty().trim()
+        val method = req.query["method"] ?: "guided"
+        val docId = req.query["doc"]?.toLongOrNull()
+        val filters = searchFilters(req)
+        val ans = try {
+            withContext(Dispatchers.IO) {
+                when (method) {
+                    "gemini" -> com.example.reader.AiSearch.semantic(context, q, com.example.reader.AiSearch.GEMINI, docId, filters)
+                    "local" -> com.example.reader.AiSearch.semantic(context, q, com.example.reader.AiSearch.LOCAL, docId, filters)
+                    else -> com.example.reader.AiSearch.guided(context, q, docId, filters)
+                }
+            }
+        } catch (e: IllegalStateException) { return HttpResponse.error(400, e.message ?: "AI search failed") }
+          catch (e: IllegalArgumentException) { return HttpResponse.error(400, e.message ?: "AI search failed") }
+        val docs = HashMap<Long, JSONObject?>()
+        val arr = JSONArray()
+        for (r in ans.results) {
+            val dj = docs.getOrPut(r.docId) { db.documentDao().getDocumentById(r.docId)?.let { docJson(it, 0) } } ?: continue
+            arr.put(JSONObject().put("doc", dj).put("loc", r.loc).put("href", r.href).put("label", r.label).put("snippet", r.snippet)
+                .put("start", r.start).put("end", r.end).put("score", r.score.toDouble()).put("why", r.why))
+        }
+        return HttpResponse.json(JSONObject().put("q", q).put("method", method).put("results", arr).put("terms", JSONArray(ans.terms)).put("note", ans.note).toString())
+    }
 
     /** The filter buttons of the search page. */
     private fun searchFilters(req: HttpRequest) = com.example.reader.SearchIndex.Filters(

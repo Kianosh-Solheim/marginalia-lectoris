@@ -78,6 +78,14 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
     var savedRefresh by remember { mutableIntStateOf(0) }
     var rerun by remember { mutableIntStateOf(0) }
     var info by remember { mutableStateOf("") }
+    // AI search (runs only when "Ask AI" is pressed)
+    var ai by remember { mutableStateOf(prefs.getBoolean("ai", false)) }
+    var aiMethod by remember { mutableStateOf(prefs.getString("ai_method", "guided").orEmpty()) }
+    var aiBusy by remember { mutableStateOf(false) }
+    var aiAns by remember { mutableStateOf<com.example.reader.AiSearch.Answer?>(null) }
+    var aiDocs by remember { mutableStateOf<Map<Long, DocumentEntity>>(emptyMap()) }
+    var aiErr by remember { mutableStateOf("") }
+    var showIdx by remember { mutableStateOf(false) }
     fun saveF() { prefs.edit().putString("f_tag", fTag).putString("f_type", fType).putString("f_from", fFrom).putString("f_to", fTo).putBoolean("f_notes", fNotes).apply() }
     var books by remember { mutableStateOf<List<Triple<DocumentEntity, Int, List<SearchIndex.Hit>>>>(emptyList()) }
     var notes by remember { mutableStateOf<List<SearchIndex.NoteHit>>(emptyList()) }
@@ -94,7 +102,8 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
     fun entryNow() = JSONObject().put("q", query.trim()).put("mode", if (exact) "exact" else "fuzzy").put("whole", whole).put("typos", typos)
         .put("filters", JSONObject().put("tag", fTag).put("type", fType).put("yfrom", fFrom).put("yto", fTo).put("notes", fNotes))
     fun addRecent() { if (query.trim().length >= 2) { SearchIndex.updateSaved(context, "add", entryNow()); savedRefresh++ } }
-    LaunchedEffect(query, whole, exact, typos, fTag, fType, fFrom, fTo, fNotes, kwic, rerun) {
+    LaunchedEffect(query, whole, exact, typos, fTag, fType, fFrom, fTo, fNotes, kwic, rerun, ai) {
+        if (ai) return@LaunchedEffect
         val q = query.trim()
         if (q.length < 2) { books = emptyList(); notes = emptyList(); info = ""; return@LaunchedEffect }
         delay(300)
@@ -125,6 +134,29 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
         }
         busy = false
     }
+    fun askAi() {
+        val q = query.trim(); if (q.isEmpty() || aiBusy) return
+        aiBusy = true; aiErr = ""; aiAns = null
+        val filters = SearchIndex.Filters(tag = fTag, type = fType, yearFrom = fFrom.toIntOrNull(), yearTo = fTo.toIntOrNull(), hasNotes = fNotes)
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val a = runAiSearch(context, aiMethod, q, null, filters)
+                    val dao = AppDatabase.getInstance(context).documentDao()
+                    a to a.results.map { it.docId }.distinct().mapNotNull { dao.getDocumentById(it) }.associateBy { it.id }
+                }
+            }.onSuccess { (a, d) -> aiAns = a; aiDocs = d; SearchIndex.updateSaved(context, "add", JSONObject().put("q", q).put("mode", "ai").put("method", aiMethod)); savedRefresh++ }
+                .onFailure { aiErr = it.message ?: it.toString() }
+            aiBusy = false
+        }
+    }
+    fun openAi(d: DocumentEntity, r: com.example.reader.AiSearch.Result) {
+        // The passage is found again in the book by its first words.
+        val words = SearchIndex.tokens(if (r.end > r.start) r.snippet.substring(r.start, r.end) else r.snippet.removePrefix("…")).take(if (r.end > r.start) 12 else 7)
+        pendingFind.value = PendingFind(d.id, if (words.size >= 2) "\"" + words.joinToString(" ") + "\"" else "", false, r.loc, r.label, true)
+        textSearchOpen.value = false
+        if (d.fileType.equals("PDF", true)) onOpenDocumentAtPage(d, r.loc, null) else onOpenDocument(d)
+    }
     fun open(d: DocumentEntity, hit: SearchIndex.Hit) {
         addRecent()
         pendingFind.value = PendingFind(d.id, query.trim(), whole, hit.loc, hit.label, exact, usedTypos)
@@ -132,6 +164,8 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
         if (d.fileType.equals("PDF", true)) onOpenDocumentAtPage(d, hit.loc, null) else onOpenDocument(d)
     }
     fun apply(e: JSONObject) {
+        if (e.optString("mode") == "ai") { query = e.optString("q"); ai = true; aiMethod = e.optString("method", "guided"); return }
+        ai = false
         query = e.optString("q"); exact = e.optString("mode") == "exact"; whole = e.optBoolean("whole"); typos = e.optBoolean("typos")
         e.optJSONObject("filters")?.let { f -> fTag = f.optString("tag"); fType = f.optString("type"); fFrom = f.optString("yfrom"); fTo = f.optString("yto"); fNotes = f.optBoolean("notes") }
         saveF()
@@ -155,20 +189,33 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
             Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Search in the books", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = Color.Black, modifier = Modifier.weight(1f))
-                    InkChip("Fuzzy", !exact, { exact = false; prefs.edit().putBoolean("exact", false).apply() })
-                    InkChip("Exact", exact, { exact = true; prefs.edit().putBoolean("exact", true).apply() })
-                    if (!exact) InkChip("Typos", typos, { typos = !typos; prefs.edit().putBoolean("typos", typos).apply() })
-                    InkChip("Whole words", whole, { whole = !whole; prefs.edit().putBoolean("whole", whole).apply() })
+                    if (!ai) {
+                        InkChip("Fuzzy", !exact, { exact = false; prefs.edit().putBoolean("exact", false).apply() })
+                        InkChip("Exact", exact, { exact = true; prefs.edit().putBoolean("exact", true).apply() })
+                        if (!exact) InkChip("Typos", typos, { typos = !typos; prefs.edit().putBoolean("typos", typos).apply() })
+                        InkChip("Whole words", whole, { whole = !whole; prefs.edit().putBoolean("whole", whole).apply() })
+                    }
+                    InkChip("✦ AI", ai, { ai = !ai; prefs.edit().putBoolean("ai", ai).apply() })
                     InkChip("Close", false, { textSearchOpen.value = false })
                 }
                 Box(Modifier.fillMaxWidth().border(1.5.dp, Color.Black).padding(10.dp)) {
                     BasicTextField(query, { query = it }, singleLine = true, textStyle = TextStyle(fontSize = 18.sp, color = Color.Black), cursorBrush = SolidColor(Color.Black),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { addRecent() }),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { if (ai) askAi() else addRecent() }),
                         modifier = Modifier.fillMaxWidth().focusRequester(focus))
-                    if (query.isEmpty()) Text("Words or a sentence…", color = Color(0xFF9CA3AF), fontSize = 18.sp)
+                    if (query.isEmpty()) Text(if (ai) "Describe what you are looking for, then Ask AI…" else "Words or a sentence…", color = Color(0xFF9CA3AF), fontSize = 18.sp)
+                }
+                if (ai) {
+                    FlowRow(Modifier.fillMaxWidth().background(Color(0xFFF5F3FF)).border(1.dp, Color.Black).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        aiMethods.forEach { (k, l, _) -> InkChip(l, aiMethod == k, { aiMethod = k; prefs.edit().putString("ai_method", k).apply() }) }
+                        InkChip(if (aiBusy) "✦ Asking…" else "✦ Ask AI", true, { askAi() })
+                        InkChip(if (showIdx) "Meaning indexes ▴" else "Meaning indexes ▾", showIdx, { showIdx = !showIdx })
+                        InkChip(if (filtersOn) "Filters ●" else "Filters", showFilters, { showFilters = !showFilters })
+                        Text(aiMethods.first { it.first == aiMethod }.third, fontSize = 12.sp, color = TGrey, modifier = Modifier.fillMaxWidth())
+                    }
+                    if (showIdx) AiIndexPanel()
                 }
                 // Operators, as buttons
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (!ai) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     InkChip("“ ” Phrase", false, { insert("\"\"") })
                     InkChip("− Leave out", false, { insert("-") })
                     InkChip("OR", false, { insert("OR ") })
@@ -194,7 +241,7 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
                     }
                 }
                 SavedSearchesRow(savedRefresh) { apply(it) }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (!ai) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("SORT", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TGrey)
                     listOf("relevance" to "Most matches", "title" to "Title", "author" to "Author", "year" to "Newest", "yearold" to "Oldest", "lastread" to "Last read").forEach { (k, l) ->
                         InkChip(l, sort == k, { sort = k; prefs.edit().putString("sort", k).apply() })
@@ -204,7 +251,13 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
                     InkChip("Concordance", kwic, { kwic = true; prefs.edit().putBoolean("kwic", true).apply() })
                 }
                 val total = books.sumOf { it.second }
-                Text(buildString {
+                if (ai) Text(when {
+                    aiBusy -> if (aiMethod == "guided") "Asking the AI for search words, searching, and asking it to pick the best passages… (10–40 s)" else "Comparing meanings…"
+                    aiErr.isNotBlank() -> aiErr
+                    aiAns != null -> "${aiAns!!.results.size} passages" + (if (aiAns!!.note.isNotBlank()) " · ${aiAns!!.note}" else "") + (if (aiAns!!.terms.isNotEmpty()) "\nSearched for: " + aiAns!!.terms.joinToString(" · ") else "")
+                    else -> "AI search runs only when you press “Ask AI”."
+                }, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = if (aiErr.isNotBlank()) Color(0xFFB91C1C) else TGrey)
+                else Text(buildString {
                     if (busy) append("Searching…") else if (query.trim().length >= 2) append("Found on $total page${if (total == 1) "" else "s"} in ${books.size} book${if (books.size == 1) "" else "s"} · ${notes.size} note${if (notes.size == 1) "" else "s"}" + if (usedTypos) " · including similar spellings" else "")
                     else append(if (exact) "Exact: the words in this order, as one sentence. Case, accents, punctuation and line-break hyphens are ignored."
                         else "Fuzzy: the words close together, in any order; other word forms count too (vold → volden). Tap “? How to search” for more.")
@@ -215,7 +268,22 @@ fun TextSearchHost(onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPag
                         if (progress.ocrLeft > 0 && progress.phase != "ocr") " · ${progress.ocrLeft} scanned pages wait for OCR" else "")
                 }, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TGrey)
                 LazyColumn(Modifier.fillMaxSize()) {
-                    if (kwic) {
+                    if (ai) {
+                        val rs = aiAns?.results.orEmpty()
+                        items(rs.size) { i ->
+                            val r = rs[i]; val d = aiDocs[r.docId] ?: return@items
+                            Row(Modifier.fillMaxWidth().clickable { openAi(d, r) }.padding(vertical = 8.dp), verticalAlignment = Alignment.Top) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(d.title + " · " + (if (d.fileType.equals("PDF", true)) "p. ${r.label.ifBlank { r.loc.toString() }}" else r.label.ifBlank { "pos. ${r.loc}" }) + " · ${(r.score * 100).toInt()}%",
+                                        fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.Black)
+                                    if (r.why.isNotBlank()) Text("✦ " + r.why, fontSize = 13.sp, color = Color(0xFF5B21B6))
+                                    Text(marked(r.snippet, r.start, r.end), fontSize = 14.sp, color = Color.Black)
+                                }
+                                InkChip("+ Note", false, { noteFor = d to SearchIndex.Hit(r.docId, r.loc, r.href, r.label, r.snippet, r.start, r.end, 0) })
+                            }
+                            HorizontalDivider(color = Color(0xFFE4E4E7))
+                        }
+                    } else if (kwic) {
                         // Concordance: every match with the search term in the middle.
                         val lines = sorted.flatMap { (d, _, hits) -> hits.map { h -> d to h } }
                         items(lines.size) { i ->
