@@ -393,6 +393,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             val folderOfDeleted = com.example.reader.FolderBooks.folderOf(document.id)
             repository.deleteDocument(document)
             com.example.reader.FolderBooks.forgetDocument(app, document.id)
+            runCatching { com.example.reader.Zotero.forgetDocument(app, document.id) }
             folderOfDeleted?.let { com.example.reader.FolderBooks.sync(app, it) }
             val remainingDocs = repository.getAllDocumentsOrderedByLastReadSnapshot()
             StorageManager.deleteDocumentFilesFromStorage(

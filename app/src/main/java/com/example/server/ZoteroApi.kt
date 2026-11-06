@@ -50,6 +50,8 @@ class ZoteroApi(private val context: Context) {
         Zotero.init(context)
         BibStore.init(context)
         EditedVolumes.init(context)
+        // Links to deleted documents no longer count as "added".
+        runCatching { Zotero.pruneLinks(context, db.documentDao().getAllDocumentsSnapshot().map { it.id }.toSet()) }
         val m = req.method
         val what = s.firstOrNull().orEmpty()
         return when {

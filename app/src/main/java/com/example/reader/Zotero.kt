@@ -337,6 +337,19 @@ object Zotero {
         saveLinks()
     }
 
+    /** A deleted document: its links (and its chapters' links) go, so the Zotero items can be added again. */
+    @Synchronized fun forgetDocument(ctx: Context, docId: Long) {
+        init(ctx)
+        if (links.keys.removeAll { it == "doc:$docId" || it.startsWith("ch:$docId:") }) saveLinks()
+    }
+
+    /** Drops links to documents that no longer exist (deleted before this was looked after). */
+    @Synchronized fun pruneLinks(ctx: Context, existing: Set<Long>) {
+        init(ctx)
+        if (existing.isEmpty()) return
+        if (links.keys.removeAll { k -> k.split(':').getOrNull(1)?.toLongOrNull()?.let { it !in existing } == true }) saveLinks()
+    }
+
     @Synchronized fun unlink(ctx: Context, docId: Long, chapter: Int? = null) {
         init(ctx)
         links.remove(if (chapter == null) "doc:$docId" else "ch:$docId:$chapter")

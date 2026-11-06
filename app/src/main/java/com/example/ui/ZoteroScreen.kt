@@ -72,7 +72,10 @@ private fun zoteroTypeLabel(t: String) = when (t) {
 fun ZoteroScreen(onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { Zotero.init(context); BibStore.init(context) } }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) {
+        Zotero.init(context); BibStore.init(context)
+        runCatching { Zotero.pruneLinks(context, com.example.data.local.AppDatabase.getInstance(context).documentDao().getAllDocumentsSnapshot().map { it.id }.toSet()) }
+    } }
     var account by remember { mutableStateOf(Zotero.account(context)) }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
