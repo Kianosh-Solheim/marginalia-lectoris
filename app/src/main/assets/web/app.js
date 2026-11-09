@@ -1896,15 +1896,81 @@ function bibFacts(d) {
     h('button', { class: 'btn quiet', style: { padding: '3px 0', marginTop: '4px' }, onclick: () => editAll(d, 'bib') }, rows.length ? 'Edit' : 'Add details'));
 }
 
+
+/** Folded entries per contents list (kept while the page is open). */
+const foldMemory = new Map();
+/**
+ * A contents list that folds: each entry with entries under it (deeper levels) gets ▾/▸, with the
+ * number hidden when folded; Expand all / Collapse all; a filter box that shows matching entries
+ * (and what they are under). rows[i] is the element of items[i]; depth(i) its level.
+ */
+function foldableContents(key, items, depth, rows, opts = {}) {
+  const n = items.length, dep = items.map((_, i) => depth(i));
+  const kids = items.map((_, i) => { let j = i + 1; while (j < n && dep[j] > dep[i]) j++; return j - i - 1; });
+  const folded = foldMemory.get(key) || new Set(); foldMemory.set(key, folded);
+  const noun = opts.noun || (i => 'entries');
+  let filter = '';
+  const toggles = rows.map((row, i) => {
+    if (!kids[i]) { const sp = h('span', { class: 'fold none' }); row.prepend(sp); return null; }
+    const t = h('button', { class: 'fold', title: 'Fold or unfold what is under this', onclick: e => { e.preventDefault(); e.stopPropagation(); if (folded.has(i)) folded.delete(i); else folded.add(i); apply(); } });
+    row.prepend(t);
+    // "6 sections" beside the title while folded.
+    t._count = h('span', { class: 'foldcount' });
+    const title = row.querySelector('.ct, .tt');
+    if (title) title.after(t._count); else row.append(t._count);
+    return t;
+  });
+  const titleOf = i => (opts.text ? opts.text(items[i]) : rows[i].textContent || '');
+  function apply() {
+    const f = filter ? wordsOf(filter) : null;
+    let show = null;
+    if (f && f.length) {
+      show = new Array(n).fill(false);
+      for (let i = 0; i < n; i++) {
+        const w = wordsOf(titleOf(i)).join(' ');
+        if (!f.every(x => w.includes(x))) continue;
+        show[i] = true;
+        let d = dep[i];
+        for (let j = i - 1; j >= 0 && d > 0; j--) if (dep[j] < d) { show[j] = true; d = dep[j]; }
+      }
+    }
+    let foldAt = Infinity;
+    for (let i = 0; i < n; i++) {
+      if (dep[i] <= foldAt) foldAt = Infinity;
+      const hiddenByFold = !show && dep[i] > foldAt;
+      rows[i].hidden = show ? !show[i] : hiddenByFold;
+      if (!show && !hiddenByFold && folded.has(i) && kids[i]) foldAt = dep[i];
+      const t = toggles[i];
+      if (t) {
+        const isF = !show && folded.has(i);
+        t.textContent = isF ? '▸' : '▾';
+        t.classList.toggle('shut', isF);
+        t._count.textContent = isF ? `▸ ${kids[i]} ${noun(i, kids[i])}` : '';
+      }
+    }
+    count.textContent = show ? `${show.filter(Boolean).length} shown` : '';
+  }
+  const count = h('span', { class: 'muted mono', style: { fontSize: '11px' } });
+  const input = h('input', { type: 'search', class: 'foldfilter', placeholder: opts.placeholder || 'Find in the contents…' });
+  input.addEventListener('input', () => { filter = input.value.trim(); apply(); });
+  const bar = h('div', { class: 'foldbar' }, input,
+    h('button', { class: 'btn quiet', title: 'Unfold everything', onclick: () => { folded.clear(); apply(); } }, 'Expand all'),
+    h('button', { class: 'btn quiet', title: 'Fold everything to the top level', onclick: () => { kids.forEach((k, i) => { if (k) folded.add(i); }); apply(); } }, 'Collapse all'),
+    count);
+  apply();
+  return bar;
+}
+
 function chaptersSection(d) {
   const list = h('div', { class: 'chapters' });
-  let showSections = localGet('ml.sections', '0') === '1';
+  let bar = null;
   const draw = () => {
     clear(list);
-    d.chapters.filter(c => showSections || c.kind !== 'section').forEach(c => {
+    const items = d.chapters, rows = [];
+    items.forEach(c => {
       const pages = c.printedPages ? `pp. ${c.printedPages}` : (isPdf(d) ? `PDF p. ${c.startPage}–${c.endPage}` : '');
       const go = () => { location.hash = isPdf(d) ? `#/read/${d.id}?page=${c.startPage}` : `#/read/${d.id}?href=${encodeURIComponent(c.href || '')}&pos=${c.startPage}`; };
-      list.append(h('div', { class: 'ch ' + (c.kind === 'part' ? 'part' : c.kind === 'section' ? 'sec' : c.kind === 'matter' ? 'matter' : '') },
+      rows.push(h('div', { class: 'ch ' + (c.kind === 'part' ? 'part' : c.kind === 'section' ? 'sec' : c.kind === 'matter' ? 'matter' : '') },
         h('div', { class: 'no' }, c.number || ''),
         h('div', { style: { minWidth: 0 } },
           h('a', { class: 'ct', href: 'javascript:void 0', onclick: go, style: { textDecoration: 'none' } }, c.title),
@@ -1917,13 +1983,20 @@ function chaptersSection(d) {
           zoteroSectionButton(d, { chapter: c.index }, c.zoteroKey, () => showBook(d.id)),
           chapterExportMenu(d, c)) : h('div')));
     });
+    // Parts hold chapters, chapters hold sections.
+    const lvl = c => c.kind === 'part' ? 0 : c.kind === 'section' ? 2 : 1;
+    list.append(...rows);
+    bar = foldableContents('book:' + d.id, items, i => lvl(items[i]), rows, {
+      text: c => [c.number, c.title, c.authors].filter(Boolean).join(' '),
+      noun: (i, k) => items[i].kind === 'part' ? (k === 1 ? 'entry' : 'entries') : (k === 1 ? 'section' : 'sections'),
+    });
+    list.prepend(bar);
   };
   draw();
   return h('div', { class: 'section' },
     h('h2', null, 'Chapters', h('span', { class: 'count' }, d.chapters.filter(c => c.kind === 'chapter').length),
       h('span', { class: 'spacer' }),
-      zoteroAllSectionsButton(d, d.chapters.filter(c => c.kind === 'chapter' && !c.zoteroKey).length, () => showBook(d.id)),
-      h('button', { class: 'chip' + (showSections ? ' on' : ''), onclick: e => { showSections = !showSections; localSet('ml.sections', showSections ? '1' : '0'); e.target.classList.toggle('on', showSections); draw(); } }, 'Sections')),
+      zoteroAllSectionsButton(d, d.chapters.filter(c => c.kind === 'chapter' && !c.zoteroKey).length, () => showBook(d.id))),
     list);
 }
 
@@ -2534,12 +2607,16 @@ async function openReader(id, params) {
       const toc = h('div', { class: 'toc' });
       if (!ctx.tocItems.length) toc.append(h('div', { class: 'muted' }, 'This book has no table of contents.'));
       const volAuthor = tocAuthorLookup(d);
-      ctx.tocItems.forEach(t => {
+      const rows = ctx.tocItems.map(t => {
         const a = volAuthor(t.title);
-        toc.append(h('a', { class: 'l' + Math.min(2, t.level) + (t.current ? ' cur' : ''), onclick: () => t.go() }, t.title,
-          a === null ? null : h('span', { class: 'tca' + (a ? '' : ' unknown') }, a || 'Unknown author')));
+        return h('a', { class: 'l' + Math.min(2, t.level) + (t.current ? ' cur' : ''), onclick: () => t.go() }, h('span', { class: 'tt' }, t.title),
+          a === null ? null : h('span', { class: 'tca' + (a ? '' : ' unknown') }, a || 'Unknown author'));
       });
+      toc.append(...rows);
+      if (rows.length) side.append(foldableContents('toc:' + d.id, ctx.tocItems, i => ctx.tocItems[i].level, rows, {
+        text: t => t.title, noun: (i, k) => k === 1 ? 'entry' : 'entries' }));
       side.append(toc);
+      const cur = toc.querySelector('a.cur'); if (cur && !cur.hidden) setTimeout(() => cur.scrollIntoView({ block: 'center' }), 0);
     } else {
       side.append(h('h3', null, 'Notes', h('span', { class: 'mono muted', style: { fontSize: '12px', fontWeight: 400, marginLeft: '6px' } }, ctx.notes.length)));
       if (!ctx.notes.length) side.append(h('div', { class: 'muted' }, 'Select text in the book to highlight it or add a note.'));

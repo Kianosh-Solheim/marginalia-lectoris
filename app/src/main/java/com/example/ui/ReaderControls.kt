@@ -247,7 +247,6 @@ internal fun ReaderChapterDrawerSheet(
                             Column(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .padding(start = levelIndentDp)
                             ) {
                                 Text(
                                     text = if (clampedLevel > 0) "↳ ${navItem.title}" else navItem.title,
@@ -407,18 +406,30 @@ internal fun ReaderChapterDrawerSheet(
                 }
             }
         } else {
-            // Standard Chapter items list
+            // Standard Chapter items list, folding by level
+            var folded by androidx.compose.runtime.remember(chaptersList) { androidx.compose.runtime.mutableStateOf(setOf<Int>()) }
+            var foldFilter by androidx.compose.runtime.remember(chaptersList) { androidx.compose.runtime.mutableStateOf("") }
+            val foldDepth = androidx.compose.runtime.remember(chaptersList) { chaptersList.map { it.level.coerceAtLeast(0) } }
+            val foldKids = androidx.compose.runtime.remember(foldDepth) { Fold.kids(foldDepth) }
+            val shownIdx = androidx.compose.runtime.remember(chaptersList, folded, foldFilter) { Fold.visible(foldDepth, folded, foldFilter, chaptersList.map { it.title }) }
+            if (chaptersList.size > 1) FoldBar(foldFilter, { foldFilter = it }, { folded = emptySet() }, { folded = foldKids.indices.filter { foldKids[it] > 0 }.toSet() },
+                Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
-                itemsIndexed(chaptersList) { _, chapter ->
+                items(shownIdx.size) { k ->
+                    val idx = shownIdx[k]
+                    val chapter = chaptersList[idx]
                     val isSelected = activeChapter?.title == chapter.title && activeChapter?.pageNumber == chapter.pageNumber
                     val clampedLevel = chapter.level.coerceIn(0, 4)
                     val levelIndentDp = (clampedLevel * 14).dp
+                    val isFolded = idx in folded && foldFilter.isBlank()
 
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    FoldToggle(foldKids[idx] > 0 && foldFilter.isBlank(), isFolded, { folded = if (idx in folded) folded - idx else folded + idx }, Modifier.padding(start = 4.dp + levelIndentDp))
                     NavigationDrawerItem(
                         label = {
                             Column(
@@ -475,8 +486,10 @@ internal fun ReaderChapterDrawerSheet(
                             unselectedTextColor = Color.Black,
                             unselectedIconColor = Color.Black
                         ),
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
                     )
+                    }
+                    if (isFolded) Box(Modifier.padding(start = 34.dp + levelIndentDp, bottom = 4.dp)) { FoldCount(true, foldKids[idx], if (foldKids[idx] == 1) "entry" else "entries") }
                 }
             }
         }

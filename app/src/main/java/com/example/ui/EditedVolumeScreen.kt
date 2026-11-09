@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -133,6 +134,8 @@ fun EditedVolumeScreen(
     }
     val numbers = remember(chapters) { chapters.indices.map { EditedVolumes.numberOf(chapters, it) } }
     var showSections by remember { mutableStateOf(true) }
+    var folded by remember(document.id) { mutableStateOf(setOf<Int>()) }
+    var foldFilter by remember(document.id) { mutableStateOf("") }
     val hasSections = chapters.any { it.isSection }
 
     Surface(color = Color.White, modifier = Modifier.fillMaxSize()) {
@@ -207,9 +210,25 @@ fun EditedVolumeScreen(
             }
 
             // ------------------------------------------------------------ chapters
+            // Folding: parts hold chapters, chapters hold sections.
+            val foldDepth = remember(chapters) { chapters.map { if (it.isPart) 0 else if (it.isSection) 2 else 1 } }
+            val foldKids = remember(foldDepth) { Fold.kids(foldDepth) }
+            val shownIdx = remember(chapters, folded, foldFilter, showSections) {
+                Fold.visible(foldDepth, folded, foldFilter, chapters.map { listOf(it.title, it.authors).joinToString(" ") }).filter { showSections || !chapters[it].isSection || foldFilter.isNotBlank() }
+            }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
-                itemsIndexed(chapters, key = { i, c -> "$i-${c.startPage}-${c.title}" }) { i, c ->
+                item {
+                    FoldBar(foldFilter, { foldFilter = it }, { folded = emptySet() }, { folded = foldKids.indices.filter { foldKids[it] > 0 }.toSet() },
+                        Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                }
+                items(shownIdx, key = { i -> "$i-${chapters[i].startPage}-${chapters[i].title}" }) { i ->
+                    val c = chapters[i]
                     val indent = (c.level.coerceIn(0, 5) * 14).dp
+                    val isFolded = i in folded && foldFilter.isBlank()
+                    Row(verticalAlignment = Alignment.Top) {
+                    FoldToggle(foldKids[i] > 0 && foldFilter.isBlank(), isFolded, { folded = if (i in folded) folded - i else folded + i },
+                        Modifier.padding(start = 6.dp, top = if (c.isPart) 18.dp else 4.dp))
+                    Column(Modifier.weight(1f)) {
                     when {
                         c.isSection -> if (showSections) Row(
                             Modifier.fillMaxWidth().clickable { onOpenAtPage(c.startPage) }
@@ -263,6 +282,11 @@ fun EditedVolumeScreen(
                                 }
                             }
                         )
+                    }
+                    if (isFolded) Box(Modifier.padding(start = 20.dp + indent, bottom = 6.dp)) {
+                        FoldCount(true, foldKids[i], if (c.isPart) (if (foldKids[i] == 1) "entry" else "entries") else (if (foldKids[i] == 1) "section" else "sections"))
+                    }
+                    }
                     }
                 }
                 item {

@@ -118,7 +118,7 @@ pre.bibtex { max-width: 100%; }
 .tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
 .tag { font-family: var(--mono); font-size: 11px; border: 1px solid var(--ink); padding: 0 5px; }
 
-.chapters .ch { display: grid; grid-template-columns: 42px 1fr auto; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--rule); }
+.chapters .ch { display: grid; grid-template-columns: 20px 34px 1fr auto; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--rule); }
 .chapters .ch:first-child { border-top: 0; }
 .chapters .ch .no { font-family: var(--mono); font-size: 12px; color: var(--grey); text-align: right; }
 .chapters .ch .ct { font-family: var(--serif); font-weight: 700; }
@@ -729,3 +729,15 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .aiset { margin-top: 18px; display: flex; flex-direction: column; gap: 12px; }
 .aiidx { border: 1px solid var(--ink); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 .aiinbook select { font-size: 12px; }
+/* Folding contents (book page and reader) */
+.chapters .ch[hidden], .toc a[hidden] { display: none !important; }
+.foldbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; }
+.foldbar .foldfilter { flex: 1; min-width: 140px; padding: 4px 8px; font-size: 13px; }
+.foldbar .btn { font-size: 11px; padding: 3px 6px; }
+.fold { border: 0; background: none; cursor: pointer; font-size: 11px; padding: 0 4px 0 0; color: var(--grey); width: 18px; text-align: left; font-family: var(--mono); }
+.fold.none { display: inline-block; cursor: default; }
+.foldcount { font-family: var(--mono); font-size: 10px; color: var(--soft); margin-left: 8px; white-space: nowrap; font-weight: 400; font-style: normal; }
+.foldcount:empty { display: none; }
+.chapters .ch .fold { align-self: start; padding-top: 2px; position: relative; }
+.chapters .ch.sec .fold { margin-left: 18px; }
+.toc a .fold { display: inline-block; position: relative; }
