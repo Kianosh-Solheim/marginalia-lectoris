@@ -150,6 +150,8 @@ fun LibraryItemContextMenuDialog(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    var showItemFiles by remember { mutableStateOf(false) }
+    if (showItemFiles) ItemFilesDialog(document, { showItemFiles = false }, { showItemFiles = false; onDismiss(); onOpenDocument() })
 
     val mocTitle = remember(document.title, settings.mocTitleFormat) {
         MarkdownExporter.getMocTitle(document.title, settings)
@@ -739,6 +741,32 @@ fun LibraryItemContextMenuDialog(
                         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                             Text("Bibliography & RIS", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
                             Text("ISBN, DOI, publisher… · import/export RIS", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
+                        }
+                    }
+                }
+
+                // Option 4a: the item's files (other editions, cover, notes…), like a file explorer
+                if (com.example.reader.ItemFiles.isFileItem(document) && !com.example.reader.ZoteroPlaceholders.isPlaceholder(document)) {
+                    Surface(
+                        shape = RoundedCornerShape(0.dp),
+                        color = Color.White,
+                        border = BorderStroke(1.5.dp, Color.Black),
+                        modifier = Modifier.fillMaxWidth().clickable { showItemFiles = true }
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(shape = RoundedCornerShape(6.dp), color = Color.White, border = BorderStroke(1.dp, Color.Black), modifier = Modifier.size(36.dp)) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(imageVector = Icons.Default.Folder, contentDescription = null, tint = Color.Black, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Files…", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
+                                Text("Every file of this item (main file, other editions, cover, notes); add, rename, make main", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
+                            }
                         }
                     }
                 }

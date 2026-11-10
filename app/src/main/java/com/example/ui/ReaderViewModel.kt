@@ -185,6 +185,10 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             var fresh = repository.getDocumentById(document.id) ?: document
+            // A note made in another file of the item opens in that file (which becomes the main file).
+            if (targetHighlight != null) com.example.reader.ItemFiles.noteFile(getApplication(), fresh.id, targetHighlight.id)?.let { name ->
+                runCatching { fresh = com.example.reader.ItemFiles.setMain(getApplication(), fresh, name) }
+            }
             if (com.example.reader.ZoteroPlaceholders.isPlaceholder(fresh)) { com.example.ui.placeholderOpen.value = fresh.id; return@launch }
             if (com.example.reader.FolderBooks.isFolder(fresh)) {
                 // A folder book opens at the chapter read last.
@@ -318,10 +322,15 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
             )
 
             if (existingMatch != null) {
+                val attached = newFile.exists() && File(existingMatch.filePath).isFile && runCatching { File(existingMatch.filePath).canonicalPath != newFile.canonicalPath }.getOrDefault(false)
+                if (attached) kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(app, "“${existingMatch.title}” is already in the library: ${newFile.name} was added to it as another file. Long-press it → Files… to make it the main file.", android.widget.Toast.LENGTH_LONG).show()
+                }
                 val updatedExisting = existingMatch.copy(
                     title = cleanTitle.ifBlank { existingMatch.title },
                     author = cleanAuthor.ifBlank { existingMatch.author },
-                    filePath = if (newFile.exists()) filePath else existingMatch.filePath,
+                    // Another file of the same book (e.g. the EPUB beside the PDF) stays beside it in the item's folder; the main file stays.
+                    filePath = if (newFile.exists() && !(File(existingMatch.filePath).isFile && runCatching { File(existingMatch.filePath).canonicalPath != newFile.canonicalPath }.getOrDefault(false))) filePath else existingMatch.filePath,
                     coverUri = coverUri ?: existingMatch.coverUri,
                     totalPages = if (totalPages > 1) totalPages else existingMatch.totalPages,
                     lastReadTimestamp = System.currentTimeMillis(),

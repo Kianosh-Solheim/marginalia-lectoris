@@ -236,6 +236,96 @@ function clockOf(ms) { const s = Math.floor((ms || 0) / 1000); return s >= 3600 
 const recPath = (d, r, tail) => `doc/${d.id}/recordings/${encodeURIComponent(r.id)}${tail ? '/' + tail : ''}`;
 
 /** The book page's Recordings section: play, transcribe (here, on the tablet, online), read, delete. */
+// ------------------------------------------------------------------ the item's files
+
+const fileUrl = (d, rel, dl) => `/api/doc/${d.id}/files?rel=${encodeURIComponent(rel)}${dl ? '&download=1' : ''}`;
+
+/** Sends files into an item's folder (another edition, images, notes…), one after the other. */
+async function uploadItemFiles(d, files, done) {
+  for (const f of files) {
+    toast(`Adding ${f.name} to “${d.title}”…`, 1500);
+    try {
+      const r = await fetch(`/api/doc/${d.id}/files?op=upload&name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'X-Marginalia': '1', 'Content-Type': 'application/octet-stream' }, body: f });
+      if (r.status === 401) { showLogin(); return; }
+      if (!r.ok) { let m = r.status; try { m = (await r.json()).error || m; } catch (_) {} throw new Error(m); }
+      toast(`Added ${f.name} to “${d.title}”`);
+    } catch (e) { fail(e); }
+  }
+  done && done();
+}
+
+function pickItemFiles(d, done) {
+  const inp = h('input', { type: 'file', multiple: true, style: { display: 'none' } });
+  inp.addEventListener('change', () => { const fs = [...inp.files]; inp.remove(); if (fs.length) uploadItemFiles(d, fs, done); });
+  document.body.append(inp); inp.click();
+}
+
+/** A note made in another file of the item: make that file the main one, then open the note. */
+async function openNoteInFile(d, n) {
+  try {
+    await api(`doc/${d.id}/files`, { method: 'POST', json: { op: 'main', rel: n.file } });
+    toast(`Opening ${n.file}`);
+    const target = `#/read/${d.id}?hl=${n.id}`;
+    if (location.hash === target) route(); else location.hash = target;
+  } catch (e) { fail(e); }
+}
+
+/** After an import: the new file looks like an item already in the library. */
+function offerAttach(data, job) {
+  const like = data.lookalike;
+  confirmBox('Another file of a book you have?', `“${data.title}” (${data.fileType}) looks like “${like.title}” (${like.fileType}) in your library. Add the file to that item instead of keeping it as a new one? Each file keeps its own place and notes.`, 'Add to that item', async () => {
+    try {
+      await api(`doc/${data.id}/attach-to`, { method: 'POST', json: { target: like.id } });
+      if (job) job.status.textContent = `Added to “${like.title}” as another file`;
+      toast(`Added to “${like.title}”`);
+      refreshAfterUpload();
+    } catch (e) { fail(e); }
+  });
+}
+
+/** The item's folder, like a file explorer: every file that makes up the item. */
+function filesSection(d, again) {
+  const box = h('div', { class: 'ifiles' }, h('div', { class: 'muted', style: { padding: '8px' } }, 'Reading the folder…'));
+  const pathEl = h('div', { class: 'muted mono', style: { fontSize: '11px', margin: '-4px 0 6px', wordBreak: 'break-all' } });
+  const fmtTime = t => { const x = new Date(t); return x.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); };
+  const act = async (json, msg) => { try { const r = await api(`doc/${d.id}/files`, { method: 'POST', json }); toast(msg); draw(r); if (json.op === 'main' || json.op === 'cover') again(); } catch (e) { fail(e); } };
+  const draw = r => {
+    clear(box);
+    pathEl.textContent = r.folder;
+    if (!r.files.length) box.append(h('div', { class: 'muted', style: { padding: '8px' } }, 'The folder is empty.'));
+    r.files.forEach(f => {
+      const ext = (f.name.split('.').pop() || '').toLowerCase();
+      const canView = !f.dir && (f.image || ['pdf', 'txt', 'md', 'html', 'htm', 'json', 'bib', 'ris', 'm4a', 'mp3', 'wav', 'ogg'].includes(ext));
+      const acts = h('span', { class: 'acts' });
+      if (f.main) acts.append(h('button', { class: 'btn fill', onclick: () => { location.hash = `#/read/${d.id}`; } }, 'Read'));
+      else if (f.readable) acts.append(h('button', { class: 'btn', title: 'Make this the file that Read opens (each file keeps its own place)', onclick: () => act({ op: 'main', rel: f.rel }, `${f.name} is now the main file`) }, 'Make main'));
+      if (f.image && !f.cover) acts.append(h('button', { class: 'btn', onclick: () => act({ op: 'cover', rel: f.rel }, 'Cover changed') }, 'Make cover'));
+      if (canView) acts.append(h('a', { class: 'btn quiet', href: fileUrl(d, f.rel), target: '_blank', rel: 'noopener' }, 'Open'));
+      if (!f.dir) acts.append(h('a', { class: 'btn quiet', href: fileUrl(d, f.rel, true) }, 'Download'));
+      if (f.rel !== '@cover') acts.append(h('button', { class: 'btn quiet', onclick: () => {
+        const name = prompt('New name', f.name); if (!name || name === f.name) return;
+        act({ op: 'rename', rel: f.rel, name }, 'Renamed');
+      } }, 'Rename'));
+      if (!f.main && f.rel !== '@cover') acts.append(h('button', { class: 'btn quiet', onclick: () => confirmBox('Remove this file?', `“${f.name}” is moved to the _to_delete folder in Readmark (nothing is erased).`, 'Move to _to_delete', () => act({ op: 'delete', rel: f.rel }, 'Moved to _to_delete')) }, 'Delete'));
+      box.append(h('div', { class: 'ifile' + (f.rel.includes('/') ? ' sub' : '') },
+        f.image ? h('span', { class: 'ik thumb' }, h('img', { src: fileUrl(d, f.rel), loading: 'lazy', alt: '' })) : h('span', { class: 'ik' }, f.dir ? 'DIR' : f.kind.slice(0, 8)),
+        h('span', { class: 'nm', title: f.rel }, f.dir ? '📁 ' : '', f.rel === '@cover' ? f.name + ' (app cover cache)' : f.rel, f.main ? h('span', { class: 'badge2', title: 'Read opens this file' }, 'MAIN') : null, f.cover ? h('span', { class: 'badge2 c' }, 'COVER') : null),
+        h('span', { class: 'sz' }, f.dir ? '' : fmtSize(f.size)),
+        h('span', { class: 'dt' }, fmtTime(f.modified)),
+        acts));
+    });
+  };
+  const load = () => api(`doc/${d.id}/files`).then(draw).catch(e => { clear(box).append(h('div', { class: 'muted', style: { padding: '8px' } }, 'Could not read the folder: ' + e.message)); });
+  load();
+  const dz = h('div', { class: 'ifiles-drop' }, 'Drop files here to add them to this item, or ', h('a', { href: 'javascript:void 0', onclick: () => pickItemFiles(d, load) }, 'choose files…'));
+  dz.addEventListener('dragover', e => { if (hasFiles(e)) { e.preventDefault(); dz.classList.add('over'); } });
+  dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+  dz.addEventListener('drop', e => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); dz.classList.remove('over'); dragDepth = 0; document.getElementById('drop').hidden = true; uploadItemFiles(d, [...e.dataTransfer.files], load); });
+  return h('div', { class: 'section' },
+    h('h2', null, 'Files', h('span', { class: 'spacer' }), h('button', { class: 'chip', onclick: () => pickItemFiles(d, load) }, '+ Add files'), h('button', { class: 'chip', onclick: load }, 'Refresh')),
+    pathEl, box, dz);
+}
+
 function recordingsSection(d) {
   const box = h('div', { class: 'section', hidden: true });
   let timer = 0;
@@ -1489,6 +1579,7 @@ function renderBook(main, d) {
       d.placeholder ? h('button', { class: 'btn', onclick: () => placeholderNote(d, again) }, 'New note') : null,
       canRead(d) ? h('button', { class: 'btn fill', onclick: () => { location.hash = `#/read/${d.id}`; } }, d.progress > 0 ? 'Continue reading' : 'Read') : null,
       d.placeholder ? null : h('button', { class: 'btn', onclick: () => download(`doc/${d.id}/file?download=1`, 'Downloading the book…') }, 'Download file'),
+      d.placeholder || d.folder ? null : h('button', { class: 'btn', title: 'Add another file to this item: another edition (EPUB, PDF), images, notes…', onclick: () => pickItemFiles(d, again) }, 'Add file…'),
       exportMenu,
       h('button', { class: 'btn', onclick: () => editAll(d) }, 'Edit details'),
       h('button', { class: 'btn', onclick: () => addToFolderBook(d) }, d.folderNav ? 'Move to another folder book…' : 'Add to a folder book…'),
@@ -1500,6 +1591,7 @@ function renderBook(main, d) {
       }) }, 'Delete')),
     d.summary ? h('div', { class: 'section' }, h('h2', null, 'Abstract'), h('div', { class: 'summary' }, d.summary)) : null,
     d.chapters ? chaptersSection(d) : null,
+    d.placeholder ? null : filesSection(d, again),
     notesSection(d, main),
     recordingsSection(d),
     bibSection(d, main));
@@ -2414,21 +2506,52 @@ window.addEventListener('dragenter', e => {
   tagCache = null;
   e.preventDefault(); dragDepth++;
   const image = state.currentDoc && [...(e.dataTransfer.items || [])].some(i => i.kind === 'file' && /^image\//.test(i.type));
-  document.querySelector('#drop .drop-title').textContent = image ? `Drop to make this the cover of “${state.currentDoc.title}”` : state.uploadFolder ? `Drop to add chapters to “${state.uploadFolder.title}”` : 'Drop to add to the library';
-  document.getElementById('drop-sub').textContent = state.uploadFolder ? 'Each file becomes a chapter, in the order dropped' : `Adds as ${state.category === 'ARTICLE' ? 'articles' : 'books'} · PDF · EPUB · DAISY · HTML · Markdown · text`;
+  const onItem = state.currentDoc && !state.currentDoc.folder && !state.currentDoc.placeholder && document.querySelector('.book');
+  document.querySelector('#drop .drop-title').textContent = image ? `Drop to make this the cover of “${state.currentDoc.title}”` : onItem ? `Drop to add the file to “${state.currentDoc.title}”` : state.uploadFolder ? `Drop to add chapters to “${state.uploadFolder.title}”` : 'Drop to add to the library';
+  document.getElementById('drop').classList.toggle('thin', !!document.getElementById('shelf'));
+  document.getElementById('drop-sub').textContent = document.getElementById('shelf') ? 'Drop on a book to add the file to it (another edition, notes…), or anywhere else for a new item' : state.uploadFolder ? 'Each file becomes a chapter, in the order dropped' : `Adds as ${state.category === 'ARTICLE' ? 'articles' : 'books'} · PDF · EPUB · DAISY · HTML · Markdown · text`;
   document.getElementById('drop').hidden = false;
 });
-window.addEventListener('dragover', e => { if (!dragOut && hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
-window.addEventListener('dragleave', e => { if (!hasFiles(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) document.getElementById('drop').hidden = true; });
+/** The library card under the pointer (a file dropped there is added to that item). */
+function cardUnder(e) {
+  if (!document.getElementById('shelf')) return null;
+  const el = document.elementsFromPoint(e.clientX, e.clientY).find(x => x.classList && x.classList.contains('card') && x.dataset.pick);
+  if (!el) return null;
+  const d = state.docs.find(x => String(x.id) === el.dataset.pick);
+  return d && !d.folder && !d.placeholder ? { el, d } : null;
+}
+let dropCard = null;
+window.addEventListener('dragover', e => {
+  if (!dragOut && hasFiles(e)) {
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+    const c = cardUnder(e);
+    if ((c && c.el) !== dropCard) {
+      if (dropCard) dropCard.classList.remove('dropon');
+      dropCard = c ? c.el : null;
+      if (dropCard) dropCard.classList.add('dropon');
+      const t = document.querySelector('#drop .drop-title');
+      if (t && document.getElementById('shelf')) t.textContent = c ? `Add to “${c.d.title}”` : 'Drop to add to the library';
+    }
+  }
+});
+window.addEventListener('dragleave', e => { if (!hasFiles(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) { document.getElementById('drop').hidden = true; if (dropCard) { dropCard.classList.remove('dropon'); dropCard = null; } } });
 window.addEventListener('drop', e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; document.getElementById('drop').hidden = true;
+  if (dropCard) { dropCard.classList.remove('dropon'); dropCard = null; }
   if (readerOpen) return;
   let files = [...e.dataTransfer.files];
+  // Dropped on a book in the library: the files are added to that item.
+  const onCard = cardUnder(e);
+  if (onCard && files.length) { uploadItemFiles(onCard.d, files, () => {}); return; }
   // An image dropped on a book's page (or into the cover dialog) becomes its cover.
   const image = files.find(isImageFile);
   if (coverTake) { if (image) coverTake(image); else toast('Drop an image file (JPEG, PNG, WebP…)'); return; }
   if (image && state.currentDoc) { changeCover(state.currentDoc, image); files = files.filter(f => !isImageFile(f)); }
+  // On a book's page, files are added to that item (another edition, notes…), not imported as new items.
+  if (state.currentDoc && !state.currentDoc.folder && !state.currentDoc.placeholder && document.querySelector('.book') && files.length && !files.every(f => /\.ris$/i.test(f.name))) {
+    const d0 = state.currentDoc; uploadItemFiles(d0, files.filter(f => !/\.ris$/i.test(f.name)), () => showBook(d0.id)); files = files.filter(f => /\.ris$/i.test(f.name));
+  }
   const ris = files.filter(f => /\.ris$/i.test(f.name));
   if (ris.length) {
     files = files.filter(f => !/\.ris$/i.test(f.name));
@@ -2491,6 +2614,7 @@ function pump() {
     if (xhr.status >= 200 && xhr.status < 300) {
       job.bar.style.width = '100%';
       job.status.textContent = `Added: ${data.title || job.f.name}${data.displayAuthor ? ' — ' + data.displayAuthor : ''}`;
+      if (data.lookalike) offerAttach(data, job);
       refreshAfterUpload();
     } else {
       job.bar.style.background = '#fff'; job.status.textContent = 'Failed: ' + (data.error || xhr.status);
@@ -2621,11 +2745,11 @@ async function openReader(id, params) {
       side.append(h('h3', null, 'Notes', h('span', { class: 'mono muted', style: { fontSize: '12px', fontWeight: 400, marginLeft: '6px' } }, ctx.notes.length)));
       if (!ctx.notes.length) side.append(h('div', { class: 'muted' }, 'Select text in the book to highlight it or add a note.'));
       ctx.notes.slice().sort((a, b) => a.pageNumber - b.pageNumber).forEach(n => {
-        const ni = h('div', { class: 'nitem', onclick: () => readerOpen && readerOpen.goToNote(n) },
+        const ni = h('div', { class: 'nitem' + (n.file ? ' otherfile' : ''), title: n.file ? `Made in ${n.file}: opens that file` : '', onclick: () => n.file ? openNoteInFile(d, n) : readerOpen && readerOpen.goToNote(n) },
           n.title ? h('div', { class: 'ntitle' }, n.title) : null,
           h('div', { class: 'q', style: { borderLeftColor: n.colorHex || '#E4E4E7' } }, n.highlightedText),
           n.userNotes ? h('div', { style: { fontSize: '13px', marginTop: '3px', whiteSpace: 'pre-wrap' } }, n.userNotes.length > 220 ? n.userNotes.slice(0, 220) + '…' : n.userNotes) : null,
-          h('div', { class: 'w' }, noteLocus(n, d), ' · ', h('a', { href: 'javascript:void 0', onclick: e => { e.stopPropagation(); editNote(n, () => { ctx.refreshNotes(); }); } }, 'edit')));
+          h('div', { class: 'w' }, noteLocus(n, d), n.file ? h('span', { class: 'nfile' }, ' · in ' + n.file) : null, ' · ', h('a', { href: 'javascript:void 0', onclick: e => { e.stopPropagation(); editNote(n, () => { ctx.refreshNotes(); }); } }, 'edit')));
         onContext(ni, () => noteMenu(n, d, () => ctx.refreshNotes(), () => readerOpen && readerOpen.goToNote(n)));
         side.append(ni);
       });
@@ -2658,7 +2782,7 @@ async function openReader(id, params) {
   const ld = document.getElementById('rload'); if (ld) ld.remove();
   drawSide();
   const hl = +params.get('hl');
-  if (hl) { const n = ctx.notes.find(x => x.id === hl); if (n) setTimeout(() => readerOpen && readerOpen.goToNote(n), 300); }
+  if (hl) { const n = ctx.notes.find(x => x.id === hl); if (n && !n.file) setTimeout(() => readerOpen && readerOpen.goToNote(n), 300); }
   if (readerOpen) readerOpen.openSearch = () => { if (side.hidden || sideMode !== 'search') toggleSide('search'); else if (ctx.searchUi) ctx.searchUi.input.focus(); };
   // From the library's search: open the search here, run it, and show the chosen match.
   const find = params.get('find');
@@ -3097,7 +3221,8 @@ async function openPdf(ctx, params) {
     const layer = el.querySelector('.hl-layer');
     if (!layer || !el._text) return;
     clear(layer);
-    const notes = ctx.notes.filter(x => x.pageNumber === i || (x.pageNumber === i - 1 && x.printedPageLabel && /[–-]/.test(x.printedPageLabel)));
+    // (Notes made in another file of the item are not drawn here.)
+    const notes = ctx.notes.filter(x => !x.file && (x.pageNumber === i || (x.pageNumber === i - 1 && x.printedPageLabel && /[–-]/.test(x.printedPageLabel))));
     if (!notes.length) return;
     let flat = ''; const owner = [];
     el._text.strs.forEach((str, k) => { for (const ch of str.toLowerCase()) { if (LETTER.test(ch)) { flat += ch; owner.push(k); } } });
@@ -3513,6 +3638,7 @@ async function openEpub(ctx, params) {
     const sectionHref = contents.section ? contents.section.href : '';
     const res = resourceFor(sectionHref);
     ctx.notes.forEach(note => {
+      if (note.file) return;   // made in another file of the item
       if (painted.has(note.id)) return;
       if (res && (note.pageNumber < res.first || note.pageNumber >= res.first + res.count)) {
         // Not in this chapter by position; still try the text when the chapter title matches.

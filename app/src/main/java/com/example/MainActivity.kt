@@ -305,13 +305,14 @@ fun ReadMarkApp(
             var readerPlace by remember(doc.id) { mutableStateOf(doc.currentPage to doc.totalPages) }
             val partNav = remember(doc.id, folderVersion) { com.example.reader.FolderBooks.neighbours(doc.id) }
             androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
-            androidx.compose.runtime.key(doc.id) {
+            androidx.compose.runtime.key(doc.id, doc.filePath) {
             ReaderScreen(
                 document = doc,
                 initialPage = doc.currentPage,
                 initialHighlightRequest = pendingHighlightRequest,
                 onClearInitialHighlightRequest = { viewModel.clearPendingHighlightRequest() },
-                highlights = activeHighlights,
+                // (Notes made in another file of the item are not drawn in this one.)
+                highlights = remember(activeHighlights, doc.filePath) { activeHighlights.filter { com.example.reader.ItemFiles.noteFile(context, doc.id, it.id) == null } },
                 settings = settings,
                 pageTurnTrigger = viewModel.pageTurnTrigger,
                 onNavigateBack = { viewModel.closeDocument() },

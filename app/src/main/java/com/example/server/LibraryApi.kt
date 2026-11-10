@@ -281,6 +281,41 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                     HttpResponse.json(detail(updated).toString())
                 } finally { tmp.delete() }
             }
+            // The item's files: list, open or download one, add, rename, delete, make main, make cover.
+            what == "files" && m == "GET" -> {
+                val rel = req.query["rel"]
+                if (rel == null) HttpResponse.json(com.example.reader.ItemFiles.json(context, doc).toString())
+                else {
+                    val f = com.example.reader.ItemFiles.resolve(context, doc, rel)
+                    if (!f.isFile) throw NoSuchElementException("No such file")
+                    HttpResponse.FileBody(f, MiniHttpServer.mimeFor(f.name), if (req.query["download"] == "1") f.name else null)
+                }
+            }
+            what == "files" && m == "POST" && req.query["op"] == "upload" -> {
+                val name = File(req.query["name"].orEmpty()).name.ifBlank { "file" }
+                require(req.contentLength > 0) { "The file is empty." }
+                val f = com.example.reader.ItemFiles.add(context, doc, name, req.body)
+                HttpResponse.json(com.example.reader.ItemFiles.json(context, doc).put("added", f.name).toString(), 201)
+            }
+            what == "files" && m == "POST" -> {
+                val b = JSONObject(req.bodyText()); val rel = b.getString("rel")
+                var d2 = doc
+                when (b.optString("op")) {
+                    "rename" -> d2 = com.example.reader.ItemFiles.rename(context, doc, rel, b.getString("name"))
+                    "delete" -> com.example.reader.ItemFiles.delete(context, doc, rel)
+                    "main" -> d2 = com.example.reader.ItemFiles.setMain(context, doc, rel)
+                    "cover" -> d2 = com.example.reader.ItemFiles.setCover(context, doc, rel)
+                    else -> throw IllegalArgumentException("Unknown action")
+                }
+                HttpResponse.json(com.example.reader.ItemFiles.json(context, d2).put("doc", detail(d2)).toString())
+            }
+            // An imported file that belongs to another item: move it there and drop this new item.
+            what == "attach-to" && m == "POST" -> {
+                val target = db.documentDao().getDocumentById(JSONObject(req.bodyText()).getLong("target")) ?: throw NoSuchElementException("No such item")
+                require(db.highlightDao().getHighlightsListForDocument(doc.id).isEmpty()) { "This item already has notes; it is kept as it is." }
+                val f = com.example.reader.ItemFiles.mergeInto(context, doc, target) { ops.deleteDocument(it) }
+                HttpResponse.json(JSONObject().put("target", target.id).put("file", f.name).toString())
+            }
             what == "file" -> {
                 if (com.example.reader.ZoteroPlaceholders.isPlaceholder(doc)) throw NoSuchElementException("This book has no file on the tablet yet.")
                 val f = File(doc.filePath)
@@ -471,6 +506,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         val o = docJson(d, hls.size)
         o.put("highlightList", JSONArray().apply { hls.forEach { put(hlJson(it)) } })
         o.put("bib", bibJson(d))
+        runCatching { o.put("otherReadable", com.example.reader.ItemFiles.hasOtherReadable(d)).put("mainFile", File(d.filePath).name) }
         runCatching {
             o.put("citekey", Citations.citeKey(d, BibStore.get(d.id)))
             o.put("sourceFile", com.example.reader.MarkdownExporter.formatExportedSourceFilename(d))
@@ -526,6 +562,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
     }
 
     private fun hlJson(h: HighlightEntity): JSONObject = JSONObject()
+        .put("file", com.example.reader.ItemFiles.noteFile(context, h.documentId, h.id) ?: "")
         .put("id", h.id)
         .put("documentId", h.documentId)
         .put("title", h.title)
@@ -1225,7 +1262,9 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             val doc = LibraryImporter.import(context, ops, tmp, name, req.query["category"].orEmpty())
             BibStore.seedFromFile(doc)
             req.query["folder"]?.toLongOrNull()?.let { fid -> FolderBooks.addParts(context, fid, listOf(doc.id)) }
-            return HttpResponse.json(docJson(doc, 0).toString(), 201)
+            // Looks like an item already in the library (another edition or format)? Offer to attach it there.
+            val like = runCatching { com.example.reader.ItemFiles.lookalike(context, doc) }.getOrNull()
+            return HttpResponse.json(docJson(doc, 0).apply { if (like != null && req.query["folder"] == null) put("lookalike", JSONObject().put("id", like.id).put("title", like.title).put("fileType", like.fileType)) }.toString(), 201)
         } finally {
             tmp.delete()
         }
