@@ -139,6 +139,24 @@ object CslData {
         return JSONArray().apply { out.sortedByDescending { it.first }.take(limit).forEach { put(it.second) } }
     }
 
+    /** The source and place of a note, for citing it when it is dragged into a text: { source, locator, label }. */
+    suspend fun forNote(ctx: Context, noteId: Long): JSONObject {
+        Zotero.init(ctx); BibStore.init(ctx); EditedVolumes.init(ctx)
+        val db = AppDatabase.getInstance(ctx)
+        val n = db.highlightDao().getHighlightById(noteId) ?: throw NoSuchElementException("No such note")
+        val d = db.documentDao().getDocumentById(n.documentId) ?: throw NoSuchElementException("The note's book is gone")
+        // A note in a chapter of an edited volume cites the chapter (with its own authors).
+        val vol = EditedVolumes.get(ctx, d.id)
+        val idx = if (vol != null && vol.enabled) EditedVolumes.chapterIndexFor(vol, n.pageNumber, n.chapterTitle) else -1
+        val ch = if (idx >= 0) vol!!.chapters[idx].takeIf { it.isArticle && it.authors.isNotBlank() } else null
+        val src = if (ch != null) entry(ctx, fromChapter(ctx, d, idx, ch), "chapter", Zotero.chapterLinkOf(d.id, idx))
+        else entry(ctx, fromDoc(ctx, d), "library", Zotero.linkOf(d.id))
+        val file = ItemFiles.noteFile(ctx, d.id, n.id).orEmpty().ifBlank { d.filePath }
+        val pdf = file.endsWith(".pdf", true) || (ItemFiles.noteFile(ctx, d.id, n.id).isNullOrBlank() && d.fileType.equals("PDF", true))
+        val loc = n.printedPageLabel.trim().ifBlank { n.pageEquivalent.trim().replace(Regex("^pp?\\.\\s*", RegexOption.IGNORE_CASE), "") }.ifBlank { if (pdf && n.pageNumber > 0) n.pageNumber.toString() else "" }
+        return JSONObject().put("source", src).put("locator", loc).put("label", "page")
+    }
+
     private fun entry(ctx: Context, csl: JSONObject, source: String, zoteroKey: String?): JSONObject {
         val a = (csl.optJSONArray("author") ?: csl.optJSONArray("editor"))?.let { arr -> (0 until arr.length()).joinToString("; ") { i -> arr.optJSONObject(i)?.let { n -> n.optString("family").ifBlank { n.optString("literal") } }.orEmpty() } }.orEmpty()
         val y = csl.optJSONObject("issued")?.optJSONArray("date-parts")?.optJSONArray(0)?.optInt(0)?.takeIf { it > 0 }?.toString().orEmpty()

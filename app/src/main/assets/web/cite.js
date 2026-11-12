@@ -277,7 +277,7 @@ class Citing {
       };
       const done = () => {
         if (!chosen.length) { toast('Choose at least one source'); return; }
-        const items = chosen.map(c => { const o = { id: c.id }; ['locator', 'label', 'prefix', 'suffix'].forEach(k => { if (c[k]) o[k] = c[k]; }); if (c.suppressAuthor) o.suppressAuthor = true; return o; });
+        const items = chosen.map(c => { const o = { id: c.id }; ['locator', 'label', 'prefix', 'suffix', 'noteId'].forEach(k => { if (c[k]) o[k] = c[k]; }); if (c.suppressAuthor) o.suppressAuthor = true; return o; });
         if (pos != null) editor.chain().setNodeSelection(pos).updateAttributes('citation', { items }).setTextSelection(pos + 1).focus().run();
         else {
           const at = editor.state.selection.to;

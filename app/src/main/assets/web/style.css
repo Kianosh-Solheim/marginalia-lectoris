@@ -855,3 +855,41 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .cchose .ctitle { font-size: 13px; margin-bottom: 4px; }
 .cchose input, .cchose select { font-size: 12px; padding: 3px 6px; width: auto; }
 .cpreview { margin-top: 10px; font-family: var(--serif); font-size: 15px; }
+
+/* Writing: the notes panel */
+.wbody { display: flex; align-items: flex-start; }
+.wbody > .wscroll { flex: 1; min-width: 0; }
+.wnotes { position: sticky; width: 340px; flex: none; overflow-y: auto; background: var(--paper); border-left: 1.5px solid var(--ink); padding: 10px 12px 40px; display: flex; flex-direction: column; gap: 8px; align-self: flex-start; box-sizing: border-box; }
+.wnotes[hidden] { display: none; }
+.wnotes input[type=search] { width: 100%; }
+.wnotes select { flex: 1; min-width: 0; font-size: 12px; padding: 3px 4px; }
+.wnhead { display: flex; align-items: center; gap: 4px; }
+.wnhead .btn { padding: 2px 8px; }
+.wnhelp { font-size: 12px; }
+.wnlist { display: flex; flex-direction: column; gap: 6px; }
+.wnbook { display: flex; gap: 4px; align-items: baseline; font-size: 13px; font-weight: 600; margin-top: 8px; cursor: pointer; user-select: none; }
+.wnbook .wnbt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wncaret { width: 12px; flex: none; font-size: 10px; }
+.wncard { border: 1px solid var(--rule); background: #fff; padding: 7px 9px; cursor: grab; font-size: 13px; }
+.wncard:hover { border-color: var(--ink); }
+.wncard.dragging { opacity: .5; }
+.wncard.used { border-left: 3px solid #4f46e5; }
+.wncard .wnt { font-weight: 700; margin-bottom: 3px; }
+.wncard .wnq { font-family: var(--serif); font-size: 14px; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.wncard .wnq.open { -webkit-line-clamp: unset; display: block; }
+.wncard .wnn { margin-top: 4px; font-size: 12px; color: #333; border-left: 2px solid var(--rule); padding-left: 6px; white-space: pre-wrap; }
+.wnfoot { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 11px; }
+.wnfoot .btn { padding: 1px 7px; font-size: 11px; }
+.wnused { color: #4f46e5; font-weight: 600; }
+.wnmodes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+.wnmode { text-align: left; border: 1px solid var(--rule); background: #fff; padding: 7px 9px; cursor: pointer; font: inherit; font-size: 13px; }
+.wnmode .muted { font-size: 11px; margin-top: 2px; }
+.wnmode.on { border: 1.5px solid var(--ink); background: #f5f5f4; }
+.wnmode:disabled { opacity: .45; cursor: default; }
+.wntext { width: 100%; font-family: var(--serif); font-size: 15px; box-sizing: border-box; }
+.wnsrc { font-size: 13px; }
+.wnbq { display: inline; border-left: 3px solid var(--ink); padding-left: 6px; }
+@media (max-width: 1000px) {
+  .wnotes { position: fixed; right: 0; bottom: 0; z-index: 30; width: min(92vw, 360px); box-shadow: -4px 0 16px rgba(0,0,0,.18); }
+}
+@media (max-width: 600px) { .wnmodes { grid-template-columns: 1fr; } }

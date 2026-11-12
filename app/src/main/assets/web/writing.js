@@ -432,6 +432,8 @@ async function showWriter(id, params) {
   const exportMenu = h('div', { class: 'wmenu', hidden: true });
   const fileIn = h('input', { type: 'file', accept: '.docx,.odt,.md,.markdown,.txt,.html,.htm,.tex,.rtf', style: { display: 'none' } });
   const imgIn = h('input', { type: 'file', accept: 'image/*', multiple: true, style: { display: 'none' } });
+  const wbody = h('div', { class: 'wbody' }, h('div', { class: 'wscroll' }, h('div', { class: 'wsheet' }, page, fnList)));
+  let notesP = null;   // the notes panel (wnotes.js)
   app.append(
     h('div', { class: 'wtop' },
       h('a', { class: 'btn quiet', href: '#/writing', title: 'All documents' }, '← Writing'),
@@ -442,7 +444,7 @@ async function showWriter(id, params) {
       h('span', { class: 'wmenuwrap' }, h('button', { class: 'btn', onclick: e => { e.stopPropagation(); exportMenu.hidden = !exportMenu.hidden; } }, 'Export ▾'), exportMenu),
       fileIn, imgIn),
     bar, banner,
-    h('div', { class: 'wscroll' }, h('div', { class: 'wsheet' }, page, fnList)));
+    wbody);
   document.addEventListener('click', () => { exportMenu.hidden = true; });
 
   // ----- footnote editing
@@ -493,13 +495,14 @@ async function showWriter(id, params) {
       attributes: { class: 'wprose', spellcheck: 'true' },
       handlePaste: (view, e) => { const fs = [...(e.clipboardData && e.clipboardData.files || [])].filter(f => /^image\//.test(f.type)); if (!fs.length) return false; insertImages(fs); return true; },
       handleDrop: (view, e) => {
+        if (notesP && notesP.handleDrop(view, e)) return true;
         const fs = [...(e.dataTransfer && e.dataTransfer.files || [])].filter(f => /^image\//.test(f.type));
         if (!fs.length) return false;
         const p = view.posAtCoords({ left: e.clientX, top: e.clientY });
         insertImages(fs, p ? p.pos : null); return true;
       },
     },
-    onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); recomputeSoon(); },
+    onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); recomputeSoon(); if (notesP) notesP.refresh(); },
     onSelectionUpdate: () => refreshBar(),
   });
 
@@ -553,11 +556,17 @@ async function showWriter(id, params) {
     }),
     toolbarButton('―', 'Horizontal line', () => chain().setHorizontalRule().run()),
     toolbarButton('❝ Cite', 'Insert a citation from your library or Zotero (Ctrl+Shift+C)', () => citing.insert(editor)),
+    toolbarButton('▤ Notes', 'Your notes beside the text: drag one in to quote or cite it (Ctrl+Alt+N)', () => notesP.toggle(), () => notesP && notesP.isOpen()),
     toolbarButton('Bibliography', 'Insert the bibliography here (it lists everything you cite)', () => citing.insertBibliography(editor)),
     styleBtn,
     toolbarButton('Tx', 'Clear formatting', () => chain().unsetAllMarks().clearNodes().run()),
   ];
   bar.append(...btns);
+  notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); });
+  wbody.append(notesP.el);
+  const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; };
+  window.addEventListener('resize', placeNotes);
+  if (localGet('ml.wnotesOpen', '')) notesP.open();
   document.addEventListener('click', () => { tableMenu.hidden = true; });
   function refreshBar() {
     btns.forEach(b => { if (b._on) b.classList.toggle('on', !!b._on()); });
@@ -631,6 +640,7 @@ async function showWriter(id, params) {
   const onKey = e => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save().then(() => writeDocx(true)); toast('Saved', 1000); }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c')) { e.preventDefault(); citing.insert(editor); }
+    if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }
   };
   document.addEventListener('keydown', onKey);
   const onHide = () => { if (document.visibilityState === 'hidden' && dirty) save(); };
@@ -638,7 +648,7 @@ async function showWriter(id, params) {
   const onUnload = e => { if (dirty) { save(); e.preventDefault(); e.returnValue = ''; } };
   window.addEventListener('beforeunload', onUnload);
   window.writingLeave = () => {
-    document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onHide); window.removeEventListener('beforeunload', onUnload);
+    document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onHide); window.removeEventListener('beforeunload', onUnload); window.removeEventListener('resize', placeNotes);
     clearTimeout(saveTimer); clearTimeout(exportTimer);
     const p = dirty ? save() : Promise.resolve();
     p.then(() => writeDocx(false)).finally(() => editor.destroy());
