@@ -764,3 +764,69 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .nitem.otherfile { opacity: .75; }
 .nitem .nfile { font-family: var(--mono); font-size: 11px; color: #7c3aed; }
 @media (max-width: 900px) { .ifile { grid-template-columns: 52px minmax(0, 1fr); } .ifile .sz, .ifile .dt { display: none; } .ifile .acts { grid-column: 1 / -1; justify-content: flex-start; } }
+
+/* ---------- Writing */
+.writing-list { max-width: 1000px; margin: 0 auto; padding: 24px 16px; }
+.wdocs { border: 1px solid var(--ink); margin-top: 12px; }
+.wdoc { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+.wdoc:last-child { border-bottom: 0; }
+.wdoc .wt { font-family: var(--serif); font-size: 18px; font-weight: 700; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wdoc .wm { font-size: 11px; white-space: nowrap; }
+.wdoc .wx { display: flex; gap: 4px; }
+.wdoc .wx .chip { font-size: 10px; padding: 1px 5px; text-decoration: none; }
+.wdoc .wa { display: flex; gap: 4px; }
+.wtop { position: sticky; top: 0; z-index: 20; display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--paper); border-bottom: 1.5px solid var(--ink); flex-wrap: wrap; }
+.wtitle { flex: 1; min-width: 160px; font-family: var(--serif); font-size: 18px; font-weight: 700; border: 0; border-bottom: 1px dashed transparent; background: transparent; padding: 4px 2px; }
+.wtitle:focus { outline: none; border-bottom-color: var(--ink); }
+.wstatus, .wwords { font-size: 11px; color: var(--grey); white-space: nowrap; }
+.wmenuwrap { position: relative; display: inline-block; }
+.wmenu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 40; background: var(--paper); border: 1.5px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); display: flex; flex-direction: column; min-width: 190px; }
+.wtoolbar .wmenu { left: 0; right: auto; }
+.wmenu button { text-align: left; border: 0; background: none; padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.wmenu button:hover { background: var(--wash); }
+.wtoolbar { position: sticky; top: 49px; z-index: 19; display: flex; gap: 2px; flex-wrap: wrap; align-items: center; padding: 4px 12px; background: #fafafa; border-bottom: 1px solid var(--rule); }
+.wtoolbar .tb { border: 1px solid transparent; background: none; padding: 3px 7px; min-width: 28px; font-size: 13px; cursor: pointer; border-radius: 2px; }
+.wtoolbar .tb:hover { border-color: var(--ink); }
+.wtoolbar .tb.on { background: var(--ink); color: var(--paper); }
+.wtoolbar .wstyle { font-size: 13px; padding: 3px 4px; width: auto; margin: 0 4px; }
+.wbanner { background: #fef3c7; border-bottom: 1px solid var(--ink); padding: 8px 12px; font-size: 13px; }
+.wscroll { background: #e7e5e4; min-height: calc(100vh - 100px); padding: 28px 12px 80px; }
+.wsheet { background: #fff; max-width: 794px; margin: 0 auto; padding: 72px 80px; box-shadow: 0 1px 4px rgba(0,0,0,.25); min-height: 1000px; }
+@media (max-width: 800px) { .wsheet { padding: 28px 20px; } }
+.wprose { outline: none; font-family: var(--serif); font-size: 17px; line-height: 1.6; color: #111; counter-reset: fn; }
+.wprose p { margin: 0 0 .7em; }
+.wprose h1 { font-size: 30px; margin: 1em 0 .4em; } .wprose h2 { font-size: 24px; margin: 1em 0 .4em; } .wprose h3 { font-size: 20px; margin: 1em 0 .3em; } .wprose h4 { font-size: 17px; margin: 1em 0 .3em; }
+.wprose blockquote { border-left: 3px solid var(--ink); margin: 0 0 .8em; padding: 2px 0 2px 16px; color: #333; }
+.wprose pre { background: #f4f4f5; padding: 10px 12px; font-family: var(--mono); font-size: 13px; overflow-x: auto; }
+.wprose code { font-family: var(--mono); font-size: .88em; background: #f4f4f5; padding: 0 3px; }
+.wprose img { max-width: 100%; height: auto; }
+.wprose img.ProseMirror-selectednode { outline: 3px solid #2563eb; }
+.wprose a { color: #1d4ed8; }
+.wprose hr { border: 0; border-top: 1px solid #999; margin: 1.5em 0; }
+.wprose table { border-collapse: collapse; width: 100%; margin: 0 0 1em; table-layout: fixed; }
+.wprose td, .wprose th { border: 1px solid #555; padding: 4px 8px; vertical-align: top; position: relative; }
+.wprose th { background: #f4f4f5; font-weight: 700; }
+.wprose td p, .wprose th p { margin: 0; }
+.wprose .selectedCell::after { content: ''; position: absolute; inset: 0; background: rgba(37, 99, 235, .15); pointer-events: none; }
+.wprose p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: #a1a1aa; float: left; height: 0; pointer-events: none; }
+.wprose sup.fn { cursor: pointer; color: #1d4ed8; font-family: var(--sans); font-size: .7em; padding: 0 1px; }
+.wprose sup.fn::after { counter-increment: fn; content: counter(fn); }
+.wprose sup.fn.ProseMirror-selectednode { background: #bfdbfe; }
+.wfootnotes { margin-top: 40px; font-family: var(--serif); font-size: 14px; }
+.wfootnotes:empty { display: none; }
+.wfnhead { border-top: 1px solid #999; width: 30%; padding-top: 6px; margin-bottom: 6px; font-family: var(--mono); font-size: 10px; color: var(--grey); text-transform: uppercase; }
+.wfn { display: flex; gap: 8px; padding: 2px 0; cursor: pointer; }
+.wfn:hover { background: var(--wash); }
+.wfnno { min-width: 18px; text-align: right; font-size: 11px; color: #1d4ed8; }
+.wfnedit { border: 1px solid var(--ink); padding: 8px 10px; min-height: 120px; font-family: var(--serif); font-size: 15px; }
+.wfnedit .ProseMirror { outline: none; min-height: 100px; }
+.wfnedit p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: #a1a1aa; float: left; height: 0; pointer-events: none; }
+.wvers { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 12px; height: 60vh; }
+.wverlist { overflow: auto; border: 1px solid var(--ink); display: flex; flex-direction: column; }
+.wver { text-align: left; border: 0; border-bottom: 1px solid var(--rule); background: none; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.wver.on { background: var(--ink); color: var(--paper); }
+.wverprev { overflow: auto; border: 1px solid var(--ink); padding: 14px 18px; font-family: var(--serif); font-size: 14px; }
+.wverprev .ProseMirror { outline: none; counter-reset: fn; }
+.wverprev sup.fn::after { counter-increment: fn; content: counter(fn); }
+.wtop input.wtitle { border: 0 !important; border-bottom: 1px dashed transparent !important; box-shadow: none; }
+.wtop input.wtitle:focus { border-bottom-color: var(--ink) !important; }

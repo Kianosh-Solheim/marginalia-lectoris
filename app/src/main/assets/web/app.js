@@ -164,6 +164,9 @@ function route() {
   const parts = path.split('/').filter(Boolean);
   closeReader();
   if (typeof stopLive === 'function') stopLive();
+  // Leaving the writing program: save what is not saved yet.
+  if (window.writingLeave) { const f = window.writingLeave; window.writingLeave = null; f(); }
+  state.writing = false;
   state.uploadFolder = null;
   state.currentBook = parts[0] === 'book' && parts[1] ? +parts[1] : null;
   state.currentDoc = null;
@@ -174,6 +177,8 @@ function route() {
   if (parts[0] === 'presentations') { state.tab = 'presentations'; return showPresentations(); }
   if (parts[0] === 'zotero') { state.tab = 'zotero'; return showZotero(); }
   if (parts[0] === 'search') { state.tab = 'search'; return showTextSearch(params); }
+  if (parts[0] === 'writing') { state.tab = 'writing'; return showWriting(params); }
+  if (parts[0] === 'write' && parts[1]) { state.tab = 'writing'; return showWriter(decodeURIComponent(parts[1]), params); }
   if (parts[0] === 'presenter' && parts[1]) return showPresenter(decodeURIComponent(parts[1]), params);
   if (parts[0] === 'audience') return showAudience();
   state.tab = ['books', 'articles'].includes(parts[0]) ? parts[0] : 'all';
@@ -210,7 +215,7 @@ function showLogin() {
 // ------------------------------------------------------------------ header
 
 function header() {
-  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero'], ['search', 'Search', '#/search'], ['settings', 'Settings', '#/settings']];
+  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero'], ['search', 'Search', '#/search'], ['writing', 'Writing', '#/writing'], ['settings', 'Settings', '#/settings']];
   const search = h('input', { type: 'search', class: 'search', placeholder: 'Search title, author, tag…', value: state.query });
   search.addEventListener('input', () => {
     state.query = search.value;
@@ -2502,7 +2507,7 @@ function renderNotesList() {
 let dragDepth = 0, dragOut = false;
 function hasFiles(e) { return e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files'); }
 window.addEventListener('dragenter', e => {
-  if (dragOut || !hasFiles(e) || readerOpen || coverTake) return;
+  if (dragOut || !hasFiles(e) || readerOpen || coverTake || state.writing) return;
   tagCache = null;
   e.preventDefault(); dragDepth++;
   const image = state.currentDoc && [...(e.dataTransfer.items || [])].some(i => i.kind === 'file' && /^image\//.test(i.type));
@@ -2539,7 +2544,7 @@ window.addEventListener('drop', e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; document.getElementById('drop').hidden = true;
   if (dropCard) { dropCard.classList.remove('dropon'); dropCard = null; }
-  if (readerOpen) return;
+  if (readerOpen || state.writing) return;
   let files = [...e.dataTransfer.files];
   // Dropped on a book in the library: the files are added to that item.
   const onCard = cardUnder(e);
