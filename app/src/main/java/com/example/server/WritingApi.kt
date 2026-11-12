@@ -79,6 +79,11 @@ class WritingApi(private val context: Context) {
                 File(d, "document.json").writeText(doc.toString())
                 HttpResponse.json(summary(d).toString(), 201)
             }
+            // Citations: search, styles and locales.
+            first == "cite-search" -> HttpResponse.json(com.example.reader.CslData.search(context, req.query["q"].orEmpty()).toString())
+            first == "styles-index" -> HttpResponse.json(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.CslData.stylesIndex(context) })
+            first == "style" -> HttpResponse.json(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.CslData.style(context, req.query["name"].orEmpty()) }.toString())
+            first == "locale" -> HttpResponse.text(200, kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.CslData.locale(context, req.query["lang"].orEmpty()) }, "application/xml; charset=utf-8")
             first == "pandoc-status" -> HttpResponse.json(Pandoc.status(context).toString())
             first == "pandoc-install" && m == "POST" -> { Pandoc.install(context); HttpResponse.json(Pandoc.status(context).toString()) }
             first == "pandoc.wasm" -> {

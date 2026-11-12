@@ -100,7 +100,8 @@ function pmInlinesToPandoc(nodes, ctx) {
       out.push(...inl);
     } else if (n.type === 'hardBreak') out.push({ t: 'LineBreak' });
     else if (n.type === 'image') out.push(imageToPandoc(n, ctx));
-    else if (n.type === 'footnote') out.push({ t: 'Note', c: pmBlocksToPandoc((n.attrs.content && n.attrs.content.content) || [], ctx) });
+    else if (n.type === 'footnote') out.push({ t: 'Note', c: pmBlocksToPandoc((n.attrs.content && n.attrs.content.content) || [], Object.assign({}, ctx, { inNote: true })) });
+    else if (n.type === 'citation' && ctx && ctx.citing) out.push(...ctx.citing.citationInlines(n.attrs, ctx.format, !!ctx.inNote));
   }
   return mergeInlines(out);
 }
@@ -121,6 +122,7 @@ function pmBlocksToPandoc(nodes, ctx, tight) {
       case 'horizontalRule': out.push({ t: 'HorizontalRule' }); break;
       case 'image': out.push({ t: 'Para', c: [imageToPandoc(n, ctx)] }); break;
       case 'table': out.push(tableToPandoc(n, ctx)); break;
+      case 'bibliography': if (ctx && ctx.citing) out.push(...ctx.citing.bibliographyBlocks(ctx.format)); break;
       default: if (n.content) out.push(...pmBlocksToPandoc(n.content, ctx));
     }
   }
@@ -271,7 +273,7 @@ const WRITE_EXPORTS = [
   ['tex', 'LaTeX (.tex)', 'latex', false],
 ];
 /** The document in another format, as a Blob. Pictures are sent along to Pandoc. */
-async function exportBlob(doc, title, ext, docId) {
+async function exportBlob(doc, title, ext, docId, citing) {
   const [, , to, binary] = WRITE_EXPORTS.find(e => e[0] === ext);
   const pd = await ensurePandoc('Exporting to .' + ext + '.');
   const files = {}; const srcs = {};
@@ -289,14 +291,17 @@ async function exportBlob(doc, title, ext, docId) {
       files[name] = blob; map[src] = name;
     } catch (_) {}
   }
-  const ast = pmToPandoc(doc, title, { mapSrc: src => map[src] || src });
+  const ast = pmToPandoc(doc, title, { mapSrc: src => map[src] || src, citing, format: ext });
   const opts = { from: 'json', to, standalone: true };
   if (binary) opts['output-file'] = 'out.' + ext;
   const r = await pd.convert(opts, JSON.stringify(ast), files);
   if (binary) {
     const b = r.files && r.files['out.' + ext];
     if (!b) throw new Error('Pandoc could not write the file' + (r.stderr ? ': ' + r.stderr.slice(0, 300) : ''));
-    return new Blob([b], { type: ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/vnd.oasis.opendocument.text' });
+    let out = new Blob([b], { type: ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/vnd.oasis.opendocument.text' });
+    // Zotero's document preferences, so its plug-in in Word or LibreOffice takes the citations over.
+    if (citing && JSON.stringify(doc).includes('"citation"')) { try { out = await citing.addZoteroPrefs(out, ext); } catch (e) { console.warn('Zotero preferences', e); } }
+    return out;
   }
   return new Blob([r.stdout || ''], { type: ext === 'html' ? 'text/html' : 'text/plain' });
 }
@@ -386,9 +391,9 @@ function footnoteExtension(T, onEdit) {
     },
   });
 }
-function fnText(doc) {
+function fnText(doc, citing) {
   let s = '';
-  const walk = n => { if (!n) return; if (n.type === 'text') s += n.text; if (n.type === 'paragraph' && s) s += ' '; (n.content || []).forEach(walk); };
+  const walk = n => { if (!n) return; if (n.type === 'text') s += n.text; if (n.type === 'citation' && citing) s += citing.text(n.attrs); if (n.type === 'paragraph' && s) s += ' '; (n.content || []).forEach(walk); };
   walk(doc);
   return s.trim();
 }
@@ -410,6 +415,11 @@ async function showWriter(id, params) {
   clear(app);
   let docId = d.id, baseModified = d.modified, dirty = false, saving = false, lastExportedJson = null, saveTimer = 0, exportTimer = 0, lastTyping = Date.now();
   let title = d.title || 'Untitled';
+  // Citations: the style, the sources' data and the formatted text (see cite.js).
+  let recomputeTimer = 0;
+  const citing = new Citing(T, d.settings, () => { dirty = true; scheduleSave(); styleBtn.textContent = '❝ Style: ' + shortStyle(); recomputeSoon(); });
+  const shortStyle = () => { const t = citing.styleLabel; return t.length > 28 ? t.slice(0, 26) + '…' : t; };
+  const recomputeSoon = () => { clearTimeout(recomputeTimer); recomputeTimer = setTimeout(() => citing.recompute(editor).then(refresh), 300); };
 
   // ----- layout
   const titleIn = h('input', { class: 'wtitle', value: title, placeholder: 'Title', title: 'Title (also the file name)' });
@@ -442,11 +452,12 @@ async function showWriter(id, params) {
     modal((box, close) => {
       const host = h('div', { class: 'wfnedit' });
       box.append(h('h2', null, 'Footnote'), host, h('div', { class: 'foot' },
+        h('button', { class: 'btn quiet', title: 'Cite a source in the footnote', onclick: () => citing.insert(fe) }, '❝ Cite'),
         h('button', { class: 'btn quiet', onclick: () => { editor.chain().focus().setNodeSelection(pos).deleteSelection().run(); close(); } }, 'Remove footnote'),
         h('span', { style: { flex: 1 } }),
         h('button', { class: 'btn', onclick: close }, 'Cancel'),
         h('button', { class: 'btn fill', onclick: () => { const c = fe.getJSON(); editor.chain().setNodeSelection(pos).updateAttributes('footnote', { content: c }).setTextSelection(pos + 1).focus().run(); close(); } }, 'Done')));
-      const fe = new T.Editor({ element: host, extensions: [T.StarterKit.configure({ heading: false, codeBlock: false, horizontalRule: false, blockquote: false }), T.Underline, T.Link.configure({ openOnClick: false }), T.Superscript, T.Subscript, T.Placeholder.configure({ placeholder: 'Write the footnote…' })],
+      const fe = new T.Editor({ element: host, extensions: [T.StarterKit.configure({ heading: false, codeBlock: false, horizontalRule: false, blockquote: false }), T.Underline, T.Link.configure({ openOnClick: false }), T.Superscript, T.Subscript, T.Placeholder.configure({ placeholder: 'Write the footnote…' }), ...citing.noteExtensions],
         content: node.attrs.content || { type: 'doc', content: [{ type: 'paragraph' }] } });
       setTimeout(() => fe.commands.focus('end'), 50);
     }, () => {});
@@ -475,6 +486,7 @@ async function showWriter(id, params) {
       T.Placeholder.configure({ placeholder: 'Start writing…' }),
       T.CharacterCount,
       footnoteExtension(T, editFootnote),
+      ...citing.extensions,
     ],
     content: d.content,
     editorProps: {
@@ -487,7 +499,7 @@ async function showWriter(id, params) {
         insertImages(fs, p ? p.pos : null); return true;
       },
     },
-    onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); },
+    onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); recomputeSoon(); },
     onSelectionUpdate: () => refreshBar(),
   });
 
@@ -511,6 +523,7 @@ async function showWriter(id, params) {
     ['Delete table', () => chain().deleteTable().run()],
   ];
   tableItems.forEach(([l, f]) => tableMenu.append(h('button', { onmousedown: e => e.preventDefault(), onclick: () => { tableMenu.hidden = true; f(); } }, l)));
+  const styleBtn = h('button', { class: 'tb wstylebtn', title: 'Citation style and language', onmousedown: e => e.preventDefault(), onclick: () => citing.pickStyle() }, '❝ Style: …');
   const btns = [
     toolbarButton('↶', 'Undo (Ctrl+Z)', () => chain().undo().run()),
     toolbarButton('↷', 'Redo (Ctrl+Y)', () => chain().redo().run()),
@@ -539,6 +552,9 @@ async function showWriter(id, params) {
       setTimeout(() => editFootnote(pos), 30);
     }),
     toolbarButton('―', 'Horizontal line', () => chain().setHorizontalRule().run()),
+    toolbarButton('❝ Cite', 'Insert a citation from your library or Zotero (Ctrl+Shift+C)', () => citing.insert(editor)),
+    toolbarButton('Bibliography', 'Insert the bibliography here (it lists everything you cite)', () => citing.insertBibliography(editor)),
+    styleBtn,
     toolbarButton('Tx', 'Clear formatting', () => chain().unsetAllMarks().clearNodes().run()),
   ];
   bar.append(...btns);
@@ -552,17 +568,19 @@ async function showWriter(id, params) {
     // The footnotes, numbered, under the text.
     clear(fnList);
     const notes = [];
-    editor.state.doc.descendants((n, pos) => { if (n.type.name === 'footnote') notes.push([n, pos]); });
-    if (notes.length) fnList.append(h('div', { class: 'wfnhead' }, 'Footnotes'), ...notes.map(([n, pos], i) =>
-      h('div', { class: 'wfn', onclick: () => editFootnote(pos) }, h('span', { class: 'wfnno' }, String(i + 1)), h('span', null, fnText(n.attrs.content) || h('i', { class: 'muted' }, 'empty — click to write')))));
+    editor.state.doc.descendants((n, pos) => { if (n.type.name === 'footnote' || (n.type.name === 'citation' && citing.isNote)) notes.push([n, pos]); });
+    if (notes.length) fnList.append(h('div', { class: 'wfnhead' }, 'Footnotes'), ...notes.map(([n, pos], i) => n.type.name === 'citation'
+      ? h('div', { class: 'wfn', onclick: () => citing.edit(editor, pos, n.attrs) }, h('span', { class: 'wfnno' }, String(i + 1)), h('span', { html: citing.html.get(n.attrs.citationID) || xmlEsc(citing.fallback(n.attrs)) }))
+      : h('div', { class: 'wfn', onclick: () => editFootnote(pos) }, h('span', { class: 'wfnno' }, String(i + 1)), h('span', null, fnText(n.attrs.content, citing) || h('i', { class: 'muted' }, 'empty — click to write')))));
     refreshBar();
   }
   refresh();
+  citing.ready.then(() => { styleBtn.textContent = '❝ Style: ' + shortStyle(); return citing.recompute(editor); }).then(refresh).catch(e => { styleBtn.textContent = '❝ Style: (not loaded)'; console.warn(e); });
 
   imgIn.addEventListener('change', () => { const fs = [...imgIn.files]; imgIn.value = ''; insertImages(fs); });
 
   // ----- saving
-  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified }, extra);
+  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified, settings: citing.settings() }, extra);
   async function save(extra) {
     if (saving) { scheduleSave(); return; }
     saving = true; clearTimeout(saveTimer);
@@ -600,7 +618,7 @@ async function showWriter(id, params) {
     const json = JSON.stringify(editor.getJSON()) + title;
     if (json === lastExportedJson && !force) return;
     try {
-      const blob = await exportBlob(editor.getJSON(), title, 'docx', docId);
+      const blob = await exportBlob(editor.getJSON(), title, 'docx', docId, citing);
       const r = await fetch(`/api/writing/${encodeURIComponent(docId)}/export?name=${encodeURIComponent(safeFileName(title) + '.docx')}`, { method: 'POST', headers: { 'X-Marginalia': '1', 'Content-Type': 'application/octet-stream' }, body: blob, credentials: 'same-origin' });
       if (r.ok) { lastExportedJson = json; lastExport = Date.now(); }
     } catch (e) { console.warn('Word copy', e); }
@@ -610,7 +628,10 @@ async function showWriter(id, params) {
     // The folder follows the title.
     try { await save(); const r = await api(`writing/${encodeURIComponent(docId)}/rename`, { method: 'POST', json: { title } }); if (r.id && r.id !== docId) { docId = r.id; baseModified = r.modified; history.replaceState(null, '', '#/write/' + encodeURIComponent(docId)); } } catch (e) { fail(e); }
   });
-  const onKey = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save().then(() => writeDocx(true)); toast('Saved', 1000); } };
+  const onKey = e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save().then(() => writeDocx(true)); toast('Saved', 1000); }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c')) { e.preventDefault(); citing.insert(editor); }
+  };
   document.addEventListener('keydown', onKey);
   const onHide = () => { if (document.visibilityState === 'hidden' && dirty) save(); };
   document.addEventListener('visibilitychange', onHide);
@@ -644,7 +665,7 @@ async function showWriter(id, params) {
           chosen = await api(`writing/${encodeURIComponent(docId)}/versions/${encodeURIComponent(v.name)}`);
           if (viewer) viewer.destroy();
           clear(preview);
-          viewer = new T.Editor({ element: preview, editable: false, extensions: [T.StarterKit, T.Underline, T.Superscript, T.Subscript, T.Link, T.Image.configure({ inline: true }), T.Table, T.TableRow, T.TableHeader, T.TableCell, footnoteExtension(T, () => {})], content: chosen.content });
+          viewer = new T.Editor({ element: preview, editable: false, extensions: [T.StarterKit, T.Underline, T.Superscript, T.Subscript, T.Link, T.Image.configure({ inline: true }), T.Table, T.TableRow, T.TableHeader, T.TableCell, footnoteExtension(T, () => {}), ...new Citing(T, citing.settings()).extensions], content: chosen.content });
           restore.disabled = false;
         } catch (er) { fail(er); }
       } }, h('b', null, new Date(v.time).toLocaleString()), v.label ? h('span', null, ' · ' + v.label) : null)));
@@ -683,7 +704,7 @@ async function showWriter(id, params) {
     try {
       await save();
       toast(`Writing ${label}…`, 0);
-      const blob = await exportBlob(editor.getJSON(), title, ext, docId);
+      const blob = await exportBlob(editor.getJSON(), title, ext, docId, citing);
       const name = safeFileName(title) + '.' + ext;
       saveBlob(blob, name);
       // A copy beside the document on the tablet too.

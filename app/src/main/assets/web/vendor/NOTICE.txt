@@ -3,3 +3,7 @@ Third-party code in this folder:
 - pandoc.bundle.js: the JavaScript part of pandoc-wasm 1.1.0 (MIT) and @bjorn3/browser_wasi_shim 0.4.2 (MIT/Apache-2.0).
   Pandoc itself (GPL-2.0-or-later) is not shipped with the app: the tablet downloads the official
   pandoc-wasm package from the npm registry on request and checks it against its published checksum.
+- citeproc.bundle.js: citeproc-js 2.4.63 by Frank Bennett (CPAL-1.0 OR AGPL-1.0), bundled with esbuild.
+  Source: https://github.com/Juris-M/citeproc-js
+- Citation styles (CSL) are downloaded on request from the Zotero style repository (CC BY-SA 3.0),
+  and locales from citation-style-language/locales (CC BY-SA 3.0).
