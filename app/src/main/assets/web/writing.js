@@ -104,7 +104,8 @@ function pmInlinesToPandoc(nodes, ctx) {
     } else if (n.type === 'hardBreak') out.push({ t: 'LineBreak' });
     else if (n.type === 'image') out.push(imageToPandoc(n, ctx));
     else if (n.type === 'footnote') out.push({ t: 'Note', c: pmBlocksToPandoc((n.attrs.content && n.attrs.content.content) || [], Object.assign({}, ctx, { inNote: true })) });
-    else if (n.type === 'citation' && ctx && ctx.citing) out.push(...ctx.citing.citationInlines(n.attrs, ctx.format, !!ctx.inNote));
+    else if (n.type === 'citation' && ctx && ctx.citing) out.push(...(ctx.citeKeys ? citeKeyInlines(n.attrs, ctx) : ctx.citing.citationInlines(n.attrs, ctx.format, !!ctx.inNote)));
+    else if (n.type === 'math') out.push({ t: 'Math', c: [{ t: n.attrs.display ? 'DisplayMath' : 'InlineMath' }, n.attrs.tex || ''] });
   }
   return mergeInlines(out);
 }
@@ -125,7 +126,7 @@ function pmBlocksToPandoc(nodes, ctx, tight) {
       case 'horizontalRule': out.push({ t: 'HorizontalRule' }); break;
       case 'image': out.push({ t: 'Para', c: [imageToPandoc(n, ctx)] }); break;
       case 'table': out.push(tableToPandoc(n, ctx)); break;
-      case 'bibliography': if (ctx && ctx.citing) out.push(...ctx.citing.bibliographyBlocks(ctx.format)); break;
+      case 'bibliography': if (ctx && ctx.citeKeys) out.push({ t: 'Div', c: [['refs', [], []], []] }); else if (ctx && ctx.citing) out.push(...ctx.citing.bibliographyBlocks(ctx.format)); break;
       default: if (n.content) out.push(...pmBlocksToPandoc(n.content, ctx));
     }
   }
@@ -201,9 +202,9 @@ function pandocInlinesToPm(inls, marks, ctx) {
       }
       case 'SmallCaps': out.push(...pandocInlinesToPm(x.c, marks, ctx)); break;
       case 'Quoted': { const dq = x.c[0].t === 'DoubleQuote'; pushText(dq ? '“' : '‘', marks); out.push(...pandocInlinesToPm(x.c[1], marks, ctx)); pushText(dq ? '”' : '’', marks); break; }
-      case 'Cite': out.push(...pandocInlinesToPm(x.c[1], marks, ctx)); break;
+      case 'Cite': if (ctx && ctx.keys && (x.c[0] || []).length) { out.push(citeToPm(x)); if (ctx.cm) ctx.cm.justStarted = null; } else out.push(...pandocInlinesToPm(x.c[1], marks, ctx)); break;
       case 'Code': pushText(x.c[1], withMark(marks, { type: 'code' })); break;
-      case 'Math': pushText(x.c[0].t === 'DisplayMath' ? `$$${x.c[1]}$$` : `$${x.c[1]}$`, marks); break;
+      case 'Math': out.push({ type: 'math', attrs: { tex: x.c[1], display: x.c[0].t === 'DisplayMath' } }); break;
       case 'Link': out.push(...pandocInlinesToPm(x.c[1], withMark(marks, { type: 'link', attrs: { href: x.c[2][0], target: '_blank' } }), ctx)); break;
       case 'Image': out.push({ type: 'image', attrs: { src: ctx && ctx.mapSrc ? ctx.mapSrc(x.c[2][0]) : x.c[2][0], alt: plainText(x.c[1]), title: x.c[2][1] || null } }); break;
       case 'Note': out.push({ type: 'footnote', attrs: { content: { type: 'doc', content: ensureBlocks(pandocBlocksToPm(x.c, ctx)) } } }); break;
@@ -290,7 +291,9 @@ async function importFile(file, docId) {
     return hit ? urls[hit] : src;
   };
   const cm = { open: [], ids: {}, data: {} };
-  return { content: pandocToPm(ast, { mapSrc, cm }), title: pandocTitle(ast), comments: cm.data };
+  // Citation keys (\cite{key}, [@key]) become live citations where the library or Zotero knows the key.
+  const keyed = await resolveImportedKeys(pandocToPm(ast, { mapSrc, cm, keys: true }));
+  return { content: keyed.content, title: pandocTitle(ast), comments: cm.data, sources: keyed.sources, unknown: keyed.unknown };
 }
 
 const WRITE_EXPORTS = [
@@ -301,7 +304,7 @@ const WRITE_EXPORTS = [
   ['tex', 'LaTeX (.tex)', 'latex', false],
 ];
 /** The document in another format, as a Blob. Pictures are sent along to Pandoc. */
-async function exportBlob(doc, title, ext, docId, citing, comments) {
+async function exportBlob(doc, title, ext, docId, citing, comments, keyed) {
   const [, , to, binary] = WRITE_EXPORTS.find(e => e[0] === ext);
   const pd = await ensurePandoc('Exporting to .' + ext + '.');
   const files = {}; const srcs = {};
@@ -320,8 +323,16 @@ async function exportBlob(doc, title, ext, docId, citing, comments) {
     } catch (_) {}
   }
   const cm = comments && (ext === 'docx' || ext === 'odt') && Object.keys(comments).length ? commentBounds(doc, comments) : null;
-  const ast = pmToPandoc(doc, title, { mapSrc: src => map[src] || src, citing, format: ext, cm });
+  // With citation keys (LaTeX, Markdown): Pandoc writes the citation commands and sets up the bibliography.
+  let bibTitle = '';
+  if (keyed && ext === 'tex') { const s = stripBibliography(doc); doc = s.doc; bibTitle = s.title; }
+  const ast = pmToPandoc(doc, title, { mapSrc: src => map[src] || src, citing, format: ext, cm, citeKeys: keyed ? keyed.keys : null });
   const opts = { from: 'json', to, standalone: true };
+  if (keyed) {
+    ast.meta.bibliography = { t: 'MetaString', c: keyed.bibName };
+    if (bibTitle) ast.meta['biblio-title'] = { t: 'MetaInlines', c: textToInlines(bibTitle) };
+    if (ext === 'tex') { opts['cite-method'] = keyed.method; if (keyed.method === 'biblatex') ast.meta.biblatexoptions = { t: 'MetaString', c: 'style=' + keyed.style }; else ast.meta['biblio-style'] = { t: 'MetaString', c: 'apalike' }; }
+  }
   if (binary) opts['output-file'] = 'out.' + ext;
   const r = await pd.convert(opts, JSON.stringify(ast), files);
   if (binary) {
@@ -359,7 +370,8 @@ async function showWriting() {
         const created = await api('writing', { method: 'POST', json: { title: base } });
         toast('Importing ' + f.name + '…', 0);
         const r = await importFile(f, created.id);
-        await api(`writing/${encodeURIComponent(created.id)}`, { method: 'PUT', json: { title: base, content: r.content, words: 0, settings: { comments: r.comments || {} } } });
+        await api(`writing/${encodeURIComponent(created.id)}`, { method: 'PUT', json: { title: base, content: r.content, words: 0, settings: { comments: r.comments || {}, items: Object.fromEntries((r.sources || []).map(e => [e.id, e.csl])), uris: Object.fromEntries((r.sources || []).filter(e => e.uri).map(e => [e.id, e.uri])) } } });
+        if ((r.unknown || []).length) toast(`${r.unknown.length} citation key${r.unknown.length === 1 ? '' : 's'} not found in the library or Zotero — left as text`, 5000);
         toast('Imported ' + f.name, 1500);
         if (files.length === 1) { location.hash = '#/write/' + encodeURIComponent(created.id); return; }
       } catch (e) { fail(e); }
@@ -422,7 +434,7 @@ function footnoteExtension(T, onEdit) {
 }
 function fnText(doc, citing) {
   let s = '';
-  const walk = n => { if (!n) return; if (n.type === 'text') s += n.text; if (n.type === 'citation' && citing) s += citing.text(n.attrs); if (n.type === 'paragraph' && s) s += ' '; (n.content || []).forEach(walk); };
+  const walk = n => { if (!n) return; if (n.type === 'text') s += n.text; if (n.type === 'citation' && citing) s += citing.text(n.attrs); if (n.type === 'math') s += '$' + n.attrs.tex + '$'; if (n.type === 'paragraph' && s) s += ' '; (n.content || []).forEach(walk); };
   walk(doc);
   return s.trim();
 }
@@ -490,7 +502,7 @@ async function showWriter(id, params) {
         h('span', { style: { flex: 1 } }),
         h('button', { class: 'btn', onclick: close }, 'Cancel'),
         h('button', { class: 'btn fill', onclick: () => { const c = fe.getJSON(); editor.chain().setNodeSelection(pos).updateAttributes('footnote', { content: c }).setTextSelection(pos + 1).focus().run(); close(); } }, 'Done')));
-      const fe = new T.Editor({ element: host, extensions: [T.StarterKit.configure({ heading: false, codeBlock: false, horizontalRule: false, blockquote: false }), T.Underline, T.Link.configure({ openOnClick: false }), T.Superscript, T.Subscript, T.Placeholder.configure({ placeholder: 'Write the footnote…' }), ...citing.noteExtensions],
+      const fe = new T.Editor({ element: host, extensions: [T.StarterKit.configure({ heading: false, codeBlock: false, horizontalRule: false, blockquote: false }), T.Underline, T.Link.configure({ openOnClick: false }), T.Superscript, T.Subscript, T.Placeholder.configure({ placeholder: 'Write the footnote…' }), mathExtension(T, p => mathDialog(fe, p)), ...citing.noteExtensions],
         content: node.attrs.content || { type: 'doc', content: [{ type: 'paragraph' }] } });
       setTimeout(() => fe.commands.focus('end'), 50);
     }, () => {});
@@ -520,6 +532,7 @@ async function showWriter(id, params) {
       T.CharacterCount,
       footnoteExtension(T, editFootnote),
       commentMarkExtension(T),
+      mathExtension(T, pos => mathDialog(editor, pos)),
       ...citing.extensions,
     ],
     content: d.content,
@@ -588,6 +601,7 @@ async function showWriter(id, params) {
       chain().insertContentAt(pos, { type: 'footnote', attrs: { content: { type: 'doc', content: [{ type: 'paragraph' }] } } }).setTextSelection(pos + 1).run();
       setTimeout(() => editFootnote(pos), 30);
     }),
+    toolbarButton('∑ Formula', 'Insert a formula written as LaTeX (Ctrl+Alt+E)', () => mathDialog(editor, null)),
     toolbarButton('―', 'Horizontal line', () => chain().setHorizontalRule().run()),
     toolbarButton('❝ Cite', 'Insert a citation from your library or Zotero (Ctrl+Shift+C)', () => citing.insert(editor)),
     toolbarButton('💬 Comment', 'Comment on the selected words (Ctrl+Alt+M)', () => commenting.add()),
@@ -680,6 +694,7 @@ async function showWriter(id, params) {
   const onKey = e => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save().then(() => writeDocx(true)); toast('Saved', 1000); }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c')) { e.preventDefault(); citing.insert(editor); }
+    if (e.ctrlKey && e.altKey && (e.key === 'e' || e.key === 'E' || e.code === 'KeyE')) { e.preventDefault(); mathDialog(editor, null); }
     if (e.ctrlKey && e.altKey && (e.key === 'm' || e.key === 'M' || e.code === 'KeyM')) { e.preventDefault(); commenting.add(); }
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }
   };
@@ -716,7 +731,7 @@ async function showWriter(id, params) {
           chosen = await api(`writing/${encodeURIComponent(docId)}/versions/${encodeURIComponent(v.name)}`);
           if (viewer) viewer.destroy();
           clear(preview);
-          viewer = new T.Editor({ element: preview, editable: false, extensions: [T.StarterKit, T.Underline, T.Superscript, T.Subscript, T.Link, T.Image.configure({ inline: true }), T.Table, T.TableRow, T.TableHeader, T.TableCell, footnoteExtension(T, () => {}), commentMarkExtension(T), ...new Citing(T, citing.settings()).extensions], content: chosen.content });
+          viewer = new T.Editor({ element: preview, editable: false, extensions: [T.StarterKit, T.Underline, T.Superscript, T.Subscript, T.Link, T.Image.configure({ inline: true }), T.Table, T.TableRow, T.TableHeader, T.TableCell, footnoteExtension(T, () => {}), commentMarkExtension(T), mathExtension(T, () => {}), ...new Citing(T, citing.settings()).extensions], content: chosen.content });
           restore.disabled = false;
         } catch (er) { fail(er); }
       } }, h('b', null, new Date(v.time).toLocaleString()), v.label ? h('span', null, ' · ' + v.label) : null)));
@@ -743,26 +758,75 @@ async function showWriter(id, params) {
         const r = await importFile(f, docId);
         editor.commands.setContent(r.content, true);
         commenting.replaceAll(r.comments || {});
+        (r.sources || []).forEach(e => { citing.items[e.id] = e.csl; if (e.uri) citing.uris[e.id] = e.uri; });
+        if ((r.sources || []).length) { citing.ensureBibliography(editor); citing.recompute(editor); }
         if (r.title && (title === 'Untitled' || !title)) { title = r.title; titleIn.value = title; }
         dirty = true; await save();
-        toast('Imported', 1500);
+        toast((r.unknown || []).length ? `Imported. ${r.unknown.length} citation key${r.unknown.length === 1 ? '' : 's'} not found in the library or Zotero (left as text): ${r.unknown.slice(0, 6).join(', ')}` : 'Imported', (r.unknown || []).length ? 7000 : 1500);
       } catch (e) { fail(e); }
     });
   });
 
   // ----- export
-  WRITE_EXPORTS.forEach(([ext, label]) => exportMenu.append(h('button', { onclick: async () => {
-    exportMenu.hidden = true;
+  const putOnTablet = (blob, name) => fetch(`/api/writing/${encodeURIComponent(docId)}/export?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'X-Marginalia': '1', 'Content-Type': 'application/octet-stream' }, body: blob, credentials: 'same-origin' }).catch(() => {});
+  async function runExport(ext, label, keyed) {
     try {
       await save();
       toast(`Writing ${label}…`, 0);
-      const blob = await exportBlob(editor.getJSON(), title, ext, docId, citing, commenting.settings());
       const name = safeFileName(title) + '.' + ext;
-      saveBlob(blob, name);
-      // A copy beside the document on the tablet too.
-      fetch(`/api/writing/${encodeURIComponent(docId)}/export?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'X-Marginalia': '1', 'Content-Type': 'application/octet-stream' }, body: blob, credentials: 'same-origin' }).catch(() => {});
+      if (ext !== 'bib') {
+        const blob = await exportBlob(editor.getJSON(), title, ext, docId, citing, commenting.settings(), keyed);
+        saveBlob(blob, name); putOnTablet(blob, name);   // a copy beside the document on the tablet too
+      }
+      if (keyed) {
+        const bib = new Blob([await bibFile(citing, keyed.keys, keyed.method === 'natbib')], { type: 'text/plain' });
+        setTimeout(() => saveBlob(bib, keyed.bibName), 400); putOnTablet(bib, keyed.bibName);
+      }
       toast('', 1);
     } catch (e) { fail(e); }
+  }
+  /** LaTeX, Markdown and .bib: how the citations go out, and what the citation keys are. */
+  async function keyedExport(ext, label) {
+    const doc = editor.getJSON();
+    let info;
+    try { info = await resolveCiteKeys(citing, doc); } catch (e) { fail(e); return; }
+    const n = Object.keys(info.keys).length;
+    if (!n && ext !== 'bib') { runExport(ext, label, null); return; }
+    if (!n) { toast('Nothing is cited in this text yet'); return; }
+    const bibName = safeFileName(title).replace(/\s+/g, '-') + '.bib';
+    modal((box, close) => {
+      const last = localGet('ml.wciteMethod.' + ext, ext === 'md' ? 'keys' : 'biblatex');
+      const choices = ext === 'tex' ? [['biblatex', 'biblatex — \\autocite{key}', 'With \\printbibliography; compile with biber.'], ['natbib', 'natbib — \\citep{key}', 'With \\bibliography{…}; compile with bibtex.'], ['text', 'Formatted text', 'The citations as they look here, no keys.']]
+        : ext === 'md' ? [['keys', 'Citation keys — [@key, p. 275]', 'For Pandoc, Quarto, Obsidian and Zettlr, with the .bib file.'], ['text', 'Formatted text', 'The citations as they look here, no keys.']] : [['biblatex', 'BibLaTeX', 'For biblatex and biber.'], ['natbib', 'BibTeX', 'For natbib and bibtex.']];
+      let method = choices.some(c => c[0] === last) ? last : choices[0][0];
+      const list = h('div', { class: 'wnmodes' });
+      const style = h('input', { value: localGet('ml.wbiblatexStyle', /apa|american psychological/i.test(citing.styleLabel) ? 'apa' : citing.isNote ? 'verbose' : 'authoryear'), style: { width: '160px' } });
+      const styleRow = h('label', { class: 'row', style: { gap: '6px', fontSize: '13px', alignItems: 'center', marginBottom: '8px' } }, 'biblatex style', style, h('span', { class: 'muted' }, 'e.g. apa, authoryear, verbose, chicago-authordate'));
+      const draw = () => {
+        clear(list); choices.forEach(([k, l, d]) => list.append(h('button', { class: 'wnmode' + (k === method ? ' on' : ''), onclick: () => { method = k; draw(); } }, h('b', null, l), h('div', { class: 'muted' }, d))));
+        styleRow.hidden = !(ext === 'tex' && method === 'biblatex');
+        notes.hidden = method === 'text';
+      };
+      const notes = h('div', { class: 'wkeynotes' });
+      notes.append(h('div', { class: 'muted', style: { fontSize: '13px' } }, `${n} source${n === 1 ? '' : 's'} cited. The keys are the citation keys in Marginalia; the file ${bibName} goes with it.`));
+      if (info.differ.length) notes.append(h('div', { class: 'wkeywarn' }, h('b', null, `${info.differ.length} key${info.differ.length === 1 ? ' differs' : 's differ'} from Zotero’s`), ' — Marginalia’s is used:',
+        h('table', null, h('tr', null, h('th', null, 'Source'), h('th', null, 'Marginalia'), h('th', null, 'Zotero')), info.differ.map(d => h('tr', null, h('td', null, d.label), h('td', { class: 'mono' }, d.mine), h('td', { class: 'mono' }, d.zotero))))));
+      else notes.append(h('div', { class: 'muted', style: { fontSize: '13px' } }, '✓ No key differs from the one in Zotero.'));
+      if (info.made.length) notes.append(h('div', { class: 'wkeywarn' }, h('b', null, `${info.made.length} without a key`), ' — one was made from author and year:',
+        h('table', null, info.made.map(d => h('tr', null, h('td', null, d.label), h('td', { class: 'mono' }, d.key))))));
+      box.classList.add('wide');
+      box.append(h('h2', null, label), ext === 'bib' ? null : h('div', { class: 'label' }, 'Citations'), list, styleRow, notes,
+        h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: () => {
+          localSet('ml.wciteMethod.' + ext, method); if (ext === 'tex' && method === 'biblatex') localSet('ml.wbiblatexStyle', style.value.trim() || 'authoryear');
+          close();
+          runExport(ext, label, method === 'text' ? null : { keys: info.keys, method: method === 'keys' ? 'biblatex' : method, style: style.value.trim() || 'authoryear', bibName });
+        } }, 'Export')));
+      draw();
+    });
+  }
+  WRITE_EXPORTS.concat([['bib', 'Bibliography file (.bib)']]).forEach(([ext, label]) => exportMenu.append(h('button', { onclick: () => {
+    exportMenu.hidden = true;
+    if (ext === 'tex' || ext === 'md' || ext === 'bib') keyedExport(ext, label); else runExport(ext, label, null);
   } }, label)));
 
   if (params && params.get('new')) { titleIn.focus(); titleIn.select(); } else editor.commands.focus('start');

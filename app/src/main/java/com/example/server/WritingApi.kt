@@ -81,6 +81,8 @@ class WritingApi(private val context: Context) {
             }
             // Citations: search, styles and locales.
             first == "cite-note" -> HttpResponse.json(com.example.reader.CslData.forNote(context, req.query["id"]?.toLongOrNull() ?: throw IllegalArgumentException("id")).toString())
+            first == "citekeys" && m == "POST" -> HttpResponse.json(com.example.reader.CslData.citekeys(context, JSONObject(req.bodyText()).optJSONArray("ids").let { a -> (0 until (a?.length() ?: 0)).map { a!!.optString(it) } }).toString())
+            first == "citekey-lookup" && m == "POST" -> HttpResponse.json(com.example.reader.CslData.byCitekey(context, JSONObject(req.bodyText()).optJSONArray("keys").let { a -> (0 until (a?.length() ?: 0)).map { a!!.optString(it) } }).toString())
             first == "cite-search" -> HttpResponse.json(com.example.reader.CslData.search(context, req.query["q"].orEmpty()).toString())
             first == "styles-index" -> HttpResponse.json(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.CslData.stylesIndex(context) })
             first == "style" -> HttpResponse.json(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.CslData.style(context, req.query["name"].orEmpty()) }.toString())

@@ -157,6 +157,51 @@ object CslData {
         return JSONObject().put("source", src).put("locator", loc).put("label", "page")
     }
 
+    /**
+     * The citation keys of cited sources, for LaTeX and Markdown: { id: { key, set, zoteroKey } }.
+     * Marginalia's own key comes first ([set] says whether it was typed in or is the default one);
+     * [zoteroKey] is the key the linked Zotero item has, so a difference can be shown.
+     */
+    suspend fun citekeys(ctx: Context, ids: List<String>): JSONObject {
+        Zotero.init(ctx); BibStore.init(ctx)
+        val dao = AppDatabase.getInstance(ctx).documentDao()
+        val out = JSONObject()
+        for (id in ids) {
+            val p = id.split(':')
+            val o = JSONObject().put("key", "").put("set", false).put("zoteroKey", "")
+            when {
+                p[0] == "z" && p.size >= 2 -> Zotero.item(p[1])?.let { Zotero.citationKey(it) }?.let { o.put("key", it).put("zoteroKey", it).put("set", it.isNotBlank()) }
+                p[0] == "ml" && p.size == 2 -> p[1].toLongOrNull()?.let { dao.getDocumentById(it) }?.let { d ->
+                    val rec = BibStore.get(d.id)
+                    o.put("key", rec[BibField.CITEKEY].trim().ifBlank { Citations.citeKey(d, rec) }).put("set", rec[BibField.CITEKEY].isNotBlank())
+                    Zotero.linkOf(d.id)?.let { Zotero.item(it) }?.let { o.put("zoteroKey", Zotero.citationKey(it)) }
+                }
+                p[0] == "ml" && p.size == 3 -> p[1].toLongOrNull()?.let { docId ->
+                    Zotero.chapterLinkOf(docId, p[2].toIntOrNull() ?: -1)?.let { Zotero.item(it) }?.let { Zotero.citationKey(it) }?.let { o.put("key", it).put("zoteroKey", it).put("set", it.isNotBlank()) }
+                }
+            }
+            out.put(id, o)
+        }
+        return out
+    }
+
+    /** The sources behind citation keys (of an imported LaTeX or Markdown text): { key: entry }. Keys nobody has are left out. */
+    suspend fun byCitekey(ctx: Context, keys: List<String>): JSONObject {
+        Zotero.init(ctx); BibStore.init(ctx)
+        val want = keys.toSet(); val out = JSONObject()
+        val docs = AppDatabase.getInstance(ctx).documentDao().getAllDocumentsSnapshot().filter { ItemFiles.isFileItem(it) || ZoteroPlaceholders.isPlaceholder(it) }
+        for (d in docs) {
+            val rec = BibStore.get(d.id)
+            val mine = setOf(rec[BibField.CITEKEY].trim(), Citations.citeKey(d, rec), Zotero.linkOf(d.id)?.let { Zotero.item(it) }?.let { Zotero.citationKey(it) }.orEmpty()).filter { it.isNotBlank() }
+            for (k in mine) if (k in want && !out.has(k)) out.put(k, entry(ctx, fromDoc(ctx, d), "library", Zotero.linkOf(d.id)))
+        }
+        if (out.length() < want.size) Zotero.list(null, null).forEach { z ->
+            val k = Zotero.citationKey(z)
+            if (k.isNotBlank() && k in want && !out.has(k)) out.put(k, entry(ctx, fromZotero(z), "zotero", z.optString("key")))
+        }
+        return out
+    }
+
     private fun entry(ctx: Context, csl: JSONObject, source: String, zoteroKey: String?): JSONObject {
         val a = (csl.optJSONArray("author") ?: csl.optJSONArray("editor"))?.let { arr -> (0 until arr.length()).joinToString("; ") { i -> arr.optJSONObject(i)?.let { n -> n.optString("family").ifBlank { n.optString("literal") } }.orEmpty() } }.orEmpty()
         val y = csl.optJSONObject("issued")?.optJSONArray("date-parts")?.optJSONArray(0)?.optInt(0)?.takeIf { it > 0 }?.toString().orEmpty()

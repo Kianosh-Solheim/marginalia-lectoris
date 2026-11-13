@@ -925,3 +925,14 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .clinkpart select { flex: 1; min-width: 200px; width: auto; font-size: 12px; padding: 3px 4px; }
 .clinkpart .btn { padding: 2px 8px; font-size: 11px; }
 .cwarn { color: #b45309; font-weight: 600; }
+
+/* Writing: formulas and citation keys */
+.wmath { cursor: pointer; padding: 0 1px; border-radius: 2px; }
+.wmath:hover, .ProseMirror-selectednode.wmath { background: #e0e7ff; }
+.wmath.block { display: block; text-align: center; margin: .6em 0; }
+.wmathsrc { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 13px; }
+.wmathprev { min-height: 48px; padding: 10px; border: 1px solid var(--rule); font-size: 18px; text-align: center; overflow-x: auto; }
+.wkeynotes { display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow-y: auto; }
+.wkeywarn { border-left: 3px solid #f59e0b; background: #fffbeb; padding: 6px 10px; font-size: 13px; }
+.wkeywarn table { border-collapse: collapse; margin-top: 4px; font-size: 12px; }
+.wkeywarn td, .wkeywarn th { text-align: left; padding: 2px 12px 2px 0; }

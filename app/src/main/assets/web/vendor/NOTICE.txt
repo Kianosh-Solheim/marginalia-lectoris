@@ -7,3 +7,4 @@ Third-party code in this folder:
   Source: https://github.com/Juris-M/citeproc-js
 - Citation styles (CSL) are downloaded on request from the Zotero style repository (CC BY-SA 3.0),
   and locales from citation-style-language/locales (CC BY-SA 3.0).
+- katex/: KaTeX 0.16.11 (MIT), https://katex.org — typesets formulas; fonts under the SIL Open Font License.
