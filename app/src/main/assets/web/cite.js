@@ -299,6 +299,106 @@ class Citing {
     });
   }
   /** A bibliography at the end (with a heading) the first time something is cited. */
+  /**
+   * An imported text from Google Docs has its Zotero citations as plain links
+   * ("(Tilly 2017b, 275)" → zotero.org/google-docs/?code). The code says nothing by itself, so each
+   * is matched by author and year against the library and Zotero, shown for checking, and turned
+   * into a live citation.
+   */
+  async convertLinks(editor) {
+    const self = this;
+    const ranges = zoteroLinkRanges(editor.state.doc);
+    if (!ranges.length) { toast('No Zotero links in this text'); return; }
+    try { await this.ready; } catch (e) { fail(e); return; }
+    toast('Matching the links with your library…', 0);
+    const cache = {};
+    const search = async q => {
+      const k = q.toLowerCase(); if (cache[k]) return cache[k];
+      try { cache[k] = await api('writing/cite-search?q=' + encodeURIComponent(q)); } catch (_) { cache[k] = []; }
+      return cache[k];
+    };
+    const yearOf = x => { const d = x.csl && x.csl.issued && x.csl.issued['date-parts']; return d && d[0] && d[0][0] ? String(d[0][0]) : ''; };
+    const fold = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const hasName = (x, name) => ['author', 'editor'].some(r => (x.csl[r] || []).some(p => fold([p['non-dropping-particle'], p.family, p.literal].filter(Boolean).join(' ')).includes(fold(name))));
+    const rank = list => { const seen = new Set(); return list.sort((a, b) => (a.source === 'zotero') - (b.source === 'zotero')).filter(x => { const k = fold(x.title) + yearOf(x); if (seen.has(k)) return false; seen.add(k); return true; }); };
+    for (const r of ranges) {
+      r.parts = parseCiteText(r.text);
+      for (const part of r.parts) {
+        part.cands = [];
+        if (!part.year) continue;
+        if (part.author) {
+          const name = part.author.split(/\s*(?:,|&| and | og | et al\.?| m\.\s?fl\.?)\s*/)[0].trim();
+          part.cands = rank((await search(name)).filter(x => yearOf(x) === part.year && hasName(x, name)));
+          if (!part.cands.length && name.includes(' ')) part.cands = rank((await search(name.split(' ').pop())).filter(x => yearOf(x) === part.year));
+        } else {
+          // "(2019, 81)": the author is named in the sentence. The nearest name before it that fits wins.
+          const names = [...new Set((r.before.match(/\b\p{Lu}[\p{L}'’-]{2,}/gu) || []).reverse())].slice(0, 8);
+          for (const name of names) {
+            const hits = rank((await search(name)).filter(x => yearOf(x) === part.year && hasName(x, name)));
+            if (hits.length) { part.cands = hits; break; }
+          }
+        }
+        part.pick = part.cands.length ? part.cands[0].id : '';
+      }
+    }
+    toast('', 1);
+    modal((box, close) => {
+      box.classList.add('wide');
+      const rows = h('div', { class: 'clinks' });
+      const countOk = () => ranges.filter(r => r.parts.length && r.parts.every(p => p.pick)).length;
+      const go = h('button', { class: 'btn fill' });
+      const drawGo = () => { const n = countOk(); go.textContent = `Convert ${n} of ${ranges.length}`; go.disabled = !n; };
+      ranges.forEach(r => {
+        const row = h('div', { class: 'clink' }, h('div', { class: 'clinktext' }, r.text));
+        if (!r.parts.length) row.append(h('div', { class: 'muted' }, 'Not understood — it stays a link.'));
+        r.parts.forEach(part => {
+          const sel = h('select', null, h('option', { value: '' }, part.cands.length ? '— leave as it is —' : '— no match found —'),
+            part.cands.map(x => h('option', { value: x.id, selected: x.id === part.pick }, `${x.label || ''} · ${(x.title || '').slice(0, 70)}${x.source === 'zotero' ? ' (Zotero)' : ''}`)));
+          sel.addEventListener('change', () => { part.pick = sel.value; drawGo(); });
+          const find = h('button', { class: 'btn quiet', title: 'Search for the right source yourself', onclick: async () => {
+            const q = prompt('Search the library and Zotero for', part.author || ''); if (!q) return;
+            const hits = rank((await search(q)).slice());
+            if (!hits.length) { toast('Nothing found'); return; }
+            part.cands = hits; part.pick = hits[0].id;
+            clear(sel).append(h('option', { value: '' }, '— leave as it is —'), hits.map(x => h('option', { value: x.id, selected: x.id === part.pick }, `${x.label || ''} · ${(x.title || '').slice(0, 70)}${x.source === 'zotero' ? ' (Zotero)' : ''}`)));
+            drawGo();
+          } }, 'Search…');
+          row.append(h('div', { class: 'clinkpart' },
+            h('span', { class: 'mono muted' }, [part.author || '(author in the sentence)', part.year, part.locator ? (part.label === 'page' ? 'p. ' : part.label + ' ') + part.locator : ''].filter(Boolean).join(' · ')),
+            sel, find, part.cands.length > 1 ? h('span', { class: 'cwarn', title: 'Several sources fit this author and year — check the choice' }, 'check') : null));
+        });
+        rows.append(row);
+      });
+      go.addEventListener('click', () => {
+        // From the end, so the positions before stay right.
+        let n = 0;
+        const tr = editor.state.tr;
+        ranges.slice().reverse().forEach(r => {
+          if (!r.parts.length || !r.parts.every(p => p.pick)) return;
+          const items = r.parts.map(p => {
+            const x = p.cands.find(c => c.id === p.pick);
+            self.items[x.id] = x.csl; if (x.uri) self.uris[x.id] = x.uri;
+            const o = { id: x.id };
+            if (p.locator) { o.locator = p.locator; o.label = p.label; }
+            if (p.prefix) o.prefix = p.prefix;
+            if (!p.author) o.suppressAuthor = true;
+            return o;
+          });
+          tr.replaceWith(r.from, r.to, editor.schema.nodes.citation.create({ citationID: newCiteId(), items }));
+          n++;
+        });
+        editor.view.dispatch(tr);
+        self.ensureBibliography(editor);
+        close(); self.onChange(); self.recompute(editor);
+        toast(`${n} link${n === 1 ? '' : 's'} turned into citations`, 2500);
+      });
+      drawGo();
+      box.append(h('h2', null, 'Zotero links → citations'),
+        h('div', { class: 'muted', style: { fontSize: '13px', marginBottom: '8px' } }, 'These links come from Zotero in Google Docs. Each is matched by author and year with your library and Zotero (as last loaded). Check the matches; anything left unmatched stays a link.'),
+        rows, h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), go));
+    });
+  }
+
   ensureBibliography(editor) {
     let has = false;
     editor.state.doc.descendants(n => { if (n.type.name === 'bibliography') has = true; return !has; });
@@ -443,4 +543,37 @@ class Citing {
     }
     return zip.generateAsync({ type: 'blob', mimeType: blob.type, compression: 'DEFLATE' });
   }
+}
+
+/** The Zotero links of a text imported from Google Docs: [{ from, to, text, before }]. */
+function zoteroLinkRanges(doc) {
+  const out = [];
+  doc.descendants((n, pos, parent) => {
+    if (!n.isText) return;
+    const link = n.marks.find(m => m.type.name === 'link' && /zotero\.org\/google-docs/i.test(m.attrs.href || ''));
+    if (!link) return;
+    const prev = out[out.length - 1];
+    if (prev && prev.to === pos && prev.href === link.attrs.href) { prev.to = pos + n.nodeSize; prev.text += n.text; return; }
+    let before = '';
+    try { const $p = doc.resolve(pos); before = doc.textBetween($p.start(), pos, ' ', ' ').slice(-400); } catch (_) {}
+    out.push({ from: pos, to: pos + n.nodeSize, text: n.text, href: link.attrs.href, before });
+  });
+  return out;
+}
+/** "(see Tilly 2017b, 275; della Porta 2013, ch. 3)" → [{ prefix, author, year, locator, label }]. Empty when it is not a citation. */
+function parseCiteText(text) {
+  const t = String(text || '').trim().replace(/^[(\[]\s*/, '').replace(/\s*[)\]][.,;:]?$/, '');
+  const parts = [];
+  for (const raw of t.split(/\s*;\s*/)) {
+    const m = raw.trim().match(/^(.*?)[\s,(]*\b((?:1[5-9]|20)\d{2})[a-z]?\b\)?(?:\s*[,:]\s*(.+))?$/);
+    if (!m) return [];
+    let author = m[1].trim().replace(/[,(]+$/, '').trim(), prefix = '';
+    const pm = author.match(/^((?:see also|see|cf\.?|e\.g\.,?|i\.e\.,?|se også|se|jf\.?|f\.eks\.?|bl\.a\.?)\s+)+/i);
+    if (pm) { prefix = pm[0].trim(); author = author.slice(pm[0].length).trim(); }
+    let locator = (m[3] || '').trim(), label = 'page';
+    const lm = locator.match(/^(pp?\.|s\.|ch(?:ap)?\.|kap\.|§+|para\.|sec\.)\s*(.+)$/i);
+    if (lm) { const k = lm[1].toLowerCase(); label = /^(ch|kap)/.test(k) ? 'chapter' : k.startsWith('§') || k === 'sec.' ? 'section' : k === 'para.' ? 'paragraph' : 'page'; locator = lm[2].trim(); }
+    parts.push({ prefix, author, year: m[2], locator, label });
+  }
+  return parts;
 }

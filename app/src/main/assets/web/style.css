@@ -893,3 +893,35 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
   .wnotes { position: fixed; right: 0; bottom: 0; z-index: 30; width: min(92vw, 360px); box-shadow: -4px 0 16px rgba(0,0,0,.18); }
 }
 @media (max-width: 600px) { .wnmodes { grid-template-columns: 1fr; } }
+
+/* Writing: comments in the margin */
+.wsheetrow { display: flex; justify-content: center; align-items: flex-start; gap: 14px; }
+.wsheetrow > .wsheet { margin: 0; flex: 0 1 794px; min-width: 0; box-sizing: border-box; }
+.wcmcol { flex: none; width: 270px; font-size: 13px; }
+.wcmcol[hidden] { display: none; }
+.wcmhead { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-family: var(--mono); font-size: 10px; text-transform: uppercase; color: var(--grey); margin-bottom: 6px; }
+.wcmtoggle { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+.wcmlist { position: relative; }
+.wcm { position: absolute; left: 0; right: 0; background: #fff; border: 1px solid var(--rule); border-left: 3px solid #f59e0b; padding: 6px 8px; cursor: pointer; box-sizing: border-box; }
+.wcmcol.stack .wcm { position: static; margin-bottom: 8px; }
+.wcm.on { border-color: var(--ink); border-left-color: #f59e0b; box-shadow: 0 2px 8px rgba(0,0,0,.15); z-index: 2; cursor: default; }
+.wcm.resolved { border-left-color: #9ca3af; opacity: .75; }
+.wcmentry + .wcmentry { border-top: 1px solid var(--rule); margin-top: 6px; padding-top: 6px; }
+.wcmwho { display: flex; gap: 6px; align-items: baseline; font-size: 12px; }
+.wcmwho .muted { font-size: 11px; }
+.wcmtext { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+.wcm:not(.on) .wcmtext { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.wcmacts { display: flex; gap: 12px; margin-top: 6px; }
+.wcmlink { border: 0; background: none; padding: 0; font: inherit; font-size: 11px; color: #4f46e5; cursor: pointer; text-transform: none; font-family: inherit; }
+.wcmlink:hover { text-decoration: underline; }
+.wcmbox textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; margin: 4px 0; resize: none; }
+.wcmbox .btn { padding: 2px 8px; font-size: 11px; }
+.wprose .cm { background: #fef3c7; border-bottom: 2px solid #f59e0b; }
+@media (max-width: 1000px) { .wsheetrow { flex-direction: column; align-items: center; } .wcmcol { width: min(100%, 794px); } }
+.clinks { max-height: 55vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.clink { border: 1px solid var(--rule); padding: 6px 8px; }
+.clinktext { font-family: var(--serif); font-size: 15px; }
+.clinkpart { display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 12px; flex-wrap: wrap; }
+.clinkpart select { flex: 1; min-width: 200px; width: auto; font-size: 12px; padding: 3px 4px; }
+.clinkpart .btn { padding: 2px 8px; font-size: 11px; }
+.cwarn { color: #b45309; font-weight: 600; }

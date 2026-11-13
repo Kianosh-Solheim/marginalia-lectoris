@@ -97,7 +97,10 @@ function pmInlinesToPandoc(nodes, ctx) {
         if (m.type === 'link') inl = [{ t: 'Link', c: [P.attr(), inl, [m.attrs.href || '', m.attrs.title || '']] }];
         else if (MARK_T[m.type]) inl = [{ t: MARK_T[m.type], c: inl }];
       }
+      const cx = ctx && ctx.cm;
+      if (cx) (cx.first.get(n) || []).forEach(id => out.push(...commentStartInlines(id, cx, ctx.format)));
       out.push(...inl);
+      if (cx) (cx.last.get(n) || []).forEach(id => out.push(...commentEndInlines(id, cx, ctx.format)));
     } else if (n.type === 'hardBreak') out.push({ t: 'LineBreak' });
     else if (n.type === 'image') out.push(imageToPandoc(n, ctx));
     else if (n.type === 'footnote') out.push({ t: 'Note', c: pmBlocksToPandoc((n.attrs.content && n.attrs.content.content) || [], Object.assign({}, ctx, { inNote: true })) });
@@ -159,6 +162,8 @@ function pandocInlinesToPm(inls, marks, ctx) {
   const out = [];
   const pushText = (text, m) => {
     if (!text) return;
+    if (ctx && ctx.cm) ctx.cm.justStarted = null;
+    if (ctx && ctx.cm && ctx.cm.open.length) m = m.concat(ctx.cm.open.map(id => ({ type: 'comment', attrs: { id } })));
     const prev = out[out.length - 1];
     if (prev && prev.type === 'text' && JSON.stringify(prev.marks || []) === JSON.stringify(m)) prev.text += text;
     else out.push(m.length ? { type: 'text', text, marks: m } : { type: 'text', text });
@@ -175,7 +180,26 @@ function pandocInlinesToPm(inls, marks, ctx) {
       case 'Strikeout': out.push(...pandocInlinesToPm(x.c, withMark(marks, { type: 'strike' }), ctx)); break;
       case 'Superscript': out.push(...pandocInlinesToPm(x.c, withMark(marks, { type: 'superscript' }), ctx)); break;
       case 'Subscript': out.push(...pandocInlinesToPm(x.c, withMark(marks, { type: 'subscript' }), ctx)); break;
-      case 'SmallCaps': case 'Span': out.push(...pandocInlinesToPm(x.t === 'Span' ? x.c[1] : x.c, marks, ctx)); break;
+      case 'Span': {
+        // Word comments and tracked changes (the changes are taken as accepted).
+        const cls = x.c[0][1] || [], kv = Object.fromEntries(x.c[0][2] || []);
+        if (cls.includes('comment-start')) {
+          if (ctx && ctx.cm) {
+            const id = newCommentId(); let text = plainText(x.c[1]).trim();
+            const resolved = text.startsWith(RESOLVED_TAG.trim()); if (resolved) text = text.slice(RESOLVED_TAG.trim().length).trim();
+            const entry = { author: kv.author || '', date: Date.parse(kv.date) || Date.now(), text };
+            // A comment that starts on the very same spot as the one before it is a reply to it.
+            if (ctx.cm.justStarted && ctx.cm.data[ctx.cm.justStarted]) { ctx.cm.ids[kv.id] = ctx.cm.justStarted; ctx.cm.data[ctx.cm.justStarted].replies.push(entry); break; }
+            ctx.cm.ids[kv.id] = id; ctx.cm.open.push(id); ctx.cm.justStarted = id;
+            ctx.cm.data[id] = Object.assign(entry, { resolved, replies: [] });
+          }
+          break;
+        }
+        if (cls.includes('comment-end')) { if (ctx && ctx.cm) ctx.cm.open = ctx.cm.open.filter(i => i !== ctx.cm.ids[kv.id]); break; }
+        if (cls.includes('deletion')) break;
+        out.push(...pandocInlinesToPm(x.c[1], marks, ctx)); break;
+      }
+      case 'SmallCaps': out.push(...pandocInlinesToPm(x.c, marks, ctx)); break;
       case 'Quoted': { const dq = x.c[0].t === 'DoubleQuote'; pushText(dq ? '“' : '‘', marks); out.push(...pandocInlinesToPm(x.c[1], marks, ctx)); pushText(dq ? '”' : '’', marks); break; }
       case 'Cite': out.push(...pandocInlinesToPm(x.c[1], marks, ctx)); break;
       case 'Code': pushText(x.c[1], withMark(marks, { type: 'code' })); break;
@@ -244,7 +268,10 @@ async function importFile(file, docId) {
   if (!from) throw new Error('This kind of file cannot be imported: .' + ext);
   const pd = await ensurePandoc('Importing ' + file.name + '.');
   const name = 'input.' + ext;
-  const r = await pd.convert({ from, to: 'json', 'input-files': [name], 'extract-media': 'media' }, null, { [name]: file });
+  let r = null;
+  // Word files: with their comments (tracked changes are taken as accepted).
+  if (from === 'docx') { try { r = await pd.convert({ from, to: 'json', 'input-files': [name], 'extract-media': 'media', 'track-changes': 'all' }, null, { [name]: file }); } catch (_) { r = null; } }
+  if (!r || !r.stdout) r = await pd.convert({ from, to: 'json', 'input-files': [name], 'extract-media': 'media' }, null, { [name]: file });
   if (!r.stdout) throw new Error('Pandoc could not read the file' + (r.stderr ? ': ' + r.stderr.slice(0, 300) : ''));
   const ast = JSON.parse(r.stdout);
   // Pictures: upload, and point to them on the tablet.
@@ -262,7 +289,8 @@ async function importFile(file, docId) {
     const hit = Object.keys(urls).find(k => k.endsWith('/' + src.replace(/^\.?\//, '')) || src.endsWith('/' + k) || k.split('/').pop() === src.split('/').pop());
     return hit ? urls[hit] : src;
   };
-  return { content: pandocToPm(ast, { mapSrc }), title: pandocTitle(ast) };
+  const cm = { open: [], ids: {}, data: {} };
+  return { content: pandocToPm(ast, { mapSrc, cm }), title: pandocTitle(ast), comments: cm.data };
 }
 
 const WRITE_EXPORTS = [
@@ -273,7 +301,7 @@ const WRITE_EXPORTS = [
   ['tex', 'LaTeX (.tex)', 'latex', false],
 ];
 /** The document in another format, as a Blob. Pictures are sent along to Pandoc. */
-async function exportBlob(doc, title, ext, docId, citing) {
+async function exportBlob(doc, title, ext, docId, citing, comments) {
   const [, , to, binary] = WRITE_EXPORTS.find(e => e[0] === ext);
   const pd = await ensurePandoc('Exporting to .' + ext + '.');
   const files = {}; const srcs = {};
@@ -291,7 +319,8 @@ async function exportBlob(doc, title, ext, docId, citing) {
       files[name] = blob; map[src] = name;
     } catch (_) {}
   }
-  const ast = pmToPandoc(doc, title, { mapSrc: src => map[src] || src, citing, format: ext });
+  const cm = comments && (ext === 'docx' || ext === 'odt') && Object.keys(comments).length ? commentBounds(doc, comments) : null;
+  const ast = pmToPandoc(doc, title, { mapSrc: src => map[src] || src, citing, format: ext, cm });
   const opts = { from: 'json', to, standalone: true };
   if (binary) opts['output-file'] = 'out.' + ext;
   const r = await pd.convert(opts, JSON.stringify(ast), files);
@@ -330,7 +359,7 @@ async function showWriting() {
         const created = await api('writing', { method: 'POST', json: { title: base } });
         toast('Importing ' + f.name + '…', 0);
         const r = await importFile(f, created.id);
-        await api(`writing/${encodeURIComponent(created.id)}`, { method: 'PUT', json: { title: base, content: r.content, words: 0 } });
+        await api(`writing/${encodeURIComponent(created.id)}`, { method: 'PUT', json: { title: base, content: r.content, words: 0, settings: { comments: r.comments || {} } } });
         toast('Imported ' + f.name, 1500);
         if (files.length === 1) { location.hash = '#/write/' + encodeURIComponent(created.id); return; }
       } catch (e) { fail(e); }
@@ -432,7 +461,9 @@ async function showWriter(id, params) {
   const exportMenu = h('div', { class: 'wmenu', hidden: true });
   const fileIn = h('input', { type: 'file', accept: '.docx,.odt,.md,.markdown,.txt,.html,.htm,.tex,.rtf', style: { display: 'none' } });
   const imgIn = h('input', { type: 'file', accept: 'image/*', multiple: true, style: { display: 'none' } });
-  const wbody = h('div', { class: 'wbody' }, h('div', { class: 'wscroll' }, h('div', { class: 'wsheet' }, page, fnList)));
+  const cmCol = h('div', { class: 'wcmcol', hidden: true });
+  const wbody = h('div', { class: 'wbody' }, h('div', { class: 'wscroll' }, h('div', { class: 'wsheetrow' }, h('div', { class: 'wsheet' }, page, fnList), cmCol)));
+  let commenting = null;   // the comments (wcomments.js)
   let notesP = null;   // the notes panel (wnotes.js)
   app.append(
     h('div', { class: 'wtop' },
@@ -488,6 +519,7 @@ async function showWriter(id, params) {
       T.Placeholder.configure({ placeholder: 'Start writing…' }),
       T.CharacterCount,
       footnoteExtension(T, editFootnote),
+      commentMarkExtension(T),
       ...citing.extensions,
     ],
     content: d.content,
@@ -503,7 +535,7 @@ async function showWriter(id, params) {
       },
     },
     onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); recomputeSoon(); if (notesP) notesP.refresh(); },
-    onSelectionUpdate: () => refreshBar(),
+    onSelectionUpdate: () => { refreshBar(); if (commenting) commenting.selectionChanged(); },
   });
 
   // ----- toolbar
@@ -527,6 +559,8 @@ async function showWriter(id, params) {
   ];
   tableItems.forEach(([l, f]) => tableMenu.append(h('button', { onmousedown: e => e.preventDefault(), onclick: () => { tableMenu.hidden = true; f(); } }, l)));
   const styleBtn = h('button', { class: 'tb wstylebtn', title: 'Citation style and language', onmousedown: e => e.preventDefault(), onclick: () => citing.pickStyle() }, '❝ Style: …');
+  const linksBtn = toolbarButton('⇄ Links → citations', 'Turn the Zotero links of an imported text (from Google Docs) into live citations', () => citing.convertLinks(editor));
+  linksBtn.hidden = true;
   const btns = [
     toolbarButton('↶', 'Undo (Ctrl+Z)', () => chain().undo().run()),
     toolbarButton('↷', 'Redo (Ctrl+Y)', () => chain().redo().run()),
@@ -556,13 +590,16 @@ async function showWriter(id, params) {
     }),
     toolbarButton('―', 'Horizontal line', () => chain().setHorizontalRule().run()),
     toolbarButton('❝ Cite', 'Insert a citation from your library or Zotero (Ctrl+Shift+C)', () => citing.insert(editor)),
+    toolbarButton('💬 Comment', 'Comment on the selected words (Ctrl+Alt+M)', () => commenting.add()),
+    linksBtn,
     toolbarButton('▤ Notes', 'Your notes beside the text: drag one in to quote or cite it (Ctrl+Alt+N)', () => notesP.toggle(), () => notesP && notesP.isOpen()),
     toolbarButton('Bibliography', 'Insert the bibliography here (it lists everything you cite)', () => citing.insertBibliography(editor)),
     styleBtn,
     toolbarButton('Tx', 'Clear formatting', () => chain().unsetAllMarks().clearNodes().run()),
   ];
   bar.append(...btns);
-  notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); });
+  commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
+  notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
   wbody.append(notesP.el);
   const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; };
   window.addEventListener('resize', placeNotes);
@@ -581,6 +618,9 @@ async function showWriter(id, params) {
     if (notes.length) fnList.append(h('div', { class: 'wfnhead' }, 'Footnotes'), ...notes.map(([n, pos], i) => n.type.name === 'citation'
       ? h('div', { class: 'wfn', onclick: () => citing.edit(editor, pos, n.attrs) }, h('span', { class: 'wfnno' }, String(i + 1)), h('span', { html: citing.html.get(n.attrs.citationID) || xmlEsc(citing.fallback(n.attrs)) }))
       : h('div', { class: 'wfn', onclick: () => editFootnote(pos) }, h('span', { class: 'wfnno' }, String(i + 1)), h('span', null, fnText(n.attrs.content, citing) || h('i', { class: 'muted' }, 'empty — click to write')))));
+    commenting.renderSoon();
+    const nLinks = zoteroLinkRanges(editor.state.doc).length;
+    linksBtn.hidden = !nLinks; if (nLinks) linksBtn.textContent = `⇄ Links → citations (${nLinks})`;
     refreshBar();
   }
   refresh();
@@ -589,7 +629,7 @@ async function showWriter(id, params) {
   imgIn.addEventListener('change', () => { const fs = [...imgIn.files]; imgIn.value = ''; insertImages(fs); });
 
   // ----- saving
-  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified, settings: citing.settings() }, extra);
+  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified, settings: Object.assign({}, citing.settings(), { comments: commenting.settings() }) }, extra);
   async function save(extra) {
     if (saving) { scheduleSave(); return; }
     saving = true; clearTimeout(saveTimer);
@@ -627,7 +667,7 @@ async function showWriter(id, params) {
     const json = JSON.stringify(editor.getJSON()) + title;
     if (json === lastExportedJson && !force) return;
     try {
-      const blob = await exportBlob(editor.getJSON(), title, 'docx', docId, citing);
+      const blob = await exportBlob(editor.getJSON(), title, 'docx', docId, citing, commenting.settings());
       const r = await fetch(`/api/writing/${encodeURIComponent(docId)}/export?name=${encodeURIComponent(safeFileName(title) + '.docx')}`, { method: 'POST', headers: { 'X-Marginalia': '1', 'Content-Type': 'application/octet-stream' }, body: blob, credentials: 'same-origin' });
       if (r.ok) { lastExportedJson = json; lastExport = Date.now(); }
     } catch (e) { console.warn('Word copy', e); }
@@ -640,6 +680,7 @@ async function showWriter(id, params) {
   const onKey = e => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save().then(() => writeDocx(true)); toast('Saved', 1000); }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c')) { e.preventDefault(); citing.insert(editor); }
+    if (e.ctrlKey && e.altKey && (e.key === 'm' || e.key === 'M' || e.code === 'KeyM')) { e.preventDefault(); commenting.add(); }
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }
   };
   document.addEventListener('keydown', onKey);
@@ -648,7 +689,7 @@ async function showWriter(id, params) {
   const onUnload = e => { if (dirty) { save(); e.preventDefault(); e.returnValue = ''; } };
   window.addEventListener('beforeunload', onUnload);
   window.writingLeave = () => {
-    document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onHide); window.removeEventListener('beforeunload', onUnload); window.removeEventListener('resize', placeNotes);
+    document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onHide); window.removeEventListener('beforeunload', onUnload); window.removeEventListener('resize', placeNotes); commenting.destroy();
     clearTimeout(saveTimer); clearTimeout(exportTimer);
     const p = dirty ? save() : Promise.resolve();
     p.then(() => writeDocx(false)).finally(() => editor.destroy());
@@ -675,7 +716,7 @@ async function showWriter(id, params) {
           chosen = await api(`writing/${encodeURIComponent(docId)}/versions/${encodeURIComponent(v.name)}`);
           if (viewer) viewer.destroy();
           clear(preview);
-          viewer = new T.Editor({ element: preview, editable: false, extensions: [T.StarterKit, T.Underline, T.Superscript, T.Subscript, T.Link, T.Image.configure({ inline: true }), T.Table, T.TableRow, T.TableHeader, T.TableCell, footnoteExtension(T, () => {}), ...new Citing(T, citing.settings()).extensions], content: chosen.content });
+          viewer = new T.Editor({ element: preview, editable: false, extensions: [T.StarterKit, T.Underline, T.Superscript, T.Subscript, T.Link, T.Image.configure({ inline: true }), T.Table, T.TableRow, T.TableHeader, T.TableCell, footnoteExtension(T, () => {}), commentMarkExtension(T), ...new Citing(T, citing.settings()).extensions], content: chosen.content });
           restore.disabled = false;
         } catch (er) { fail(er); }
       } }, h('b', null, new Date(v.time).toLocaleString()), v.label ? h('span', null, ' · ' + v.label) : null)));
@@ -701,6 +742,7 @@ async function showWriter(id, params) {
         toast('Importing ' + f.name + '…', 0);
         const r = await importFile(f, docId);
         editor.commands.setContent(r.content, true);
+        commenting.replaceAll(r.comments || {});
         if (r.title && (title === 'Untitled' || !title)) { title = r.title; titleIn.value = title; }
         dirty = true; await save();
         toast('Imported', 1500);
@@ -714,7 +756,7 @@ async function showWriter(id, params) {
     try {
       await save();
       toast(`Writing ${label}…`, 0);
-      const blob = await exportBlob(editor.getJSON(), title, ext, docId, citing);
+      const blob = await exportBlob(editor.getJSON(), title, ext, docId, citing, commenting.settings());
       const name = safeFileName(title) + '.' + ext;
       saveBlob(blob, name);
       // A copy beside the document on the tablet too.
