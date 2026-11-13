@@ -790,6 +790,17 @@ async function showWriter(id, params) {
         toast('Setting the pages…', 0);
         const pdf = await typstPdf(src, sink.files || {});
         saveBlob(pdf, name); putOnTablet(pdf, name);
+      } else if (ext === 'zip') {
+        // An Overleaf project: main.tex, the .bib file and the pictures in one zip (New Project ▸ Upload Project).
+        const sink = {};
+        const tex = await exportBlob(editor.getJSON(), title, 'tex', docId, citing, commenting.settings(), keyed, sink);
+        const zip = new JSZip();
+        zip.file('main.tex', await tex.text());
+        for (const [n, b] of Object.entries(sink.files || {})) zip.file(n, await b.arrayBuffer());
+        if (keyed) zip.file(keyed.bibName, await bibFile(citing, keyed.keys, keyed.method === 'natbib'));
+        const out = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+        saveBlob(out, name); putOnTablet(out, name);
+        toast('', 1); return;
       } else if (ext !== 'bib') {
         const blob = await exportBlob(editor.getJSON(), title, ext, docId, citing, commenting.settings(), keyed);
         saveBlob(blob, name); putOnTablet(blob, name);   // a copy beside the document on the tablet too
@@ -808,11 +819,12 @@ async function showWriter(id, params) {
     try { info = await resolveCiteKeys(citing, doc); } catch (e) { fail(e); return; }
     const n = Object.keys(info.keys).length;
     if (!n && ext !== 'bib') { runExport(ext, label, null); return; }
+    const tex = ext === 'tex' || ext === 'zip';
     if (!n) { toast('Nothing is cited in this text yet'); return; }
-    const bibName = safeFileName(title).replace(/\s+/g, '-') + '.bib';
+    const bibName = ext === 'zip' ? 'references.bib' : safeFileName(title).replace(/\s+/g, '-') + '.bib';
     modal((box, close) => {
       const last = localGet('ml.wciteMethod.' + ext, ext === 'md' ? 'keys' : 'biblatex');
-      const choices = ext === 'tex' ? [['biblatex', 'biblatex — \\autocite{key}', 'With \\printbibliography; compile with biber.'], ['natbib', 'natbib — \\citep{key}', 'With \\bibliography{…}; compile with bibtex.'], ['text', 'Formatted text', 'The citations as they look here, no keys.']]
+      const choices = tex ? [['biblatex', 'biblatex — \\autocite{key}', 'With \\printbibliography; compile with biber.'], ['natbib', 'natbib — \\citep{key}', 'With \\bibliography{…}; compile with bibtex.'], ['text', 'Formatted text', 'The citations as they look here, no keys.']]
         : ext === 'md' ? [['keys', 'Citation keys — [@key, p. 275]', 'For Pandoc, Quarto, Obsidian and Zettlr, with the .bib file.'], ['text', 'Formatted text', 'The citations as they look here, no keys.']] : [['biblatex', 'BibLaTeX', 'For biblatex and biber.'], ['natbib', 'BibTeX', 'For natbib and bibtex.']];
       let method = choices.some(c => c[0] === last) ? last : choices[0][0];
       const list = h('div', { class: 'wnmodes' });
@@ -820,11 +832,11 @@ async function showWriter(id, params) {
       const styleRow = h('label', { class: 'row', style: { gap: '6px', fontSize: '13px', alignItems: 'center', marginBottom: '8px' } }, 'biblatex style', style, h('span', { class: 'muted' }, 'e.g. apa, authoryear, verbose, chicago-authordate'));
       const draw = () => {
         clear(list); choices.forEach(([k, l, d]) => list.append(h('button', { class: 'wnmode' + (k === method ? ' on' : ''), onclick: () => { method = k; draw(); } }, h('b', null, l), h('div', { class: 'muted' }, d))));
-        styleRow.hidden = !(ext === 'tex' && method === 'biblatex');
+        styleRow.hidden = !(tex && method === 'biblatex');
         notes.hidden = method === 'text';
       };
       const notes = h('div', { class: 'wkeynotes' });
-      notes.append(h('div', { class: 'muted', style: { fontSize: '13px' } }, `${n} source${n === 1 ? '' : 's'} cited. The keys are the citation keys in Marginalia; the file ${bibName} goes with it.`));
+      notes.append(h('div', { class: 'muted', style: { fontSize: '13px' } }, `${n} source${n === 1 ? '' : 's'} cited. The keys are the citation keys in Marginalia; the file ${bibName} goes with it.` + (ext === 'zip' ? ' In Overleaf: New Project ▸ Upload Project, and choose the zip.' : '')));
       if (info.differ.length) notes.append(h('div', { class: 'wkeywarn' }, h('b', null, `${info.differ.length} key${info.differ.length === 1 ? ' differs' : 's differ'} from Zotero’s`), ' — Marginalia’s is used:',
         h('table', null, h('tr', null, h('th', null, 'Source'), h('th', null, 'Marginalia'), h('th', null, 'Zotero')), info.differ.map(d => h('tr', null, h('td', null, d.label), h('td', { class: 'mono' }, d.mine), h('td', { class: 'mono' }, d.zotero))))));
       else notes.append(h('div', { class: 'muted', style: { fontSize: '13px' } }, '✓ No key differs from the one in Zotero.'));
@@ -833,16 +845,16 @@ async function showWriter(id, params) {
       box.classList.add('wide');
       box.append(h('h2', null, label), ext === 'bib' ? null : h('div', { class: 'label' }, 'Citations'), list, styleRow, notes,
         h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: () => {
-          localSet('ml.wciteMethod.' + ext, method); if (ext === 'tex' && method === 'biblatex') localSet('ml.wbiblatexStyle', style.value.trim() || 'authoryear');
+          localSet('ml.wciteMethod.' + ext, method); if (tex && method === 'biblatex') localSet('ml.wbiblatexStyle', style.value.trim() || 'authoryear');
           close();
           runExport(ext, label, method === 'text' ? null : { keys: info.keys, method: method === 'keys' ? 'biblatex' : method, style: style.value.trim() || 'authoryear', bibName });
         } }, 'Export')));
       draw();
     });
   }
-  [['pdf', 'PDF (.pdf)']].concat(WRITE_EXPORTS, [['bib', 'Bibliography file (.bib)']]).forEach(([ext, label]) => exportMenu.append(h('button', { onclick: () => {
+  [['pdf', 'PDF (.pdf)']].concat(WRITE_EXPORTS, [['zip', 'Overleaf project (.zip)'], ['bib', 'Bibliography file (.bib)']]).forEach(([ext, label]) => exportMenu.append(h('button', { onclick: () => {
     exportMenu.hidden = true;
-    if (ext === 'tex' || ext === 'md' || ext === 'bib') keyedExport(ext, label); else runExport(ext, label, null);
+    if (ext === 'tex' || ext === 'md' || ext === 'bib' || ext === 'zip') keyedExport(ext, label); else runExport(ext, label, null);
   } }, label)));
 
   if (params && params.get('new')) { titleIn.focus(); titleIn.select(); } else editor.commands.focus('start');

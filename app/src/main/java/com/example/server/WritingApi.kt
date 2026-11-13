@@ -161,7 +161,7 @@ class WritingApi(private val context: Context) {
                     // Exports made in the web page (DOCX on every save; ODT, Markdown… on request).
                     what == "export" && m == "POST" -> {
                         val name = safe(File(req.query["name"].orEmpty()).name)
-                        require(name.substringAfterLast('.', "").lowercase() in setOf("docx", "odt", "md", "tex", "html", "pdf", "bib")) { "Not an export" }
+                        require(name.substringAfterLast('.', "").lowercase() in setOf("docx", "odt", "md", "tex", "html", "pdf", "bib", "typ", "zip")) { "Not an export" }
                         val f = File(dir, name); val tmp = File(dir, ".$name.tmp")
                         tmp.outputStream().use { req.body.copyTo(it) }
                         tmp.renameTo(f)
