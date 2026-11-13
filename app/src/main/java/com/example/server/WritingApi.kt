@@ -87,6 +87,12 @@ class WritingApi(private val context: Context) {
             first == "styles-index" -> HttpResponse.json(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.CslData.stylesIndex(context) })
             first == "style" -> HttpResponse.json(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.CslData.style(context, req.query["name"].orEmpty()) }.toString())
             first == "locale" -> HttpResponse.text(200, kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.CslData.locale(context, req.query["lang"].orEmpty()) }, "application/xml; charset=utf-8")
+            first == "typst-status" -> HttpResponse.json(TypstEngine.status(context).toString())
+            first == "typst-install" && m == "POST" -> { TypstEngine.install(context); HttpResponse.json(TypstEngine.status(context).toString()) }
+            first == "typst.wasm" -> {
+                val f = TypstEngine.wasm(context)
+                if (!f.isFile) HttpResponse.error(404, "Typst is not installed") else HttpResponse.FileBody(f, "application/wasm").header("Cache-Control", "private, max-age=31536000, immutable")
+            }
             first == "pandoc-status" -> HttpResponse.json(Pandoc.status(context).toString())
             first == "pandoc-install" && m == "POST" -> { Pandoc.install(context); HttpResponse.json(Pandoc.status(context).toString()) }
             first == "pandoc.wasm" -> {
@@ -192,21 +198,17 @@ class WritingApi(private val context: Context) {
 }
 
 /** Pandoc for the web page's writing program: downloaded once, kept on the tablet. */
-object Pandoc {
-    private const val TAG = "Pandoc"
-    const val VERSION = "1.1.0"   // pandoc-wasm package (pandoc 3.10)
-    private const val TARBALL = "https://registry.npmjs.org/pandoc-wasm/-/pandoc-wasm-$VERSION.tgz"
-    private const val TARBALL_SHA512 = "IoWBsC/cbSZe71rcRtxXUxG+Auf8aGDHKYOQZA6OdwmUL2xdpQaqrSGhPa+6zfLdSar7cnyAmTWt6KU9n5kBjQ=="
-    private const val WASM_SHA256 = "b47c9de52b5b45f103c2dac6fea52591aeafe3dd6cafed13331b67575233a2ff"
-
-    fun wasm(ctx: Context) = File(ctx.filesDir, "pandoc/pandoc-$VERSION.wasm")
+/** A WebAssembly program fetched once from the npm registry, checked against known checksums and kept on the tablet. */
+open class WasmDownload(private val TAG: String, private val folder: String, private val file: String, private val TARBALL: String,
+                        private val TARBALL_SHA512: String, private val member: String, private val WASM_SHA256: String, private val label: String) {
+    fun wasm(ctx: Context) = File(ctx.filesDir, "$folder/$file")
     @Volatile private var running = false
     @Volatile private var done = 0L
     @Volatile private var total = 0L
     @Volatile private var error = ""
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    fun status(ctx: Context): JSONObject = JSONObject().put("installed", wasm(ctx).isFile).put("running", running).put("done", done).put("total", total).put("error", error).put("version", "3.10")
+    fun status(ctx: Context): JSONObject = JSONObject().put("installed", wasm(ctx).isFile).put("running", running).put("done", done).put("total", total).put("error", error).put("version", label)
 
     fun install(ctx: Context) {
         if (running || wasm(ctx).isFile) return
@@ -214,7 +216,7 @@ object Pandoc {
         val app = ctx.applicationContext
         scope.launch {
             try {
-                val dir = File(app.filesDir, "pandoc").apply { mkdirs() }
+                val dir = File(app.filesDir, folder).apply { mkdirs() }
                 val tgz = File(dir, "pandoc-wasm.tgz.part")
                 val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
                 client.newCall(Request.Builder().url(TARBALL).build()).execute().use { r ->
@@ -242,7 +244,7 @@ object Pandoc {
                         val full = if (prefix.isNotEmpty()) "$prefix/$name" else name
                         val size = String(hdr, 124, 12).trim('\u0000', ' ').toLong(8)
                         val padded = (size + 511) / 512 * 512
-                        if (full == "package/src/pandoc.wasm") {
+                        if (full == member) {
                             out.outputStream().use { o -> copyN(gz, o, size) }
                             skipN(gz, padded - size)
                             found = true
@@ -274,3 +276,13 @@ object Pandoc {
         while (left > 0) { val r = i.read(buf, 0, minOf(buf.size.toLong(), left).toInt()); if (r < 0) break; left -= r }
     }
 }
+
+/** Pandoc, the document converter (pandoc-wasm 1.1.0 = Pandoc 3.10). */
+object Pandoc : WasmDownload("Pandoc", "pandoc", "pandoc-1.1.0.wasm", "https://registry.npmjs.org/pandoc-wasm/-/pandoc-wasm-1.1.0.tgz",
+    "IoWBsC/cbSZe71rcRtxXUxG+Auf8aGDHKYOQZA6OdwmUL2xdpQaqrSGhPa+6zfLdSar7cnyAmTWt6KU9n5kBjQ==", "package/src/pandoc.wasm",
+    "b47c9de52b5b45f103c2dac6fea52591aeafe3dd6cafed13331b67575233a2ff", "3.10")
+
+/** Typst, the typesetter that makes the PDFs (typst.ts web compiler 0.7.0). */
+object TypstEngine : WasmDownload("Typst", "typst", "typst-compiler-0.7.0.wasm", "https://registry.npmjs.org/@myriaddreamin/typst-ts-web-compiler/-/typst-ts-web-compiler-0.7.0.tgz",
+    "nMwMcfOBy5pABPDuVM7/u8425SxhPUM+OJe6daqqgVOT3+neCTz4JKwx2L8XasfEHTNvd0cUI07LR9q5ADo7Gw==", "package/pkg/typst_ts_web_compiler_bg.wasm",
+    "1fc968438a672366dfec39c96c842c26ed29caff4eb1bcaab19a6c60867de5fd", "0.7.0")

@@ -19,31 +19,34 @@ function loadScript(src) {
 const ensureTiptap = () => loadScript('vendor/tiptap.bundle.js').then(() => window.Tiptap);
 
 let pandocInstance = null, pandocLoading = null, pandocApiVersion = null;
+/** Makes sure an engine (Pandoc, Typst) is on the tablet; offers the one-time download if it is not. */
+async function ensureEngine(kind, name, what, why) {
+  let st = await api(`writing/${kind}-status`);
+  if (st.installed) return;
+  const go = await new Promise(res => {
+    let answered = false;
+    modal((box, close) => box.append(h('h2', null, `Download ${name}?`),
+      h('p', null, `${why ? why + ' ' : ''}${what} It is downloaded once and kept on the tablet.`),
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'),
+        h('button', { class: 'btn fill', onclick: () => { answered = true; res(true); close(); } }, 'Download'))), () => { if (!answered) res(false); });
+  });
+  if (!go) throw new Error(name + ' is needed for this.');
+  st = await api(`writing/${kind}-install`, { method: 'POST' });
+  toast(`Downloading ${name}…`, 0);
+  while (!st.installed) {
+    if (st.error) { toast(''); throw new Error(`${name} download: ` + st.error); }
+    await new Promise(r => setTimeout(r, 1200));
+    st = await api(`writing/${kind}-status`);
+    if (st.total > 0) toast(`Downloading ${name}… ${Math.round(st.done / 1048576)} of ${Math.round(st.total / 1048576)} MB`, 0);
+    if (!st.running && !st.installed && !st.error) st.error = 'stopped';
+  }
+  toast(name + ' is ready', 1500);
+}
 /** Pandoc, ready to convert. If it is not on the tablet yet, offers to download it (once). */
 async function ensurePandoc(why) {
   if (pandocInstance) return pandocInstance;
   if (pandocLoading) return pandocLoading;
-  let st = await api('writing/pandoc-status');
-  if (!st.installed) {
-    const go = await new Promise(res => {
-      let answered = false;
-      modal((box, close) => box.append(h('h2', null, 'Download the converter?'),
-        h('p', null, `${why ? why + ' ' : ''}This needs Pandoc, the document converter (about 15 MB to download, 58 MB on the tablet, from the official pandoc-wasm package). It is downloaded once and kept on the tablet.`),
-        h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'),
-          h('button', { class: 'btn fill', onclick: () => { answered = true; res(true); close(); } }, 'Download'))), () => { if (!answered) res(false); });
-    });
-    if (!go) throw new Error('Pandoc is needed for this.');
-    st = await api('writing/pandoc-install', { method: 'POST' });
-    toast('Downloading Pandoc…', 0);
-    while (!st.installed) {
-      if (st.error) { toast(''); throw new Error('Pandoc download: ' + st.error); }
-      await new Promise(r => setTimeout(r, 1200));
-      st = await api('writing/pandoc-status');
-      if (st.total > 0) toast(`Downloading Pandoc… ${Math.round(st.done / 1048576)} of ${Math.round(st.total / 1048576)} MB`, 0);
-      if (!st.running && !st.installed && !st.error) st.error = 'stopped';
-    }
-    toast('Pandoc is ready', 1500);
-  }
+  await ensureEngine('pandoc', 'Pandoc', 'This needs Pandoc, the document converter (about 15 MB to download, 58 MB on the tablet, from the official pandoc-wasm package).', why);
   pandocLoading = (async () => {
     await loadScript('vendor/pandoc.bundle.js');
     const r = await fetch('/api/writing/pandoc.wasm', { credentials: 'same-origin' });
@@ -302,9 +305,10 @@ const WRITE_EXPORTS = [
   ['md', 'Markdown (.md)', 'markdown', false],
   ['html', 'Web page (.html)', 'html', false],
   ['tex', 'LaTeX (.tex)', 'latex', false],
+  ['typ', 'Typst (.typ)', 'typst', false],
 ];
 /** The document in another format, as a Blob. Pictures are sent along to Pandoc. */
-async function exportBlob(doc, title, ext, docId, citing, comments, keyed) {
+async function exportBlob(doc, title, ext, docId, citing, comments, keyed, sink) {
   const [, , to, binary] = WRITE_EXPORTS.find(e => e[0] === ext);
   const pd = await ensurePandoc('Exporting to .' + ext + '.');
   const files = {}; const srcs = {};
@@ -328,6 +332,11 @@ async function exportBlob(doc, title, ext, docId, citing, comments, keyed) {
   if (keyed && ext === 'tex') { const s = stripBibliography(doc); doc = s.doc; bibTitle = s.title; }
   const ast = pmToPandoc(doc, title, { mapSrc: src => map[src] || src, citing, format: ext, cm, citeKeys: keyed ? keyed.keys : null });
   const opts = { from: 'json', to, standalone: true };
+  if (ext === 'typ') {
+    ast.meta.papersize = { t: 'MetaString', c: 'a4' }; ast.meta.fontsize = { t: 'MetaString', c: '11pt' };
+    const lang = ((citing && citing.lang) || '').slice(0, 2); if (lang) ast.meta.lang = { t: 'MetaString', c: lang };
+  }
+  if (sink) sink.files = files;
   if (keyed) {
     ast.meta.bibliography = { t: 'MetaString', c: keyed.bibName };
     if (bibTitle) ast.meta['biblio-title'] = { t: 'MetaInlines', c: textToInlines(bibTitle) };
@@ -774,7 +783,14 @@ async function showWriter(id, params) {
       await save();
       toast(`Writing ${label}…`, 0);
       const name = safeFileName(title) + '.' + ext;
-      if (ext !== 'bib') {
+      if (ext === 'pdf') {
+        // PDF: Pandoc writes Typst, and Typst sets the pages.
+        const sink = {};
+        const src = await (await exportBlob(editor.getJSON(), title, 'typ', docId, citing, commenting.settings(), null, sink)).text();
+        toast('Setting the pages…', 0);
+        const pdf = await typstPdf(src, sink.files || {});
+        saveBlob(pdf, name); putOnTablet(pdf, name);
+      } else if (ext !== 'bib') {
         const blob = await exportBlob(editor.getJSON(), title, ext, docId, citing, commenting.settings(), keyed);
         saveBlob(blob, name); putOnTablet(blob, name);   // a copy beside the document on the tablet too
       }
@@ -824,7 +840,7 @@ async function showWriter(id, params) {
       draw();
     });
   }
-  WRITE_EXPORTS.concat([['bib', 'Bibliography file (.bib)']]).forEach(([ext, label]) => exportMenu.append(h('button', { onclick: () => {
+  [['pdf', 'PDF (.pdf)']].concat(WRITE_EXPORTS, [['bib', 'Bibliography file (.bib)']]).forEach(([ext, label]) => exportMenu.append(h('button', { onclick: () => {
     exportMenu.hidden = true;
     if (ext === 'tex' || ext === 'md' || ext === 'bib') keyedExport(ext, label); else runExport(ext, label, null);
   } }, label)));

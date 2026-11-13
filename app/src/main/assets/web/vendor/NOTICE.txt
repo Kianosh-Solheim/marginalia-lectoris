@@ -8,3 +8,7 @@ Third-party code in this folder:
 - Citation styles (CSL) are downloaded on request from the Zotero style repository (CC BY-SA 3.0),
   and locales from citation-style-language/locales (CC BY-SA 3.0).
 - katex/: KaTeX 0.16.11 (MIT), https://katex.org — typesets formulas; fonts under the SIL Open Font License.
+- typst.bundle.js: typst.ts 0.7.0 by Myriad-Dreamin (Apache-2.0), bundled with esbuild — loads the Typst compiler
+  (downloaded once to the tablet from the npm package @myriaddreamin/typst-ts-web-compiler 0.7.0, Apache-2.0).
+- typst-fonts/: Libertinus Serif (OFL-1.1), New Computer Modern Math (GUST Font License), DejaVu Sans Mono
+  (Bitstream Vera / DejaVu licence), from typst/typst-assets v0.13.1.

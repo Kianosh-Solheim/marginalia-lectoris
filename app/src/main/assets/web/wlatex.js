@@ -201,3 +201,38 @@ async function resolveImportedKeys(content) {
   };
   return { content: fix(content), sources: Object.values(sources), unknown: [...unknown] };
 }
+
+// ------------------------------------------------------------------ PDF with Typst
+
+const TYPST_FONTS = ['LibertinusSerif-Regular.otf', 'LibertinusSerif-Bold.otf', 'LibertinusSerif-Italic.otf', 'LibertinusSerif-BoldItalic.otf', 'NewCMMath-Regular.otf', 'DejaVuSansMono.ttf', 'DejaVuSansMono-Bold.ttf'];
+let typstCompiler = null, typstLoading = null;
+/** Typst, ready to set pages. The engine is downloaded to the tablet once; its fonts come with the app. */
+async function ensureTypst() {
+  if (typstCompiler) return typstCompiler;
+  if (typstLoading) return typstLoading;
+  await ensureEngine('typst', 'the PDF engine', 'A PDF is set with Typst, a typesetter in the family of LaTeX (about 9 MB to download, 28 MB on the tablet, from the official typst.ts package). After that, PDFs are made offline.', 'Making a PDF.');
+  typstLoading = (async () => {
+    await loadScript('vendor/typst.bundle.js');
+    const r = await fetch('/api/writing/typst.wasm', { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('Could not load the PDF engine (' + r.status + ')');
+    const wasm = await r.arrayBuffer();
+    const c = TypstTs.createTypstCompiler();
+    await c.init({ getModule: () => wasm, beforeBuild: [TypstTs.loadFonts(TYPST_FONTS.map(f => new URL('vendor/typst-fonts/' + f, location.href).href), { assets: false })] });
+    typstCompiler = c;
+    return c;
+  })();
+  try { return await typstLoading; } finally { typstLoading = null; }
+}
+/** Typst source (as Pandoc wrote it) and its pictures → a PDF. */
+async function typstPdf(source, files) {
+  const c = await ensureTypst();
+  try { c.resetShadow(); } catch (_) {}
+  c.addSource('/main.typ', source);
+  for (const [name, blob] of Object.entries(files || {})) c.mapShadow('/' + name, new Uint8Array(await blob.arrayBuffer()));
+  const r = await c.compile({ mainFilePath: '/main.typ', format: 1, diagnostics: 'unix' });
+  if (!r || !r.result) {
+    const why = ((r && r.diagnostics) || []).map(d => typeof d === 'string' ? d : (d.message || JSON.stringify(d))).slice(0, 3).join(' · ');
+    throw new Error('The PDF could not be made' + (why ? ': ' + why.slice(0, 400) : ''));
+  }
+  return new Blob([r.result], { type: 'application/pdf' });
+}
