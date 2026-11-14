@@ -148,11 +148,19 @@ async function showVault(parts) {
     app.appendChild(root);
     const fit = () => { if (document.body.contains(root)) root.style.height = `calc(100vh - ${Math.round(root.getBoundingClientRect().top + scrollY)}px)`; };
     fit(); window.addEventListener('resize', fit);
+    if (!window.vaultSlash) {
+      window.vaultSlash = true;
+      document.addEventListener('keydown', e => {
+        if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || !vault || !vault.searchEl || !document.body.contains(vault.root)) return;
+        if (/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '') || document.querySelector('.modal')) return;
+        e.preventDefault(); vault.searchEl.focus(); vault.searchEl.select();
+      });
+    }
     vault = { root, left, mid, right, idx: null, shut: new Set(JSON.parse(localGet('ml.nvShut', '[]'))), tag: '' };
     mid.append(h('div', { class: 'loading', style: { position: 'static', height: '200px' } }, h('div', { class: 'spin' })));
     try { await loadVault(); } catch (e) { fail(e); return; }
   }
-  if (vault.route !== route) vault.arr = null;
+  if (vault.route !== route) { vault.arr = null; vault.results = false; }
   vault.route = route;
   drawVault();
 }
@@ -166,8 +174,27 @@ const vaultGo = href => { if (location.hash === href) drawVault(); else location
 async function vaultReload() { try { await loadVault(); } catch (e) { fail(e); } drawVault(); }
 
 /** Books → chapters → notes, as the filter leaves them. */
+/** The words searched for (from the box above the tree, or the one in the header); "words in quotes" stay together. */
+function vaultTerms() {
+  const q = (vault.q || state.query || '').trim();
+  return (q.match(/"[^"]+"|\S+/g) || []).map(t => norm(t.replace(/^"|"$/g, '').replace(/^#/, '')).trim()).filter(Boolean);
+}
+/** [text] cut to the stretch around the first word found, with the found words marked. */
+function searchSnippet(text, terms, len) {
+  const s = String(text || '').replace(/\s+/g, ' '), low = norm(s);
+  if (low.length !== s.length) return [s.slice(0, len)];
+  let first = -1; terms.forEach(t => { const i = low.indexOf(t); if (i >= 0 && (first < 0 || i < first)) first = i; });
+  if (first < 0) return null;
+  const from = Math.max(0, first - 60), cut = s.slice(from, from + len), lowCut = low.slice(from, from + len);
+  const marks = []; terms.forEach(t => { let i = 0; while ((i = lowCut.indexOf(t, i)) >= 0) { marks.push([i, i + t.length]); i += t.length; } });
+  marks.sort((a, b) => a[0] - b[0]);
+  const out = [from > 0 ? '…' : '']; let at = 0;
+  marks.forEach(([a, b]) => { if (a < at) return; out.push(cut.slice(at, a), h('mark', null, cut.slice(a, b))); at = b; });
+  out.push(cut.slice(at), from + len < s.length ? '…' : '');
+  return out;
+}
 function vaultTree() {
-  const q = norm(state.query.trim().replace(/^#/, '')), terms = q ? q.split(/\s+/) : [];
+  const terms = vaultTerms();
   const hits = notesCache.list.filter(n => (!vault.tag || splitTags(n.tags).includes(vault.tag)) &&
     (!terms.length || terms.every(t => norm([n.title, n.highlightedText, n.userNotes, n.tags, n.documentTitle, n.documentAuthor, n.chapterTitle].join(' ')).includes(t))));
   const books = new Map();
@@ -178,7 +205,7 @@ function vaultTree() {
     const ch = new Map(); b.notes.forEach(n => { const k = chapterOf(n); if (!ch.has(k)) ch.set(k, []); ch.get(k).push(n); });
     b.chapters = [...ch.entries()].map(([name, notes]) => ({ name, notes }));
   });
-  return { books: list, count: hits.length, filtered: !!terms.length || !!vault.tag };
+  return { books: list, count: hits.length, filtered: !!terms.length || !!vault.tag, hits, terms };
 }
 function drawVault() {
   const add = (el, ...kids) => el.append(...kids.flat(3).filter(x => x != null && x !== false));
@@ -191,7 +218,19 @@ function drawVault() {
   const toggle = key => { if (vault.shut.has(key)) vault.shut.delete(key); else vault.shut.add(key); localSet('ml.nvShut', JSON.stringify([...vault.shut].slice(-400))); drawVault(); };
 
   // ---- left: the tree
+  const hadFocus = !!vault.searchEl && document.activeElement === vault.searchEl;
   const left = clear(vault.left);
+  if (!vault.searchEl) {
+    vault.searchEl = h('input', { type: 'search', class: 'nvsearch', placeholder: 'Search notes…  ( / )', title: 'Searches titles, quotes, your text, tags, books and chapters. Put "words in quotes" to keep them together.' });
+    let t = 0;
+    vault.searchEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { vault.q = vault.searchEl.value; vault.results = !!vault.q.trim(); drawVault(); }, 140); });
+    vault.searchEl.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { vault.searchEl.value = ''; vault.q = ''; vault.results = false; drawVault(); }
+      if (e.key === 'Enter') { const f = vault.mid.querySelector('.nvhit a'); if (f) f.click(); }
+    });
+  }
+  left.append(vault.searchEl);
+  if (hadFocus) vault.searchEl.focus();
   left.append(h('div', { class: 'nvbar' }, h('span', { class: 'label' }, `${tree.count} note${tree.count === 1 ? '' : 's'}${tree.filtered ? ' shown' : ''}`), h('span', { style: { flex: 1 } }),
     h('button', { class: 'btn quiet', title: 'The plain list of all notes', onclick: () => { localSet('ml.notesView', 'list'); vault = null; location.hash = '#/notes'; showNotes(['notes']); } }, 'List view')));
   const tr = h('div', { class: 'nvtree' });
@@ -229,7 +268,25 @@ function drawVault() {
   const crumb = (label, href) => h('a', { href, onclick: e => { e.preventDefault(); go(href); } }, label);
   let gNodes = [], gEdges = [];
 
-  if (cur) {
+  if (vault.results && tree.terms.length) {
+    // Search results: best first (a hit in the title counts most), each with the stretch that matched.
+    const score = n => tree.terms.reduce((a, t) => a + (norm(n.title || '').includes(t) ? 4 : 0) + (norm(n.userNotes || '').includes(t) ? 2 : 0) + (norm(n.highlightedText || '').includes(t) ? 1 : 0), 0);
+    const hits = tree.hits.slice().sort((a, b) => score(b) - score(a) || b.created - a.created);
+    add(mid, h('h1', { class: 'nvtitle' }, `${hits.length} note${hits.length === 1 ? '' : 's'} for “${(vault.q || state.query).trim()}”`),
+      vault.tag ? h('div', { class: 'muted', style: { marginBottom: '8px' } }, 'Within the tag #' + vault.tag) : null,
+      hits.length ? null : h('div', { class: 'muted' }, 'Nothing found. All the words must be in the same note.'),
+      hits.slice(0, 200).map(n => {
+        const where = [n.documentTitle, chapterOf(n), n.printedPageLabel ? 'p. ' + n.printedPageLabel : ''].filter(Boolean).join(' · ');
+        const own = searchSnippet(n.userNotes, tree.terms, 240), quote = searchSnippet(n.highlightedText, tree.terms, 240);
+        return h('div', { class: 'nvhit' },
+          h('a', { class: 'nlink', href: `#/notes/n/${n.id}`, onclick: e => { e.preventDefault(); vault.results = false; go(`#/notes/n/${n.id}`); } }, searchSnippet(n.title, tree.terms, 200) || n.title || 'Untitled'),
+          h('div', { class: 'muted nvhitwhere' }, searchSnippet(where, tree.terms, 300) || where),
+          own ? h('div', { class: 'nvhittext' }, own) : null,
+          quote ? h('div', { class: 'nvhittext quote' }, quote) : null,
+          splitTags(n.tags).some(t => tree.terms.some(x => norm(t).includes(x))) ? h('div', { class: 'tags' }, splitTags(n.tags).map(t => h('span', { class: 'tag' }, '#' + t))) : null);
+      }),
+      hits.length > 200 ? h('div', { class: 'muted' }, `Showing the first 200 of ${hits.length}. Add a word to narrow it down.`) : null);
+  } else if (cur) {
     const d = notesCache.docs[cur.documentId], tagsOf = splitTags(cur.tags), back = vault.idx.back(cur.id), outs = vault.idx.out(cur.id);
     const chapHref = `#/notes/c/${cur.documentId}/${encodeURIComponent(chapterOf(cur))}`;
     const openIt = () => { location.hash = isPdf(d) ? `#/read/${d.id}?page=${cur.pageNumber}&hl=${cur.id}` : `#/read/${d.id}?pos=${cur.pageNumber}&hl=${cur.id}`; };
@@ -369,11 +426,11 @@ function drawVault() {
   if (gNodes.length > 1) add(right, h('div', { class: 'label' }, 'Graph'), noteGraph(gNodes, gEdges, go));
   if (outline.length) add(right, h('div', { class: 'label', style: { marginTop: '14px' } }, 'Outline'),
     outline.map(([t, id]) => h('div', { class: 'nvout', onclick: () => { const e = document.getElementById(id); if (e) e.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, t)));
-  if (cur) {
+  if (cur && !(vault.results && tree.terms.length)) {
     const outs = vault.idx.out(cur.id);
     add(right, h('div', { class: 'label', style: { marginTop: '14px' } }, `Links from this note · ${outs.length}`), outs.length ? outs.map(x => h('div', { class: 'nvout' }, linkTo(x))) : h('div', { class: 'muted' }, 'None yet.'));
   }
-  if (cur && mid.querySelector('.nvtitle')) noteDrag(mid.querySelector('.nvtitle'), cur);
+  if (cur && !(vault.results && tree.terms.length) && mid.querySelector('.nvtitle')) noteDrag(mid.querySelector('.nvtitle'), cur);
   vault.mid.scrollTop = 0;
 }
 
