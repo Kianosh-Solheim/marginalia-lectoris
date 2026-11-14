@@ -295,7 +295,7 @@ function drawVault() {
       h('div', { class: 'nvprops' },
         h('div', null, h('span', { class: 'label' }, 'Tags'), tagsOf.length ? h('span', { class: 'tags' }, tagsOf.map(t => h('span', { class: 'tag', onclick: () => { vault.tag = t; drawVault(); } }, '#' + t))) : h('span', { class: 'muted' }, 'none')),
         h('div', null, h('span', { class: 'label' }, 'Source'), h('span', null, h('a', { href: `#/book/${cur.documentId}` }, cur.documentTitle), cur.documentAuthor ? ' · ' + cur.documentAuthor : '')),
-        h('div', null, h('span', { class: 'label' }, 'Place'), h('span', null, noteLocus(cur, d) || '—'))),
+        h('div', null, h('span', { class: 'label' }, 'Place'), h('span', null, notePlaceLinks(cur, d)))),
       cur.highlightedText ? h('blockquote', { class: 'nvquote', style: { borderLeftColor: cur.colorHex || '#000' } }, cur.highlightedText) : null,
       cur.userNotes ? h('div', { class: 'nvtext' }, noteBody(cur.userNotes, cur, vault.idx, go)) : h('div', { class: 'muted nvtext' }, 'No text of your own on this note yet. Press Edit to write some; type [[ to link to another note.'),
       h('div', { class: 'acts nvacts' },
@@ -586,4 +586,17 @@ async function obsidianZip(kind, bookId, chap) {
     document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     toast('Unpack the zip into your vault', 3500);
   } catch (e) { fail(e); }
+}
+
+/** Where a note is, with its pages as links into the reader: "Chapter 2 · page 3 – page 4" for a quotation over a page break. */
+function notePlaceLinks(n, d) {
+  if (!d || !isPdf(d) || !canRead(d)) return noteLocus(n, d) || '—';
+  const pdf = String(n.pdfPages || n.pageNumber).split(/[–-]/).map(x => +x.trim()).filter(Boolean);
+  const start = pdf[0] || n.pageNumber, end = pdf[pdf.length - 1] || start;
+  const printed = String(n.printedPageLabel || '').split('–').map(x => x.trim()).filter(Boolean);
+  const link = (page, label, first) => h('a', { class: 'nlink', href: `#/read/${d.id}?page=${page}${first ? '&hl=' + n.id : ''}`, title: 'Open the book at PDF page ' + page }, 'page ' + label);
+  const out = [n.chapterTitle ? n.chapterTitle + ' · ' : '', link(start, printed[0] || start, true)];
+  if (end > start) out.push(' – ', link(end, printed.length > 1 ? printed[printed.length - 1] : (printed.length ? '(PDF ' + end + ')' : end), false));
+  if (printed.length) out.push(h('span', { class: 'muted' }, ` · PDF p. ${start}${end > start ? '–' + end : ''}`));
+  return out;
 }

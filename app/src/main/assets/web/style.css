@@ -1035,3 +1035,7 @@ html[data-theme="dark"] .aihit .aiscore, html[data-theme="dark"] .aiwhy, html[da
 html[data-theme="dark"] table.dt tr.dtrow.picked td { background: #52525b; color: #fff; }
 html[data-theme="dark"] .wprose .cm { color: var(--ink); }
 .cite.citekey { font-family: var(--mono); font-size: .82em; background: var(--tint2); padding: 0 3px; border-radius: 2px; }
+.contbar { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 31; background: var(--ink); color: var(--paper); padding: 6px 10px; display: flex; gap: 10px; align-items: center; font-size: 13px; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+.contbar .btn { padding: 2px 8px; font-size: 11px; }
+.contbar .btn.quiet { color: var(--paper); }
+textarea.quoteedit { width: 100%; box-sizing: border-box; font-family: var(--serif); font-size: 15px; resize: vertical; }

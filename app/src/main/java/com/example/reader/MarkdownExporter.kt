@@ -430,6 +430,22 @@ object MarkdownExporter {
             }
         }
         val target = "$sourceFilename$anchorFragment"
+        // A quotation that runs over a page break gets a link to each end: "… printed page 3 – printed page 4".
+        if (isPdf && displayText == null) {
+            val (pdfRange, printedRaw) = PdfToEbookParser.parseStoredPageLabels(highlight.pageNumber, highlight.printedPageLabel)
+            val startPdf = pdfRange.substringBefore('–').substringBefore('-').trim().toIntOrNull() ?: highlight.pageNumber
+            val endPdf = pdfRange.substringAfterLast('–').substringAfterLast('-').trim().toIntOrNull() ?: startPdf
+            if (endPdf > startPdf) {
+                val printed = cleanPageLabel(printedRaw)
+                val first = printed.substringBefore('–').trim(); val last = printed.substringAfterLast('–').trim()
+                val twoPrinted = printed.contains('–') && first.isNotEmpty() && last.isNotEmpty()
+                val startText = "$sourceFilename, " + (if (twoPrinted) "printed page $first" else "PDF page $startPdf")
+                val endText = if (twoPrinted) "printed page $last" else "PDF page $endPdf"
+                val endTarget = "$sourceFilename#page=$endPdf"
+                return if (wikiLinkStyle) "[[$target|$startText]] – [[$endTarget|$endText]]"
+                else "[$startText]($target) – [$endText]($endTarget)"
+            }
+        }
         return if (wikiLinkStyle) {
             "[[$target|$shownText]]"
         } else {

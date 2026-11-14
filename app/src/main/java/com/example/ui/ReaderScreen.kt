@@ -680,6 +680,8 @@ fun ReaderScreen(
     var showHighlightsSheet by remember { mutableStateOf(false) }
     var showExportPreviewDialog by remember { mutableStateOf(false) }
     var showAddHighlightDialog by remember { mutableStateOf(false) }
+    // A quotation being continued on the next page (the note dialog is put aside meanwhile).
+    var noteContinuation by remember(document.id) { mutableStateOf<com.example.reader.NoteContinuation?>(null) }
     var showAddChapterDialog by remember { mutableStateOf(false) }
 
     // KOReader Specialized Dialogs
@@ -1063,7 +1065,14 @@ fun ReaderScreen(
                             highlightColorHex = colorHex
                             showAddHighlightDialog = true
                         },
-                        onQuickSaveHighlight = { quote, page, printedPage, chapterTitle, colorHex ->
+                        onQuickSaveHighlight = quick@{ quote, page, printedPage, chapterTitle, colorHex ->
+                            if (noteContinuation != null) {
+                                // The second half of a continued quotation always goes back to its note.
+                                highlightQuoteText = quote; highlightPageNumber = page; highlightPrintedPageLabel = printedPage
+                                highlightChapterText = chapterTitle; highlightColorHex = colorHex
+                                showAddHighlightDialog = true
+                                return@quick
+                            }
                             val autoTitle = com.example.reader.NoteSuggestionEngine.suggestTitles(
                                 highlightedText = quote,
                                 chapterTitle = chapterTitle,
@@ -2154,23 +2163,60 @@ fun ReaderScreen(
 
     // Add Highlight & Note Dialog
     if (showAddHighlightDialog) {
+        val isPdfDoc = document.fileType.equals("PDF", ignoreCase = true)
+        val cont = noteContinuation
         CreateHighlightDialog(
-            initialQuote = highlightQuoteText,
-            initialPage = highlightPageNumber,
-            initialPrintedPageLabel = highlightPrintedPageLabel,
-            initialChapter = highlightChapterText,
+            initialTitle = cont?.title ?: "",
+            initialNotes = cont?.notes ?: "",
+            initialTags = cont?.tags ?: "",
+            initialQuote = if (cont != null) com.example.reader.NoteContinuation.join(cont.quote, highlightQuoteText) else highlightQuoteText,
+            initialPage = cont?.startPage ?: highlightPageNumber,
+            initialPrintedPageLabel = if (cont != null) com.example.reader.NoteContinuation.span(cont, highlightPageNumber, highlightPrintedPageLabel) else highlightPrintedPageLabel,
+            initialChapter = cont?.chapter?.ifBlank { highlightChapterText } ?: highlightChapterText,
             initialParagraphCitation = highlightParagraphCitation,
             initialPageEquivalent = highlightPageEquivalent,
             initialEpubCfi = highlightEpubCfi,
-            initialColorHex = highlightColorHex,
+            initialColorHex = cont?.colorHex ?: highlightColorHex,
             documentTitle = document.title,
-            isPdfDocument = document.fileType.equals("PDF", ignoreCase = true),
-            onDismiss = { showAddHighlightDialog = false },
+            isPdfDocument = isPdfDoc,
+            onContinueNextPage = if (isPdfDoc) { title, quote, notes, page, printedPage, chapter, colorHex, tags ->
+                // The page the quotation has reached: the end of its span so far.
+                val (range, _) = com.example.reader.PdfToEbookParser.parseStoredPageLabels(page, printedPage)
+                val last = maxOf(page, highlightPageNumber, range.substringAfterLast('–').substringAfterLast('-').trim().toIntOrNull() ?: page)
+                noteContinuation = com.example.reader.NoteContinuation(title, quote, notes, page, last, printedPage, chapter, colorHex, tags)
+                showAddHighlightDialog = false
+                targetHighlightRequest = null
+                targetPageRequest = last   // 0-based index of the page after [last]
+                jumpRequestToken++
+                Toast.makeText(context, "Select the rest of the quotation on this page, then choose Note", Toast.LENGTH_LONG).show()
+            } else null,
+            onDismiss = { showAddHighlightDialog = false; noteContinuation = null },
             onSave = { title, quote, notes, page, printedPage, chapter, colorHex, tags, paragraphCitation, pageEquivalent, epubCfi ->
                 onAddHighlight(title, quote, notes, page, printedPage, chapter, colorHex, tags, paragraphCitation, pageEquivalent, epubCfi)
                 showAddHighlightDialog = false
+                noteContinuation = null
             }
         )
+    }
+
+    // While a quotation waits for its second half: a strip at the top says so and lets you go back.
+    noteContinuation?.let { c ->
+        if (!showAddHighlightDialog) {
+            androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.TopCenter) {
+                androidx.compose.foundation.layout.Row(
+                    Modifier.padding(top = 6.dp).background(Color.Black).padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.Text("Select the rest of the quotation, then Note", color = Color.White, fontSize = 13.sp)
+                    androidx.compose.material3.Text("   Back to the note", color = Color.White, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        modifier = Modifier.clickable {
+                            // Nothing more to add: the dialog comes back as it was.
+                            highlightQuoteText = ""; highlightPageNumber = c.lastPage; highlightPrintedPageLabel = ""
+                            showAddHighlightDialog = true
+                        })
+                }
+            }
+        }
     }
 
     // Edit Existing Highlight Dialog

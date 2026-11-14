@@ -2137,7 +2137,7 @@ function noteLocus(n, d) {
   if (n.chapterTitle) bits.push(n.chapterTitle);
   if (n.printedPageLabel) bits.push((/[–-]/.test(n.printedPageLabel) ? 'pp. ' : 'p. ') + n.printedPageLabel);
   else if (n.pageEquivalent) bits.push('p. ' + n.pageEquivalent);
-  if (!d || isPdf(d)) bits.push('PDF p. ' + n.pageNumber); else if (!n.printedPageLabel) bits.push('pos. ' + n.pageNumber);
+  if (!d || isPdf(d)) bits.push(n.pdfPages && /[–-]/.test(n.pdfPages) ? 'PDF pp. ' + n.pdfPages : 'PDF p. ' + n.pageNumber); else if (!n.printedPageLabel) bits.push('pos. ' + n.pageNumber);
   return bits.join(' · ');
 }
 
@@ -3083,23 +3083,48 @@ function selectionBar(ctx, sel, onDone) {
 
 function noteDialog(ctx, sel, color, onDone) {
   modal((box, close) => {
-    const t = h('input', { placeholder: 'Leave empty for an automatic title' }), body = h('textarea', { rows: 7, placeholder: 'Your thoughts…' }), g = tagInput('', true);
+    const dr = sel.draft || {};
+    const t = h('input', { placeholder: 'Leave empty for an automatic title', value: dr.title || '' }), body = h('textarea', { rows: 7, placeholder: 'Your thoughts…' }), g = tagInput(dr.tags || '', true);
+    body.value = dr.userNotes || '';
+    // The quotation can be tidied before it is saved (a stray page number, a running header).
+    const quote = h('textarea', { class: 'quote quoteedit', rows: Math.min(10, Math.max(3, Math.ceil(sel.text.length / 90))), title: 'The quotation — you can edit it' }); quote.value = sel.text;
     const save = async () => {
-      try { await sel.save({ title: t.value, userNotes: body.value, tags: g.value, colorHex: color }); tagCache = null; close(); toast('Note saved'); onDone(); }
+      if (!quote.value.trim()) { toast('The quotation is empty'); return; }
+      try { await sel.save({ text: quote.value.trim(), title: t.value, userNotes: body.value, tags: g.value, colorHex: color }); tagCache = null; close(); toast('Note saved'); onDone(); }
       catch (e) { fail(e); }
     };
+    // PDF: the quotation runs on to the next page. The note is put aside; you select the rest there.
+    const onward = sel.pdf && ctx.goToPage ? h('button', { class: 'btn', title: 'The quotation continues on the next page: turn the page and select the rest. What you wrote here is kept.', onclick: () => {
+      ctx.cont = { text: quote.value.trim(), page: sel.loc.page, draft: { title: t.value, userNotes: body.value, tags: g.value } };
+      close(); window.getSelection().removeAllRanges(); selectionBar(ctx, null);
+      ctx.goToPage((sel.lastPage || sel.loc.page) + 1);
+      contBanner(ctx, () => { const c = ctx.cont; contBanner(ctx, null); noteDialog(ctx, Object.assign({}, sel, { text: c.text, draft: c.draft }), color, onDone); });
+    } }, 'Continue on next page ›') : null;
     body.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); });
     linkComplete(body);
     box.append(h('h2', null, 'New note'), h('div', { class: 'fields' },
-      h('div', { class: 'quote' }, sel.text),
+      quote,
       h('div', { class: 'label' }, sel.where || ''),
       h('label', null, h('span', { class: 'label' }, 'Title'), t),
       h('label', null, h('span', { class: 'label' }, 'Note'), body),
       h('div', { class: 'tagwrap' }, h('span', { class: 'label' }, 'Tags'), g._widget),
       h('div', null, h('div', { class: 'label', style: { marginBottom: '4px' } }, 'Colour'), swatches(color, c => { color = c; localSet('ml.color', c); }))),
-      h('div', { class: 'foot' }, h('span', { class: 'muted', style: { marginRight: 'auto', fontSize: '12px' } }, 'Ctrl+Enter saves'),
-        h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save note')));
+      h('div', { class: 'foot' }, ...[h('span', { class: 'muted', style: { marginRight: 'auto', fontSize: '12px' } }, 'Ctrl+Enter saves'),
+        onward, h('button', { class: 'btn', onclick: () => { contBanner(ctx, null); close(); } }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save note')].filter(Boolean)));
   });
+}
+/** Two halves of a quotation, one from each page. A word hyphenated across the page break is put together again. */
+function joinQuote(a, b) {
+  a = String(a || '').trimEnd(); b = String(b || '').trimStart();
+  if (!a) return b; if (!b) return a;
+  return /\p{L}[-­]$/u.test(a) && /^\p{Ll}/u.test(b) ? a.slice(0, -1) + b : a + ' ' + b;
+}
+/** The strip shown while a quotation waits for its second half; [back] reopens the note as it was. null removes it. */
+function contBanner(ctx, back) {
+  const old = ctx.mainArea.querySelector('.contbar'); if (old) old.remove();
+  if (!back) { ctx.cont = null; return; }
+  ctx.mainArea.append(h('div', { class: 'contbar' }, h('span', null, 'Continuing the quotation: select the rest on this page, then press Note…'),
+    h('button', { class: 'btn', onclick: back }, 'Back to the note'), h('button', { class: 'btn quiet', onclick: () => contBanner(ctx, null) }, 'Give up')));
 }
 
 const LETTER = /[\p{L}\p{N}]/u;
@@ -3440,20 +3465,25 @@ async function openPdf(ctx, params) {
       if (text.length < 2) return;
       const pageOf = node => { const el = (node.nodeType === 1 ? node : node.parentElement).closest('.ppage'); return el ? +el.dataset.page : current; };
       let a = pageOf(s.anchorNode), b = pageOf(s.focusNode); if (a > b) [a, b] = [b, a];
+      // The second half of a quotation continued from an earlier page: joined to the first, under its page.
+      const cont = ctx.cont && b >= ctx.cont.page ? ctx.cont : null;
+      const newPages = [a, b];
+      const fullText = cont ? joinQuote(cont.text, text) : text;
+      if (cont) a = cont.page;
       const lab = labels && labels[a - 1];
       const labB = labels && labels[b - 1];
       const printedOk = x => x && /\d|^[ivxlc]+$/i.test(x);
       selectionBar(ctx, {
-        text,
+        text: fullText, draft: cont ? cont.draft : null, pdf: true, lastPage: b,
         pageRef: printedOk(lab) && lab !== String(a) ? (b > a && printedOk(labB) ? `${lab}–${labB}` : lab) : (b > a ? `${a}–${b}` : String(a)),
         where: `${chapterOf(a) ? chapterOf(a) + ' · ' : ''}PDF page ${a}${b > a ? '–' + b : ''}`,
         loc: { page: a, chapter: chapterOf(a) },
         save: async extra => {
-          const r = await api(`doc/${d.id}/highlights`, { method: 'POST', json: Object.assign({ text, page: a, endPage: b, chapter: chapterOf(a), printedLabel: lab && /\d|^[ivxlc]+$/i.test(lab) && lab !== String(a) ? lab : '' }, extra) });
+          const r = await api(`doc/${d.id}/highlights`, { method: 'POST', json: Object.assign({ text: fullText, page: a, endPage: b, chapter: chapterOf(a), printedLabel: lab && /\d|^[ivxlc]+$/i.test(lab) && lab !== String(a) ? lab : '' }, extra) });
           ctx.notes.push(r);
           return r;
         }
-      }, cancelled => { window.getSelection().removeAllRanges(); selectionBar(ctx, null); if (!cancelled) { [a, b].forEach(paintHighlights); ctx.renderSide(); } });
+      }, cancelled => { window.getSelection().removeAllRanges(); selectionBar(ctx, null); if (!cancelled) { contBanner(ctx, null); [a, b].concat(newPages).forEach(paintHighlights); ctx.renderSide(); } });
     }, 250);
   };
   document.addEventListener('selectionchange', onSel);

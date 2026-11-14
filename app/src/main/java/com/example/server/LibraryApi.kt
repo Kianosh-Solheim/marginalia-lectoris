@@ -587,7 +587,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         .put("highlightedText", h.highlightedText)
         .put("userNotes", h.userNotes)
         .put("pageNumber", h.pageNumber)
-        .put("printedPageLabel", h.printedPageLabel)
+        .put("printedPageLabel", h.printedPageLabel.substringBefore("|PDF:").trim())
+        .put("pdfPages", h.printedPageLabel.substringAfter("|PDF:", "").trim())
         .put("chapterTitle", h.chapterTitle)
         .put("paragraphCitation", h.paragraphCitation)
         .put("pageEquivalent", h.pageEquivalent)
@@ -1030,7 +1031,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             val chapter = b.optString("chapter").ifBlank { pdfChapter(doc, page) }.ifBlank { "Page $page" }
             val first = b.optString("printedLabel").ifBlank { printedLabel(doc, page) }
             val last = if (endPage > page) printedLabel(doc, endPage) else ""
-            val printed = if (first.isNotBlank() && last.isNotBlank() && last != first) "$first–$last" else first
+            // A quotation over several pages keeps both ends: the printed pages and the pages in the file.
+            val printed = if (endPage > page) com.example.reader.PdfQuotePageSpan(page, endPage, first, last).toStoredPrintedPageLabel() else first
             ops.addHighlight(
                 documentId = doc.id, title = b.optString("title"), highlightedText = text,
                 userNotes = b.optString("userNotes"), pageNumber = page, printedPageLabel = printed,

@@ -85,6 +85,8 @@ fun CreateHighlightDialog(
     isPdfDocument: Boolean = false,
     dialogTitle: String = "New Literature Note",
     saveButtonLabel: String = "Save Note",
+    /** PDF only: put the note aside, turn to the next page and select the rest of the quotation there. */
+    onContinueNextPage: ((title: String, quote: String, notes: String, page: Int, printedPageLabel: String, chapter: String, colorHex: String, tags: String) -> Unit)? = null,
     onDismiss: () -> Unit,
     onSave: (title: String, quote: String, notes: String, page: Int, printedPageLabel: String, chapter: String, colorHex: String, tags: String, paragraphCitation: String, pageEquivalent: String, epubCfi: String) -> Unit
 ) {
@@ -973,8 +975,24 @@ fun CreateHighlightDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", color = Color.Black)
+            androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                if (onContinueNextPage != null && isPdfDocument) {
+                    TextButton(
+                        onClick = {
+                            val tagsNow = com.example.reader.NoteSuggestionEngine.joinTagsList(
+                                if (customTagInput.isNotBlank()) activeTags + com.example.reader.NoteSuggestionEngine.parseTagsList(customTagInput) else activeTags
+                            )
+                            onContinueNextPage(title, quote, notes, pageNumber, printedPageLabel.trim(), chapter, selectedColor.hex, tagsNow)
+                        },
+                        enabled = quote.isNotBlank(),
+                        modifier = Modifier.testTag("continue_next_page_button")
+                    ) {
+                        Text("Continue on next page ›", color = Color.Black)
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = Color.Black)
+                }
             }
         }
     )

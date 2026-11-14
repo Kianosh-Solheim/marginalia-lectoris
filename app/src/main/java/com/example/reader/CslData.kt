@@ -153,7 +153,7 @@ object CslData {
         else entry(ctx, fromDoc(ctx, d), "library", Zotero.linkOf(d.id))
         val file = ItemFiles.noteFile(ctx, d.id, n.id).orEmpty().ifBlank { d.filePath }
         val pdf = file.endsWith(".pdf", true) || (ItemFiles.noteFile(ctx, d.id, n.id).isNullOrBlank() && d.fileType.equals("PDF", true))
-        val loc = n.printedPageLabel.trim().ifBlank { n.pageEquivalent.trim().replace(Regex("^pp?\\.\\s*", RegexOption.IGNORE_CASE), "") }.ifBlank { if (pdf && n.pageNumber > 0) n.pageNumber.toString() else "" }
+        val loc = n.printedPageLabel.substringBefore("|PDF:").trim().ifBlank { n.pageEquivalent.trim().replace(Regex("^pp?\\.\\s*", RegexOption.IGNORE_CASE), "") }.ifBlank { if (pdf && n.pageNumber > 0) n.pageNumber.toString() else "" }
         return JSONObject().put("source", src).put("locator", loc).put("label", "page")
     }
 
