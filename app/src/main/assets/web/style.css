@@ -936,3 +936,58 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .wkeywarn { border-left: 3px solid #f59e0b; background: #fffbeb; padding: 6px 10px; font-size: 13px; }
 .wkeywarn table { border-collapse: collapse; margin-top: 4px; font-size: 12px; }
 .wkeywarn td, .wkeywarn th { text-align: left; padding: 2px 12px 2px 0; }
+
+/* Notes as a vault: tree, page, graph */
+.nv { display: grid; grid-template-columns: 290px minmax(0, 1fr) 320px; height: calc(100vh - 50px); border-top: 1px solid var(--rule); }
+.nvleft, .nvmid, .nvright { overflow-y: auto; min-width: 0; }
+.nvleft { border-right: 1px solid var(--rule); padding: 8px 6px 40px; font-size: 13px; }
+.nvright { border-left: 1px solid var(--rule); padding: 12px 12px 40px; font-size: 13px; }
+.nvmid { padding: 22px max(24px, calc((100% - 720px) / 2)) 80px; }
+.nvbar { display: flex; align-items: center; padding: 2px 6px 8px; }
+.nvbar .btn { padding: 2px 8px; font-size: 11px; }
+.nvrow { display: flex; align-items: center; gap: 4px; padding: 3px 6px; cursor: pointer; border-radius: 3px; }
+.nvrow:hover { background: #f4f4f5; }
+.nvrow.on { background: #e0e7ff; }
+.nvrow.book { font-weight: 600; }
+.nvrow.chap { padding-left: 20px; }
+.nvrow.leaf { padding-left: 40px; }
+.nvrow.leaf.flat { padding-left: 24px; }
+.nvcaret { width: 14px; flex: none; font-size: 10px; text-align: center; }
+.nvname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nvcount { font-family: var(--mono); font-size: 10px; color: var(--grey); }
+.nvdot { width: 7px; height: 7px; border-radius: 50%; flex: none; border: 1px solid rgba(0,0,0,.25); }
+.nvtags { margin-top: 16px; padding: 8px 6px 0; border-top: 1px solid var(--rule); display: flex; flex-wrap: wrap; gap: 4px; }
+.nvtags .label { width: 100%; }
+.nvtags .tag, .nvprops .tag { cursor: pointer; }
+.nvtags .tag.on { background: var(--ink); color: var(--paper); }
+.nvcrumbs { font-size: 12px; color: var(--grey); margin-bottom: 10px; overflow-wrap: anywhere; }
+.nvcrumbs a { color: inherit; }
+.nvtitle { font-family: var(--serif); font-size: 28px; line-height: 1.2; margin: 0 0 14px; overflow-wrap: anywhere; }
+.nvprops { display: grid; gap: 5px; margin-bottom: 18px; font-size: 13px; }
+.nvprops > div { display: grid; grid-template-columns: 70px 1fr; gap: 10px; align-items: baseline; }
+.nvquote { margin: 0 0 14px; padding-left: 12px; border-left: 3px solid var(--ink); font-family: var(--serif); font-size: 17px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.nvtext { white-space: pre-wrap; font-size: 15px; line-height: 1.55; overflow-wrap: anywhere; }
+.nvacts { margin: 18px 0; display: flex; gap: 6px; flex-wrap: wrap; }
+.nvacts .btn { padding: 4px 10px; font-size: 12px; }
+.nvh { font-family: var(--serif); font-size: 20px; margin: 22px 0 8px; }
+.nvh a { color: inherit; text-decoration: none; }
+.nvitem { padding: 4px 0; font-size: 15px; }
+.nvback { margin-top: 26px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.nvmention { padding: 6px 0; }
+.nvout { padding: 3px 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nlink { color: #4f46e5; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.nlink.missing { color: #9ca3af; text-decoration-style: dashed; cursor: default; }
+.ngraph { width: 100%; height: auto; max-height: 340px; display: block; }
+.ngraph line { stroke: #d4d4d8; stroke-width: 1; }
+.ngnode circle { fill: #a1a1aa; }
+.ngnode.page circle { fill: #f59e0b; }
+.ngnode.main circle { fill: #4f46e5; }
+.ngnode text { font-size: 9px; fill: var(--grey); font-family: var(--sans, sans-serif); }
+.ngnode.main text { font-weight: 700; fill: var(--ink); }
+.ngnode:not(.main) { cursor: pointer; }
+.ngnode:not(.main):hover circle { fill: var(--ink); }
+.nlinkbox { position: fixed; z-index: 200; background: var(--paper); border: 1.5px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); max-height: 210px; overflow-y: auto; font-size: 13px; }
+.nlinkopt { padding: 5px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nlinkopt.on, .nlinkopt:hover { background: #e0e7ff; }
+@media (max-width: 1100px) { .nv { grid-template-columns: 250px minmax(0, 1fr); } .nvright { display: none; } }
+@media (max-width: 700px) { .nv { display: block; height: auto; } .nvleft { border-right: 0; border-bottom: 1px solid var(--rule); max-height: 40vh; } }

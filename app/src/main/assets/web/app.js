@@ -172,7 +172,7 @@ function route() {
   state.currentDoc = null;
   if (parts[0] === 'book' && parts[1]) return showBook(+parts[1]);
   if (parts[0] === 'read' && parts[1]) return openReader(+parts[1], params);
-  if (parts[0] === 'notes') { state.tab = 'notes'; return showNotes(); }
+  if (parts[0] === 'notes') { state.tab = 'notes'; return showNotes(parts); }
   if (parts[0] === 'settings') { state.tab = 'settings'; return showSettings(); }
   if (parts[0] === 'presentations') { state.tab = 'presentations'; return showPresentations(); }
   if (parts[0] === 'zotero') { state.tab = 'zotero'; return showZotero(); }
@@ -2130,7 +2130,7 @@ function noteItem(n, d, onChanged) {
     h('div', { style: { minWidth: 0 } },
       h('div', { class: 'nt' }, n.title),
       h('blockquote', null, n.highlightedText),
-      n.userNotes ? h('div', { class: 'nn' }, n.userNotes) : null,
+      n.userNotes ? h('div', { class: 'nn' }, notesCache && notesCache.list ? noteBody(n.userNotes, n, (notesCache.idx = notesCache.idx || noteIndex(notesCache.list)), href => { location.hash = href; }) : n.userNotes) : null,
       tags.length ? h('div', { class: 'tags' }, tags.map(t => h('span', { class: 'tag' }, '#' + t))) : null,
       h('div', { class: 'nl' }, noteLocus(n, d)),
       h('div', { class: 'acts' },
@@ -2151,11 +2151,15 @@ function editNote(n, onSaved) {
     const t = h('input', { value: n.title }), body = h('textarea', { rows: 7 }, n.userNotes || ''), g = tagInput(n.tags || '', true);
     const save = async () => {
       try {
+        const old = n.title;
         const r = await api(`highlight/${n.id}`, { method: 'PATCH', json: { title: t.value, userNotes: body.value, tags: g.value, colorHex: color } });
-        Object.assign(n, r); tagCache = null; close(); toast('Note saved'); onSaved && onSaved(r);
+        Object.assign(n, r);
+        const moved = await retitleLinks(old, r.title, n.id);
+        if (moved) toast(`Note saved · ${moved} link${moved === 1 ? '' : 's'} to it updated`, 2500); tagCache = null; close(); toast('Note saved'); onSaved && onSaved(r);
       } catch (e) { fail(e); }
     };
     body.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); });
+    linkComplete(body);
     box.append(h('h2', null, 'Edit note'), h('div', { class: 'fields' },
       h('div', { class: 'quote' }, n.highlightedText),
       h('label', null, h('span', { class: 'label' }, 'Title'), t),
@@ -2469,7 +2473,10 @@ function sameValue(key, a, b) {
 // ------------------------------------------------------------------ all notes
 
 let notesCache = null;
-async function showNotes() {
+async function showNotes(parts) {
+  // The vault view (nview.js), unless the plain list was chosen.
+  if ((parts && parts.length > 1) || localGet('ml.notesView', 'vault') !== 'list') return showVault(parts && parts.length ? parts : ['notes']);
+  vault = null;
   const app = clear(document.getElementById('app'));
   app.appendChild(header());
   const main = h('main', null, h('div', { id: 'noteslist' }, h('div', { class: 'loading', style: { position: 'static', height: '200px' } }, h('div', { class: 'spin' }))));
@@ -2482,12 +2489,14 @@ async function showNotes() {
 }
 
 function renderNotesList() {
+  if (vault && document.body.contains(vault.root)) { drawVault(); return; }
   const box = document.getElementById('noteslist'); if (!box || !notesCache) return;
   clear(box);
   const q = norm(state.query.trim().replace(/^#/, ''));
   const terms = q ? q.split(/\s+/) : [];
   const hits = notesCache.list.filter(n => !terms.length || terms.every(t => norm([n.title, n.highlightedText, n.userNotes, n.tags, n.documentTitle, n.documentAuthor, n.chapterTitle].join(' ')).includes(t)));
-  box.append(h('div', { class: 'toolbar' }, h('div', { class: 'label' }, `${hits.length} note${hits.length === 1 ? '' : 's'}${terms.length ? ' match' : ''}`)));
+  box.append(h('div', { class: 'toolbar' }, h('div', { class: 'label' }, `${hits.length} note${hits.length === 1 ? '' : 's'}${terms.length ? ' match' : ''}`), h('span', { style: { flex: 1 } }),
+    h('button', { class: 'btn', title: 'Tree, note page and graph', onclick: () => { localSet('ml.notesView', 'vault'); showNotes(['notes']); } }, 'Vault view')));
   if (!hits.length) { box.append(h('div', { class: 'empty' }, h('h2', null, terms.length ? 'No notes match' : 'No notes yet'))); return; }
   const groups = new Map();
   hits.forEach(n => { if (!groups.has(n.documentId)) groups.set(n.documentId, []); groups.get(n.documentId).push(n); });
@@ -3058,6 +3067,7 @@ function noteDialog(ctx, sel, color, onDone) {
       catch (e) { fail(e); }
     };
     body.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); });
+    linkComplete(body);
     box.append(h('h2', null, 'New note'), h('div', { class: 'fields' },
       h('div', { class: 'quote' }, sel.text),
       h('div', { class: 'label' }, sel.where || ''),
