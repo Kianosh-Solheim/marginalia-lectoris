@@ -991,3 +991,13 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .nlinkopt.on, .nlinkopt:hover { background: #e0e7ff; }
 @media (max-width: 1100px) { .nv { grid-template-columns: 250px minmax(0, 1fr); } .nvright { display: none; } }
 @media (max-width: 700px) { .nv { display: block; height: auto; } .nvleft { border-right: 0; border-bottom: 1px solid var(--rule); max-height: 40vh; } }
+.nvarr { display: flex; flex-direction: column; gap: 3px; }
+.nvarow { display: flex; align-items: center; gap: 6px; border: 1px solid var(--rule); background: #fff; padding: 4px 6px; font-size: 14px; }
+.nvarow.head { background: #f4f4f5; border-color: var(--ink); margin-top: 8px; }
+.nvarow.head input { flex: 1; font-family: var(--serif); font-size: 16px; font-weight: 700; padding: 2px 6px; min-width: 0; }
+.nvarow .nvname { flex: 1; }
+.nvarow .btn { padding: 1px 7px; font-size: 11px; }
+.nvarow.over { box-shadow: 0 -3px 0 #4f46e5; }
+.nvarow.dragging { opacity: .4; }
+.nvarow.end { border-style: dashed; justify-content: center; font-size: 12px; }
+.nvgrip { cursor: grab; color: var(--grey); letter-spacing: -2px; padding: 0 4px; user-select: none; }

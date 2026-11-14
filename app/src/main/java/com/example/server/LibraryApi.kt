@@ -33,6 +33,9 @@ import java.util.concurrent.ConcurrentHashMap
  * [LibraryOps], which does exactly what the app does for the same change.
  */
 class LibraryApi(private val context: Context, private val pinMatches: (String) -> Boolean) {
+    private val notePagesLock = Any()
+    private fun notePagesFile() = java.io.File(context.filesDir, "note_pages.json")
+
     private val ops = LibraryOps(context)
     private val db = AppDatabase.getInstance(context)
     private val settingsApi = SettingsApi(context)
@@ -113,6 +116,19 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s == listOf("upload") && m == "POST" -> return upload(req)
             s.firstOrNull() == "zotero" -> return zoteroApi.route(req, s.drop(1))
             s.firstOrNull() == "writing" -> return writingApi.route(req, s.drop(1))
+            // The arrangement of the overview pages in the notes view (headings and the order of the notes), by page key.
+            s == listOf("note-pages") && m == "GET" -> return HttpResponse.json(notePagesFile().let { if (it.isFile) it.readText() else "{}" })
+            s == listOf("note-pages") && m == "PUT" -> {
+                val b = JSONObject(req.bodyText()); val key = b.optString("key")
+                if (key.isBlank()) return HttpResponse.error(400, "key")
+                synchronized(notePagesLock) {
+                    val f = notePagesFile()
+                    val all = try { if (f.isFile) JSONObject(f.readText()) else JSONObject() } catch (_: Exception) { JSONObject() }
+                    if (b.isNull("page")) all.remove(key) else all.put(key, b.getJSONObject("page"))
+                    val tmp = java.io.File(f.parentFile, f.name + ".tmp"); tmp.writeText(all.toString()); tmp.renameTo(f)
+                }
+                return HttpResponse.json("{\"ok\":true}")
+            }
             s == listOf("search") && m == "GET" -> return searchAll(req)
             s == listOf("ai-status") && m == "GET" -> return HttpResponse.json(com.example.reader.AiSearch.statusJson(context).toString())
             s == listOf("ai-index") && m == "POST" -> {

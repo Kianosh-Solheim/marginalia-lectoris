@@ -152,6 +152,7 @@ async function showVault(parts) {
     mid.append(h('div', { class: 'loading', style: { position: 'static', height: '200px' } }, h('div', { class: 'spin' })));
     try { await loadVault(); } catch (e) { fail(e); return; }
   }
+  if (vault.route !== route) vault.arr = null;
   vault.route = route;
   drawVault();
 }
@@ -159,6 +160,7 @@ async function loadVault() {
   const [lib, all] = await Promise.all([loadLibrary(), api('highlights')]);
   notesCache = { docs: Object.fromEntries(lib.map(d => [d.id, d])), list: all.highlights || [] };
   vault.idx = noteIndex(notesCache.list);
+  try { vault.pages = await api('note-pages'); } catch (_) { vault.pages = vault.pages || {}; }
 }
 const vaultGo = href => { if (location.hash === href) drawVault(); else location.hash = href; };
 async function vaultReload() { try { await loadVault(); } catch (e) { fail(e); } drawVault(); }
@@ -267,21 +269,77 @@ function drawVault() {
         h('div', null, h('span', { class: 'label' }, 'Source'), h('span', null, h('a', { href: `#/book/${curBook}` }, bookTitle(curBook)))),
         h('div', null, h('span', { class: 'label' }, 'Notes'), h('span', null, String(notes.length)))));
     if (!notes.length) add(mid, h('div', { class: 'muted' }, 'No notes here.'));
-    const groups = new Map(); notes.forEach(n => { const k = kind === 'b' ? chapterOf(n) : ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(n); });
     gNodes = [{ id: 'page', label: title, main: true }];
     if (kind === 'c') { gNodes.push({ id: 'book', label: bookTitle(curBook), href: `#/notes/b/${curBook}`, kind: 'page' }); gEdges.push(['book', 'page']); }
-    [...groups.entries()].forEach(([name, list], gi) => {
-      if (kind === 'b' && (groups.size > 1 || name)) {
-        const hid = 'nvh' + gi; outline.push([name || 'No chapter', hid]);
-        add(mid, h('h2', { class: 'nvh', id: hid }, crumb(name || 'No chapter', `#/notes/c/${curBook}/${encodeURIComponent(name)}`)));
-        gNodes.push({ id: 'c' + gi, label: name || 'No chapter', href: `#/notes/c/${curBook}/${encodeURIComponent(name)}`, kind: 'page' }); gEdges.push(['page', 'c' + gi]);
-      }
-      list.forEach(n => {
-        add(mid, h('div', { class: 'nvitem' }, linkTo(n), h('span', { class: 'muted' }, ' · ' + (n.printedPageLabel ? 'p. ' + n.printedPageLabel : noteLocus(n, notesCache.docs[n.documentId]).split(' · ').pop()))));
-        if (kind === 'c' && gNodes.length < 42) { gNodes.push({ id: 'n' + n.id, label: n.title, href: `#/notes/n/${n.id}` }); gEdges.push(['page', 'n' + n.id]); }
+    // The page is automatic (notes in page order, a book's under its chapters) until you arrange it;
+    // after that it keeps your order and headings, and notes written later wait at the bottom.
+    const key = kind === 'b' ? 'b:' + curBook : 'c:' + curBook + ':' + curChap, saved = vault.pages[key], byId = new Map(notes.map(n => [n.id, n]));
+    const auto = () => {
+      const groups = new Map(); notes.forEach(n => { const k = kind === 'b' ? chapterOf(n) : ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(n); });
+      const items = [];
+      [...groups.entries()].forEach(([name, list]) => { if (kind === 'b' && (groups.size > 1 || name)) items.push({ h: name || 'No chapter', chap: name }); list.forEach(n => items.push({ n: n.id })); });
+      return items;
+    };
+    let items = saved ? (saved.items || []).filter(x => x.h != null || byId.has(x.n)) : auto();
+    const placed = new Set(items.filter(x => x.n != null).map(x => x.n)), fresh = saved ? notes.filter(n => !placed.has(n.id)) : [];
+    const where = n => n.printedPageLabel ? 'p. ' + n.printedPageLabel : noteLocus(n, notesCache.docs[n.documentId]).split(' · ').pop();
+    const arranging = vault.arr && vault.arr.key === key;
+    if (!arranging) {
+      if (notes.length) add(mid, h('div', { class: 'nvacts', style: { margin: '0 0 6px' } },
+        h('button', { class: 'btn', title: 'Put the notes in your own order and add headings', onclick: () => { vault.arr = { key, items: items.concat(fresh.map(n => ({ n: n.id }))).map(x => Object.assign({}, x)) }; drawVault(); } }, 'Arrange'),
+        saved ? h('span', { class: 'muted', style: { alignSelf: 'center', fontSize: '12px' } }, 'Your own arrangement') : h('span', { class: 'muted', style: { alignSelf: 'center', fontSize: '12px' } }, 'Automatic: in page order')));
+      const show = n => {
+        add(mid, h('div', { class: 'nvitem' }, linkTo(n), h('span', { class: 'muted' }, ' · ' + where(n))));
+        if (gNodes.length < 42) { gNodes.push({ id: 'n' + n.id, label: n.title, href: `#/notes/n/${n.id}` }); gEdges.push(['page', 'n' + n.id]); }
+      };
+      items.forEach((x, k) => {
+        if (x.h != null) {
+          const hid = 'nvh' + k; outline.push([x.h, hid]);
+          add(mid, h('h2', { class: 'nvh', id: hid }, x.chap != null ? crumb(x.h, `#/notes/c/${curBook}/${encodeURIComponent(x.chap)}`) : x.h));
+        } else show(byId.get(x.n));
       });
-    });
-    if (kind === 'c') notes.forEach(n => vault.idx.out(n.id).forEach(x => gEdges.push(['n' + n.id, 'n' + x.id])));
+      if (fresh.length) { outline.push(['New notes', 'nvhnew']); add(mid, h('h2', { class: 'nvh', id: 'nvhnew' }, 'New notes ', h('span', { class: 'muted', style: { fontSize: '13px', fontWeight: 400 } }, '· not placed yet')), []); fresh.forEach(show); }
+      notes.forEach(n => vault.idx.out(n.id).forEach(x => { if (byId.has(x.id)) gEdges.push(['n' + n.id, 'n' + x.id]); }));
+    } else {
+      // Arranging: drag the rows (or use the arrows), add headings, then Done.
+      const A = vault.arr, list = h('div', { class: 'nvarr' });
+      const move = (from, to) => { if (to < 0 || to >= A.items.length || from === to) return; const [x] = A.items.splice(from, 1); A.items.splice(to, 0, x); drawList(); };
+      let dragFrom = -1;
+      const drawList = focusAt => {
+        clear(list);
+        A.items.forEach((x, k) => {
+          const row = h('div', { class: 'nvarow' + (x.h != null ? ' head' : ''), draggable: 'true' },
+            h('span', { class: 'nvgrip', title: 'Drag to move' }, '⋮⋮'),
+            x.h != null ? h('input', { value: x.h, placeholder: 'Heading', oninput: e => { x.h = e.target.value; delete x.chap; }, onmousedown: e => e.stopPropagation() })
+              : h('span', { class: 'nvname' }, (byId.get(x.n) || {}).title || 'Untitled', h('span', { class: 'muted' }, ' · ' + where(byId.get(x.n)))),
+            h('button', { class: 'btn quiet', title: 'Add a heading above this row', onclick: () => { A.items.splice(k, 0, { h: '' }); drawList(k); } }, '+ Heading'),
+            h('button', { class: 'btn quiet', title: 'Move up', onclick: () => move(k, k - 1) }, '↑'),
+            h('button', { class: 'btn quiet', title: 'Move down', onclick: () => move(k, k + 1) }, '↓'),
+            x.h != null ? h('button', { class: 'btn quiet', title: 'Remove this heading (the notes stay)', onclick: () => { A.items.splice(k, 1); drawList(); } }, '×') : h('span', { style: { width: '26px' } }));
+          row.addEventListener('dragstart', e => { if (e.target.tagName === 'INPUT') { e.preventDefault(); return; } dragFrom = k; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(k)); row.classList.add('dragging'); });
+          row.addEventListener('dragend', () => { dragFrom = -1; list.querySelectorAll('.over,.dragging').forEach(r => r.classList.remove('over', 'dragging')); });
+          row.addEventListener('dragover', e => { if (dragFrom < 0) return; e.preventDefault(); list.querySelectorAll('.over').forEach(r => r.classList.remove('over')); row.classList.add('over'); });
+          row.addEventListener('drop', e => { if (dragFrom < 0) return; e.preventDefault(); const from = dragFrom; dragFrom = -1; move(from, from < k ? k - 1 : k); });
+          list.append(row);
+        });
+        const end = h('div', { class: 'nvarow end' }, h('span', { class: 'muted' }, 'Drop here to put it last'));
+        end.addEventListener('dragover', e => { if (dragFrom < 0) return; e.preventDefault(); list.querySelectorAll('.over').forEach(r => r.classList.remove('over')); end.classList.add('over'); });
+        end.addEventListener('drop', e => { if (dragFrom < 0) return; e.preventDefault(); const from = dragFrom; dragFrom = -1; move(from, A.items.length - 1); });
+        list.append(end);
+        if (focusAt != null) { const inp = list.children[focusAt] && list.children[focusAt].querySelector('input'); if (inp) inp.focus(); }
+      };
+      const store = async page => {
+        try { await api('note-pages', { method: 'PUT', json: { key, page } }); if (page) vault.pages[key] = page; else delete vault.pages[key]; vault.arr = null; drawVault(); }
+        catch (e) { fail(e); }
+      };
+      add(mid, h('div', { class: 'nvacts', style: { margin: '0 0 10px' } },
+        h('button', { class: 'btn fill', onclick: () => store({ items: A.items.filter(x => x.h == null || x.h.trim()).map(x => x.h != null ? { h: x.h.trim() } : { n: x.n }) }) }, 'Done'),
+        h('button', { class: 'btn', onclick: () => { vault.arr = null; drawVault(); } }, 'Cancel'),
+        h('button', { class: 'btn', onclick: () => { A.items.push({ h: '' }); drawList(A.items.length - 1); } }, '+ Heading at the end'),
+        saved ? h('button', { class: 'btn quiet', title: 'Forget your arrangement and list the notes in page order again', onclick: () => confirmBox('Back to the automatic page?', 'Your order and headings on this page are forgotten. The notes themselves are not touched.', 'Reset', () => store(null)) }, 'Reset to automatic') : null),
+        h('div', { class: 'muted', style: { fontSize: '13px', marginBottom: '8px' } }, 'Drag the rows by ⋮⋮ or use the arrows. A heading groups the notes below it.'), list);
+      drawList();
+    }
   } else {
     add(mid, h('h1', { class: 'nvtitle' }, 'Notes'),
       h('p', { class: 'muted' }, 'Pick a book, a chapter or a note on the left. A book or chapter opens its overview page, which lists its notes as links.'),
