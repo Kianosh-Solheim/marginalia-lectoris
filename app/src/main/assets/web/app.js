@@ -3079,6 +3079,7 @@ function selectionBar(ctx, sel, onDone) {
     h('span', { class: 'sq' }, '“' + sel.text.slice(0, 80) + (sel.text.length > 80 ? '…' : '') + '”'),
     h('div', { class: 'swatches', title: 'Highlight in this colour' }, COLORS.slice(0, 7).map(([name, hex]) => h('button', { title: 'Highlight · ' + name, style: { background: hex }, onmousedown: e => e.preventDefault(), onclick: () => quick(hex) }))),
     h('button', { class: 'btn fill', onmousedown: e => e.preventDefault(), onclick: () => noteDialog(ctx, sel, color, onDone) }, 'Note…'),
+    sel.pdf && ctx.goToPage ? h('button', { class: 'btn', title: 'The quotation continues on the next page: turn the page and select the rest there', onmousedown: e => e.preventDefault(), onclick: () => continueOnNextPage(ctx, sel, color, onDone, sel.text, sel.draft || {}) }, 'Continue on next page ›') : null,
     h('button', { class: 'btn', onmousedown: e => e.preventDefault(), onclick: () => copyText(sel.text, 'Copied') }, 'Copy'),
     setAsButton(ctx, sel, onDone),
     h('button', { class: 'btn quiet', onmousedown: e => e.preventDefault(), onclick: () => { onDone(true); } }, '×'));
@@ -3099,10 +3100,7 @@ function noteDialog(ctx, sel, color, onDone) {
     };
     // PDF: the quotation runs on to the next page. The note is put aside; you select the rest there.
     const onward = sel.pdf && ctx.goToPage ? h('button', { class: 'btn', title: 'The quotation continues on the next page: turn the page and select the rest. What you wrote here is kept.', onclick: () => {
-      ctx.cont = { text: quote.value.trim(), page: sel.loc.page, draft: { title: t.value, userNotes: body.value, tags: g.value } };
-      close(); window.getSelection().removeAllRanges(); selectionBar(ctx, null);
-      ctx.goToPage((sel.lastPage || sel.loc.page) + 1);
-      contBanner(ctx, () => { const c = ctx.cont; contBanner(ctx, null); noteDialog(ctx, Object.assign({}, sel, { text: c.text, draft: c.draft }), color, onDone); });
+      close(); continueOnNextPage(ctx, sel, color, onDone, quote.value.trim(), { title: t.value, userNotes: body.value, tags: g.value });
     } }, 'Continue on next page ›') : null;
     body.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); });
     linkComplete(body);
@@ -3116,6 +3114,13 @@ function noteDialog(ctx, sel, color, onDone) {
       h('div', { class: 'foot' }, ...[h('span', { class: 'muted', style: { marginRight: 'auto', fontSize: '12px' } }, 'Ctrl+Enter saves'),
         onward, h('button', { class: 'btn', onclick: () => { contBanner(ctx, null); close(); } }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save note')].filter(Boolean)));
   });
+}
+/** Puts the quotation so far aside (with what was written about it), turns to the next page and waits for the rest. */
+function continueOnNextPage(ctx, sel, color, onDone, text, draft) {
+  ctx.cont = { text, page: sel.loc.page, draft };
+  window.getSelection().removeAllRanges(); selectionBar(ctx, null);
+  ctx.goToPage((sel.lastPage || sel.loc.page) + 1);
+  contBanner(ctx, () => { const c = ctx.cont; contBanner(ctx, null); noteDialog(ctx, Object.assign({}, sel, { text: c.text, draft: c.draft }), color, onDone); });
 }
 /** Two halves of a quotation, one from each page. A word hyphenated across the page break is put together again. */
 function joinQuote(a, b) {
@@ -3146,7 +3151,15 @@ function findLoose(flat, quote, continued) {
     const end = t >= 0 && t - start < q.length * 1.3 + 40 ? t + tail.length : Math.min(flat.length, start + q.length);
     return [start, end];
   }
-  if (continued) { const t = flat.indexOf(tail); if (t >= 0 && t < q.length * 1.3 + 40) return [0, t + tail.length]; }
+  if (continued) {
+    // The end of the quotation is on this page: from where it picks up (not from the running header above it) to its last word.
+    let t = flat.indexOf(tail);
+    if (t >= 0 && t < q.length * 1.3 + 400) {
+      const end = t + tail.length; let i = q.length - tail.length;
+      while (t > 0 && i > 0 && flat[t - 1] === q[i - 1]) { t--; i--; }
+      return [t, end];
+    }
+  }
   return null;
 }
 
@@ -3288,7 +3301,9 @@ async function openPdf(ctx, params) {
     if (!layer || !el._text) return;
     clear(layer);
     // (Notes made in another file of the item are not drawn here.)
-    const notes = ctx.notes.filter(x => !x.file && (x.pageNumber === i || (x.pageNumber === i - 1 && x.printedPageLabel && /[–-]/.test(x.printedPageLabel))));
+    // A quotation that runs over a page break is drawn on every page it reaches.
+    const lastPage = x => { const m = /[–-]\s*(\d+)\s*$/.exec(x.pdfPages || ''); return m ? +m[1] : (x.printedPageLabel && /[–-]/.test(x.printedPageLabel) ? x.pageNumber + 1 : x.pageNumber); };
+    const notes = ctx.notes.filter(x => !x.file && (x.pageNumber === i || (x.pageNumber < i && i <= lastPage(x))));
     if (!notes.length) return;
     let flat = ''; const owner = [];
     el._text.strs.forEach((str, k) => { for (const ch of str.toLowerCase()) { if (LETTER.test(ch)) { flat += ch; owner.push(k); } } });
