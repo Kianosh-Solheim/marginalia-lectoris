@@ -337,6 +337,7 @@ fun HighlightsListScreen(
             isPdfDocument = doc?.fileType?.equals("PDF", ignoreCase = true) == true || editingHighlight.printedPageLabel.isNotBlank(),
             dialogTitle = "Edit Highlight & Note",
             saveButtonLabel = "Save Changes",
+            onDelete = { onDeleteHighlight(editingHighlight); highlightToEdit = null },
             onDismiss = { highlightToEdit = null },
             onSave = { title, quote, notes, page, printedPage, chapter, colorHex, tags, paragraphCitation, pageEquivalent, epubCfi ->
                 onUpdateHighlight(

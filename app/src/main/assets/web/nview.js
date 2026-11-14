@@ -299,7 +299,7 @@ function drawVault() {
       cur.highlightedText ? h('blockquote', { class: 'nvquote', style: { borderLeftColor: cur.colorHex || '#000' } }, cur.highlightedText) : null,
       cur.userNotes ? h('div', { class: 'nvtext' }, noteBody(cur.userNotes, cur, vault.idx, go)) : h('div', { class: 'muted nvtext' }, 'No text of your own on this note yet. Press Edit to write some; type [[ to link to another note.'),
       h('div', { class: 'acts nvacts' },
-        h('button', { class: 'btn fill', onclick: () => editNote(cur, () => vaultReload()) }, 'Edit'),
+        h('button', { class: 'btn fill', onclick: () => editNote(cur, async (_, deleted) => { if (deleted) { await loadVault(); vaultGo(chapHref); } else vaultReload(); }) }, 'Edit'),
         d && canRead(d) ? h('button', { class: 'btn', onclick: openIt }, 'Show in book') : null,
         h('button', { class: 'btn', onclick: () => copyFromFile(`doc/${cur.documentId}/export/note?id=${cur.id}`, 'Note copied as Markdown') }, 'Copy as Markdown'),
         h('button', { class: 'btn', onclick: () => download(`doc/${cur.documentId}/export/note?id=${cur.id}`, 'Preparing the note…') }, '.md'),

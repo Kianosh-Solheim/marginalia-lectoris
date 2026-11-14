@@ -87,6 +87,8 @@ fun CreateHighlightDialog(
     saveButtonLabel: String = "Save Note",
     /** PDF only: put the note aside, turn to the next page and select the rest of the quotation there. */
     onContinueNextPage: ((title: String, quote: String, notes: String, page: Int, printedPageLabel: String, chapter: String, colorHex: String, tags: String) -> Unit)? = null,
+    /** When editing an existing note: deletes it (asked twice). */
+    onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onSave: (title: String, quote: String, notes: String, page: Int, printedPageLabel: String, chapter: String, colorHex: String, tags: String, paragraphCitation: String, pageEquivalent: String, epubCfi: String) -> Unit
 ) {
@@ -976,6 +978,12 @@ fun CreateHighlightDialog(
         },
         dismissButton = {
             androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                if (onDelete != null) {
+                    var sure by remember { mutableStateOf(false) }
+                    TextButton(onClick = { if (sure) onDelete() else sure = true }, modifier = Modifier.testTag("delete_highlight_button")) {
+                        Text(if (sure) "Tap again to delete" else "Delete", color = Color(0xFFB91C1C))
+                    }
+                }
                 if (onContinueNextPage != null && isPdfDocument) {
                     TextButton(
                         onClick = {

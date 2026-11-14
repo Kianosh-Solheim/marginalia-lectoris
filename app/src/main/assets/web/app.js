@@ -2188,7 +2188,11 @@ function editNote(n, onSaved) {
       h('label', null, h('span', { class: 'label' }, 'Note'), body),
       h('div', { class: 'tagwrap' }, h('span', { class: 'label' }, 'Tags'), g._widget),
       h('div', null, h('div', { class: 'label', style: { marginBottom: '4px' } }, 'Colour'), swatches(color, c => { color = c; }))),
-      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
+      h('div', { class: 'foot' },
+        h('button', { class: 'btn quiet', style: { marginRight: 'auto', color: 'var(--red)' }, title: 'Delete this note', onclick: () => confirmBox('Delete this note?', n.title, 'Delete', async () => {
+          try { await api(`highlight/${n.id}`, { method: 'DELETE' }); tagCache = null; close(); toast('Note deleted'); onSaved && onSaved(n, true); } catch (e) { fail(e); }
+        }) }, 'Delete'),
+        h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
   });
 }
 
