@@ -209,8 +209,8 @@ function drawVault() {
       if (!single) tr.append(h('div', { class: 'nvrow chap' + (kind === 'c' && curBook === b.id && curChap === c.name ? ' on' : '') },
         h('span', { class: 'nvcaret', onclick: () => toggle(ck) }, openC ? '▾' : '▸'),
         h('span', { class: 'nvname', title: c.name || 'No chapter', onclick: () => go(`#/notes/c/${b.id}/${encodeURIComponent(c.name)}`) }, c.name || 'No chapter'), h('span', { class: 'nvcount' }, c.notes.length)));
-      if (openC) c.notes.forEach(n => tr.append(h('div', { class: 'nvrow leaf' + (single ? ' flat' : '') + (cur && cur.id === n.id ? ' on' : ''), title: n.title, onclick: () => go(`#/notes/n/${n.id}`) },
-        h('span', { class: 'nvdot', style: { background: n.colorHex || '#E4E4E7' } }), h('span', { class: 'nvname' }, n.title || 'Untitled'))));
+      if (openC) c.notes.forEach(n => tr.append(noteDrag(h('div', { class: 'nvrow leaf' + (single ? ' flat' : '') + (cur && cur.id === n.id ? ' on' : ''), title: n.title, onclick: () => go(`#/notes/n/${n.id}`) },
+        h('span', { class: 'nvdot', style: { background: n.colorHex || '#E4E4E7' } }), h('span', { class: 'nvname' }, n.title || 'Untitled')), n)));
     });
   });
   if (!tree.books.length) tr.append(h('div', { class: 'muted', style: { padding: '10px' } }, tree.filtered ? 'No notes match.' : 'No notes yet.'));
@@ -234,7 +234,7 @@ function drawVault() {
     const chapHref = `#/notes/c/${cur.documentId}/${encodeURIComponent(chapterOf(cur))}`;
     const openIt = () => { location.hash = isPdf(d) ? `#/read/${d.id}?page=${cur.pageNumber}&hl=${cur.id}` : `#/read/${d.id}?pos=${cur.pageNumber}&hl=${cur.id}`; };
     add(mid, crumbs(crumb(cur.documentTitle, `#/notes/b/${cur.documentId}`), chapterOf(cur) ? crumb(chapterOf(cur), chapHref) : null, cur.title),
-      h('h1', { class: 'nvtitle' }, cur.title || 'Untitled'),
+      h('h1', { class: 'nvtitle', title: 'Drag this into an open Obsidian note' }, cur.title || 'Untitled'),
       h('div', { class: 'nvprops' },
         h('div', null, h('span', { class: 'label' }, 'Tags'), tagsOf.length ? h('span', { class: 'tags' }, tagsOf.map(t => h('span', { class: 'tag', onclick: () => { vault.tag = t; drawVault(); } }, '#' + t))) : h('span', { class: 'muted' }, 'none')),
         h('div', null, h('span', { class: 'label' }, 'Source'), h('span', null, h('a', { href: `#/book/${cur.documentId}` }, cur.documentTitle), cur.documentAuthor ? ' · ' + cur.documentAuthor : '')),
@@ -246,6 +246,7 @@ function drawVault() {
         d && canRead(d) ? h('button', { class: 'btn', onclick: openIt }, 'Show in book') : null,
         h('button', { class: 'btn', onclick: () => copyFromFile(`doc/${cur.documentId}/export/note?id=${cur.id}`, 'Note copied as Markdown') }, 'Copy as Markdown'),
         h('button', { class: 'btn', onclick: () => download(`doc/${cur.documentId}/export/note?id=${cur.id}`, 'Preparing the note…') }, '.md'),
+        h('button', { class: 'btn', title: 'Create this note in your Obsidian vault', onclick: async () => { try { sendToObsidian(mdName(cur.title), await noteMd(cur)); } catch (e) { fail(e); } } }, 'Send to Obsidian'),
         h('button', { class: 'btn quiet', onclick: () => confirmBox('Delete this note?', cur.title, 'Delete', async () => {
           try { await api(`highlight/${cur.id}`, { method: 'DELETE' }); toast('Note deleted'); await loadVault(); vaultGo(chapHref); } catch (e) { fail(e); }
         }) }, 'Delete')),
@@ -267,13 +268,29 @@ function drawVault() {
       h('h1', { class: 'nvtitle' }, kind === 'b' ? 'Notes on ' + title : title),
       h('div', { class: 'nvprops' },
         h('div', null, h('span', { class: 'label' }, 'Source'), h('span', null, h('a', { href: `#/book/${curBook}` }, bookTitle(curBook)))),
-        h('div', null, h('span', { class: 'label' }, 'Notes'), h('span', null, String(notes.length)))));
+        kind === 'c' ? h('div', null, h('span', { class: 'label' }, 'Chapter number'), (() => {
+          const num = chapterNumber(curBook, curChap, () => drawVault());
+          return h('span', null, num != null && num !== '' ? String(num) : h('span', { class: 'muted' }, 'not known'), ' ',
+            h('button', { class: 'wcmlink', title: 'Set the chapter number yourself', onclick: async () => {
+              const v = prompt('Chapter number (leave empty to work it out from the book again)', num != null ? String(num) : ''); if (v === null) return;
+              const k = pageKey('c', curBook, curChap), page = Object.assign({}, vault.pages[k] || {});
+              if (v.trim()) page.number = /^\d+$/.test(v.trim()) ? +v.trim() : v.trim(); else delete page.number;
+              const out = Object.keys(page).length ? page : null;
+              try { await api('note-pages', { method: 'PUT', json: { key: k, page: out } }); if (out) vault.pages[k] = out; else delete vault.pages[k]; drawVault(); } catch (e) { fail(e); }
+            } }, 'change'));
+        })()) : null,
+        h('div', null, h('span', { class: 'label' }, 'Notes'), h('span', null, String(notes.length)))),
+      notes.length ? h('div', { class: 'nvacts', style: { margin: '0 0 10px' } },
+        h('button', { class: 'btn', title: 'This page and all its notes as Markdown files, with the links between them, to unpack into your vault', onclick: () => obsidianZip(kind, curBook, curChap) }, 'Download for Obsidian (.zip)'),
+        h('button', { class: 'btn', title: 'Create this overview page in your Obsidian vault (the notes go with the zip)', onclick: () => sendToObsidian(pageFileName(kind, curBook, curChap), overviewMd(kind, curBook, curChap)) }, 'Send page to Obsidian'),
+        h('button', { class: 'btn quiet', onclick: () => obsidianSettings() }, 'Obsidian settings')) : null);
+    dragToApp(mid.querySelector('.nvtitle'), () => overviewMd(kind, curBook, curChap), null);
     if (!notes.length) add(mid, h('div', { class: 'muted' }, 'No notes here.'));
     gNodes = [{ id: 'page', label: title, main: true }];
     if (kind === 'c') { gNodes.push({ id: 'book', label: bookTitle(curBook), href: `#/notes/b/${curBook}`, kind: 'page' }); gEdges.push(['book', 'page']); }
     // The page is automatic (notes in page order, a book's under its chapters) until you arrange it;
     // after that it keeps your order and headings, and notes written later wait at the bottom.
-    const key = kind === 'b' ? 'b:' + curBook : 'c:' + curBook + ':' + curChap, saved = vault.pages[key], byId = new Map(notes.map(n => [n.id, n]));
+    const key = pageKey(kind, curBook, curChap), saved = vault.pages[key] && vault.pages[key].items ? vault.pages[key] : null, byId = new Map(notes.map(n => [n.id, n]));
     const auto = () => {
       const groups = new Map(); notes.forEach(n => { const k = kind === 'b' ? chapterOf(n) : ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(n); });
       const items = [];
@@ -329,6 +346,8 @@ function drawVault() {
         if (focusAt != null) { const inp = list.children[focusAt] && list.children[focusAt].querySelector('input'); if (inp) inp.focus(); }
       };
       const store = async page => {
+        const num = (vault.pages[key] || {}).number;
+        if (num != null) page = Object.assign(page || {}, { number: num });
         try { await api('note-pages', { method: 'PUT', json: { key, page } }); if (page) vault.pages[key] = page; else delete vault.pages[key]; vault.arr = null; drawVault(); }
         catch (e) { fail(e); }
       };
@@ -354,5 +373,160 @@ function drawVault() {
     const outs = vault.idx.out(cur.id);
     add(right, h('div', { class: 'label', style: { marginTop: '14px' } }, `Links from this note · ${outs.length}`), outs.length ? outs.map(x => h('div', { class: 'nvout' }, linkTo(x))) : h('div', { class: 'muted' }, 'None yet.'));
   }
+  if (cur && mid.querySelector('.nvtitle')) noteDrag(mid.querySelector('.nvtitle'), cur);
   vault.mid.scrollTop = 0;
+}
+
+// ------------------------------------------------------------------ to Obsidian
+
+const pageKey = (kind, bookId, chap) => kind === 'b' ? 'b:' + bookId : 'c:' + bookId + ':' + chap;
+/** A title as a file name Obsidian accepts (and links can point to). */
+const mdName = t => (String(t || 'Untitled').replace(/[\\/:*?"<>|#^\[\]]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/[. ]+$/, '') || 'Untitled').slice(0, 140);
+const vaultBookTitle = id => { const n = notesCache.list.find(x => x.documentId === id); return n ? n.documentTitle : 'Book'; };
+const pageFileName = (kind, bookId, chap) => mdName(kind === 'b' ? 'Notes on ' + vaultBookTitle(bookId) : `Notes on ${chap || 'No chapter'} in ${vaultBookTitle(bookId)}`);
+
+/**
+ * The number of a chapter: the one you set, else its place in the book's list of chapters, else the
+ * number in its name ("Chapter 3 …"). The book's chapter list is fetched once; [again] is called when it arrives.
+ */
+function chapterNumber(bookId, chap, again) {
+  const set = (vault.pages[pageKey('c', bookId, chap)] || {}).number;
+  if (set != null && set !== '') return set;
+  vault.books = vault.books || {};
+  const info = vault.books[bookId];
+  if (info === undefined) {
+    vault.books[bookId] = null;
+    api('doc/' + bookId).then(d => { vault.books[bookId] = d || {}; if (again) again(); }).catch(() => { vault.books[bookId] = {}; });
+  }
+  const list = info && info.chapters ? info.chapters.filter(c => c.kind === 'chapter') : [];
+  const at = list.findIndex(c => norm(c.title || '').trim() === norm(chap || '').trim());
+  if (at >= 0) return at + 1;
+  const m = String(chap || '').match(/^\s*(?:chapter|kapittel|kap\.?|ch\.?|part|del)?\s*(\d+)\b/i);
+  return m ? +m[1] : null;
+}
+/** What an overview page holds, in order: [{ h } | { n: note }], with unplaced notes last. */
+function pageItems(kind, bookId, chap) {
+  const notes = notesCache.list.filter(n => n.documentId === bookId && (kind === 'b' || chapterOf(n) === chap)).sort((x, y) => x.pageNumber - y.pageNumber || x.created - y.created);
+  const byId = new Map(notes.map(n => [n.id, n])), saved = vault.pages[pageKey(kind, bookId, chap)];
+  const out = [];
+  if (saved && saved.items) {
+    const placed = new Set();
+    saved.items.forEach(x => { if (x.h != null) out.push({ h: x.h }); else if (byId.has(x.n)) { out.push({ n: byId.get(x.n) }); placed.add(x.n); } });
+    const fresh = notes.filter(n => !placed.has(n.id));
+    if (fresh.length) { out.push({ h: 'New notes' }); fresh.forEach(n => out.push({ n })); }
+  } else {
+    const groups = new Map(); notes.forEach(n => { const k = kind === 'b' ? chapterOf(n) : ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(n); });
+    [...groups.entries()].forEach(([name, list]) => { if (kind === 'b' && (groups.size > 1 || name)) out.push({ h: name || 'No chapter', chap: name }); list.forEach(n => out.push({ n })); });
+  }
+  return { notes, items: out };
+}
+const yamlStr = v => '"' + String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+const wikiLink = (file, shown) => file === shown || !shown ? `[[${file}]]` : `[[${file}|${shown.replace(/[\[\]|]/g, ' ')}]]`;
+/** An overview page as an Obsidian note: properties, then the notes as links under the headings. [names]: note id → file name. */
+function overviewMd(kind, bookId, chap, names) {
+  const { items } = pageItems(kind, bookId, chap), book = vaultBookTitle(bookId);
+  const nameOf = n => (names && names.get(n.id)) || mdName(n.title);
+  const L = ['---', 'tags:', '  - Overview', '  - Book_note'];
+  if (kind === 'c') L.push('  - Book-Chapter');
+  L.push('book: ' + yamlStr(book));
+  if (kind === 'c') {
+    L.push('chapter: ' + yamlStr(chap || ''));
+    const num = chapterNumber(bookId, chap, null);
+    if (num != null && num !== '') L.push('chapter number: ' + (typeof num === 'number' ? num : yamlStr(num)));
+  }
+  L.push('---', '');
+  if (kind === 'c') L.push('Book: ' + wikiLink(pageFileName('b', bookId), book), '');
+  items.forEach(x => {
+    if (x.h != null) L.push('', '## ' + (x.chap != null ? wikiLink(pageFileName('c', bookId, x.chap), x.h) : x.h), '');
+    else L.push(wikiLink(nameOf(x.n), x.n.title), '');
+  });
+  return L.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+/** A note as the app exports it (.md), fetched once. Links to notes whose file name differs from their title are pointed at the file. */
+const noteMdCache = new Map();
+async function noteMd(n) {
+  const k = n.id + ':' + (n.title || '') + ':' + (n.userNotes || '').length + ':' + (n.tags || '');
+  if (noteMdCache.has(k)) return noteMdCache.get(k);
+  const r = await fetch(`/api/doc/${n.documentId}/export/note?id=${n.id}`, { credentials: 'same-origin' });
+  if (!r.ok) throw new Error('Could not prepare the note (' + r.status + ')');
+  const text = (await r.text()).replace(NOTE_LINK, (m, t, shown) => { const f = mdName(t); return f === t.trim() ? m : wikiLink(f, shown || t.trim()); });
+  noteMdCache.set(k, text);
+  return text;
+}
+/** The same in short, for the moment before the real one has arrived. */
+function noteMdQuick(n) {
+  const d = notesCache.docs[n.documentId];
+  return [`## ${n.title || 'Untitled'}`, '', n.userNotes || '', n.highlightedText ? '\n> ' + String(n.highlightedText).replace(/\n/g, '\n> ') : '', '', `— ${n.documentTitle}${noteLocus(n, d) ? ', ' + noteLocus(n, d) : ''}`].join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+/**
+ * Makes [el] draggable out of the browser: dropped on an open Obsidian note (or any text box) it
+ * leaves [text()]; in Chrome and Edge, dropped on a folder it becomes the file at [url].
+ */
+function dragToApp(el, text, file) {
+  if (!el) return el;
+  el.setAttribute('draggable', 'true'); el.classList.add('nvdrag');
+  el.addEventListener('dragstart', e => {
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('text/plain', text());
+    if (file) { try { e.dataTransfer.setData('DownloadURL', `text/markdown:${file.name}:${new URL(file.url, location.href).href}`); } catch (_) {} }
+  });
+  return el;
+}
+function noteDrag(el, n) {
+  // The exact export is fetched when the pointer comes near, so it is there by the time the drag starts.
+  el.addEventListener('pointerenter', () => { noteMd(n).catch(() => {}); }, { once: true });
+  const k = () => n.id + ':' + (n.title || '') + ':' + (n.userNotes || '').length + ':' + (n.tags || '');
+  return dragToApp(el, () => noteMdCache.get(k()) || noteMdQuick(n), { name: mdName(n.title) + '.md', url: `/api/doc/${n.documentId}/export/note?id=${n.id}` });
+}
+
+/** Which vault, and which folder in it, notes are sent to (kept in this browser). */
+function obsidianSettings(then) {
+  modal((box, close) => {
+    const v = h('input', { value: localGet('ml.obsVault', ''), placeholder: 'e.g. LCARS' }), f = h('input', { value: localGet('ml.obsFolder', ''), placeholder: 'e.g. Readwise/Marginalia  (empty: the top of the vault)' });
+    box.append(h('h2', null, 'Send to Obsidian'),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Notes are created in your vault through Obsidian itself, so Obsidian must be installed on this computer. The first time, the browser asks whether it may open Obsidian.'),
+      h('div', { class: 'fields' },
+        h('label', null, h('span', { class: 'label' }, 'Vault name (as shown at the bottom left in Obsidian)'), v),
+        h('label', null, h('span', { class: 'label' }, 'Folder in the vault'), f)),
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: () => {
+        if (!v.value.trim()) { toast('Write the name of the vault'); return; }
+        localSet('ml.obsVault', v.value.trim()); localSet('ml.obsFolder', f.value.trim().replace(/^\/+|\/+$/g, '')); close(); if (then) then();
+      } }, then ? 'Save and send' : 'Save')));
+    setTimeout(() => v.focus(), 40);
+  });
+}
+/** Creates the note [name] with [text] in the vault. A long one travels by the clipboard, as a link can only carry so much. */
+function sendToObsidian(name, text) {
+  const vaultName = localGet('ml.obsVault', '');
+  if (!vaultName) { obsidianSettings(() => sendToObsidian(name, text)); return; }
+  const folder = localGet('ml.obsFolder', '');
+  const base = `obsidian://new?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent((folder ? folder + '/' : '') + name)}`;
+  let uri = base + '&content=' + encodeURIComponent(text);
+  if (uri.length > 6000) { copyText(text, ''); uri = base + '&clipboard=true'; }
+  const a = h('a', { href: uri, style: { display: 'none' } }); document.body.append(a); a.click(); a.remove();
+  toast(`Sent “${name}” to Obsidian`, 2500);
+}
+/** A chapter or book for Obsidian: its overview page(s) and every note as its own file, with working links, in one zip. */
+async function obsidianZip(kind, bookId, chap) {
+  try {
+    const { notes } = pageItems(kind, bookId, chap), book = mdName(vaultBookTitle(bookId));
+    toast(`Preparing ${notes.length} note${notes.length === 1 ? '' : 's'}…`, 0);
+    // Every note gets its own file name; two notes with one title are told apart.
+    const names = new Map(), taken = new Set();
+    notes.forEach(n => { let f = mdName(n.title), k = 2; while (taken.has(f.toLowerCase())) f = mdName(n.title) + ' (' + k++ + ')'; taken.add(f.toLowerCase()); names.set(n.id, f); });
+    const zip = new JSZip(), root = zip.folder(book);
+    const chapters = kind === 'b' ? [...new Set(notes.map(chapterOf))] : [chap];
+    if (kind === 'b') root.file(pageFileName('b', bookId) + '.md', overviewMd('b', bookId, '', names));
+    chapters.forEach(c => { if (kind === 'c' || chapters.length > 1 || c) root.file(pageFileName('c', bookId, c) + '.md', overviewMd('c', bookId, c, names)); });
+    let done = 0;
+    for (const n of notes) {
+      const c = chapterOf(n);
+      (c ? root.folder(mdName(c)) : root).file(names.get(n.id) + '.md', await noteMd(n));
+      if (++done % 10 === 0) toast(`Preparing notes… ${done} of ${notes.length}`, 0);
+    }
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+    const a = h('a', { href: URL.createObjectURL(blob), download: (kind === 'b' ? book : mdName(chap || book)) + ' - Obsidian.zip' });
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('Unpack the zip into your vault', 3500);
+  } catch (e) { fail(e); }
 }

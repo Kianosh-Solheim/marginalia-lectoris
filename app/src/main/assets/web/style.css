@@ -1001,3 +1001,4 @@ main.tsearch input[type=search] { flex: 1; font-size: 17px; padding: 10px 12px; 
 .nvarow.dragging { opacity: .4; }
 .nvarow.end { border-style: dashed; justify-content: center; font-size: 12px; }
 .nvgrip { cursor: grab; color: var(--grey); letter-spacing: -2px; padding: 0 4px; user-select: none; }
+.nvdrag { cursor: grab; }
