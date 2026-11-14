@@ -303,6 +303,7 @@ function drawVault() {
         d && canRead(d) ? h('button', { class: 'btn', onclick: openIt }, 'Show in book') : null,
         h('button', { class: 'btn', onclick: () => copyFromFile(`doc/${cur.documentId}/export/note?id=${cur.id}`, 'Note copied as Markdown') }, 'Copy as Markdown'),
         h('button', { class: 'btn', onclick: () => download(`doc/${cur.documentId}/export/note?id=${cur.id}`, 'Preparing the note…') }, '.md'),
+        h('button', { class: 'btn', title: 'This note as a page (HTML) or a PDF', onclick: () => exportNotesDialog({ kind: 'n', noteId: cur.id, bookId: cur.documentId }) }, 'Export…'),
         h('button', { class: 'btn', title: 'Create this note in your Obsidian vault', onclick: async () => { try { sendToObsidian(mdName(cur.title), await noteMd(cur)); } catch (e) { fail(e); } } }, 'Send to Obsidian'),
         h('button', { class: 'btn quiet', onclick: () => confirmBox('Delete this note?', cur.title, 'Delete', async () => {
           try { await api(`highlight/${cur.id}`, { method: 'DELETE' }); toast('Note deleted'); await loadVault(); vaultGo(chapHref); } catch (e) { fail(e); }
@@ -338,6 +339,7 @@ function drawVault() {
         })()) : null,
         h('div', null, h('span', { class: 'label' }, 'Notes'), h('span', null, String(notes.length)))),
       notes.length ? h('div', { class: 'nvacts', style: { margin: '0 0 10px' } },
+        h('button', { class: 'btn', title: 'Everything on this page as a site in one HTML file, or as a PDF', onclick: () => exportNotesDialog({ kind, bookId: curBook, chap: curChap }) }, 'Export (HTML / PDF)…'),
         h('button', { class: 'btn', title: 'This page and all its notes as Markdown files, with the links between them, to unpack into your vault', onclick: () => obsidianZip(kind, curBook, curChap) }, 'Download for Obsidian (.zip)'),
         h('button', { class: 'btn', title: 'Create this overview page in your Obsidian vault (the notes go with the zip)', onclick: () => sendToObsidian(pageFileName(kind, curBook, curChap), overviewMd(kind, curBook, curChap)) }, 'Send page to Obsidian'),
         h('button', { class: 'btn quiet', onclick: () => obsidianSettings() }, 'Obsidian settings')) : null);
@@ -420,6 +422,7 @@ function drawVault() {
     add(mid, h('h1', { class: 'nvtitle' }, 'Notes'),
       h('p', { class: 'muted' }, 'Pick a book, a chapter or a note on the left. A book or chapter opens its overview page, which lists its notes as links.'),
       h('p', { class: 'muted' }, 'To link one note to another, edit it and type [[ — a list of note titles appears. The linked note then shows it under “Linked mentions”, and both appear in the graph.'),
+      notesCache.list.length ? h('div', { class: 'nvacts' }, h('button', { class: 'btn', title: 'All your notes as a site in one HTML file, or as a PDF', onclick: () => exportNotesDialog({ kind: 'all' }) }, 'Export all notes (HTML / PDF)…')) : null,
       h('div', { class: 'label', style: { marginTop: '18px' } }, 'Latest notes'),
       notesCache.list.slice().sort((a, b) => b.created - a.created).slice(0, 15).map(n => h('div', { class: 'nvitem' }, linkTo(n), h('span', { class: 'muted' }, ' · ' + n.documentTitle))));
   }

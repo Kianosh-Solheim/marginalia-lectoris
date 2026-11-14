@@ -1097,6 +1097,7 @@ function renderSettings(main, data) {
   };
   const nav = h('nav', { class: 'set-nav' }, data.groups.map(g =>
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById(settingsSlug(g.name)).scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, g.name)),
+    h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-notes-export').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Notes export'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-search').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Search'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-zotero').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Zotero'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-storage').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Storage & backup'));
@@ -1107,6 +1108,7 @@ function renderSettings(main, data) {
     g.fields.forEach(f => sec.appendChild(settingRow(f, data, main, save)));
     body.appendChild(sec);
   });
+  body.appendChild(notesExportSettingsSection());
   body.appendChild(searchSettingsSection());
   body.appendChild(zoteroSettingsSection());
   body.appendChild(storageSection(data.info));

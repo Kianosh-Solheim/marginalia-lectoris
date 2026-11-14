@@ -1040,3 +1040,7 @@ html[data-theme="dark"] .wprose .cm { color: var(--ink); }
 .contbar .btn.quiet { background: transparent; color: var(--paper); border-color: var(--paper); }
 .contbar span { white-space: nowrap; }
 textarea.quoteedit { width: 100%; box-sizing: border-box; font-family: var(--serif); font-size: 15px; resize: vertical; }
+.nxticks { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 4px 14px; margin: 4px 0 8px; }
+.nxtick { display: flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
+.nxlogo { width: 84px; height: 64px; border: 1px solid var(--rule); display: flex; align-items: center; justify-content: center; background: var(--card); font-size: 11px; }
+.nxlogo img { max-width: 100%; max-height: 100%; }
