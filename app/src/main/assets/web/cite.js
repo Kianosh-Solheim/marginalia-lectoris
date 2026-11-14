@@ -72,6 +72,7 @@ class Citing {
     this.noteNo = new Map();               // citationID → note number (note styles)
     this.bib = [];                         // bibliography entries (HTML)
     this.views = new Set();
+    this.showKeys = localGet('ml.wshowKeys', '') === '1'; this.keys = {};
     this.engine = null; this.styleXml = null; this.styleCls = 'in-text'; this.locales = {};
     this.ready = this.load();
     const self = this;
@@ -111,6 +112,28 @@ class Citing {
   }
 
   // ----- the nodes
+  /** A citation as it is written with keys: [see @tilly2017, p. 275; -@porta2013]. */
+  keyText(attrs) {
+    return '[' + (attrs.items || []).map(i => {
+      let t = (i.prefix ? i.prefix + ' ' : '') + (i.suppressAuthor ? '-' : '') + '@' + (this.keys[i.id] || '…');
+      if (i.locator) { const w = KEY_LOCATOR[i.label || 'page'] || KEY_LOCATOR.page; t += `, ${w[/[-–,&]/.test(i.locator) ? 1 : 0]} ${i.locator}`; }
+      if (i.suffix) t += (i.locator ? ' ' : ', ') + i.suffix;
+      return t;
+    }).join('; ') + ']';
+  }
+  /** Fetches the keys of the cited sources when some are not known yet, and redraws. */
+  async refreshKeys(editor, force) {
+    if (!this.showKeys) return;
+    const doc = editor.getJSON();
+    if (!force && citedIds(doc).every(id => this.keys[id])) return;
+    try { this.keys = (await resolveCiteKeys(this, doc)).keys; } catch (_) { return; }
+    this.views.forEach(v => v.render());
+  }
+  setShowKeys(editor, on) {
+    this.showKeys = on; localSet('ml.wshowKeys', on ? '1' : '');
+    this.views.forEach(v => v.render());
+    if (on) this.refreshKeys(editor, true);
+  }
   citationNode(inNote) {
     const self = this, T = this.T;
     return T.Node.create({
@@ -130,7 +153,8 @@ class Citing {
           const v = { node, dom, inNote, render() {
             const id = v.node.attrs.citationID;
             const html = self.html.get(id);
-            if (self.isNote && !inNote) { dom.className = 'cite fn citenote'; dom.innerHTML = ''; dom.title = html ? new DOMParser().parseFromString(html, 'text/html').body.textContent : 'Citation'; }
+            if (self.showKeys) { dom.className = 'cite citekey'; dom.textContent = self.keyText(v.node.attrs); dom.title = (html ? new DOMParser().parseFromString(html, 'text/html').body.textContent + ' — ' : '') + 'click to change'; }
+            else if (self.isNote && !inNote) { dom.className = 'cite fn citenote'; dom.innerHTML = ''; dom.title = html ? new DOMParser().parseFromString(html, 'text/html').body.textContent : 'Citation'; }
             else { dom.className = 'cite'; dom.innerHTML = html || xmlEsc(self.fallback(v.node.attrs)); dom.title = 'Citation — click to change'; }
           } };
           dom.addEventListener('click', e => { e.preventDefault(); if (typeof getPos === 'function') self.edit(editor, getPos(), v.node.attrs); });
@@ -201,6 +225,7 @@ class Citing {
       this.bib = bib ? bib[1] : []; this.bibParams = bib ? bib[0] : null;
     } catch (e) { console.warn('citeproc', e); }
     this.views.forEach(v => v.render());
+    if (this.showKeys && editor) this.refreshKeys(editor, false);
   }
   citeItem(i) {
     const o = { id: i.id };

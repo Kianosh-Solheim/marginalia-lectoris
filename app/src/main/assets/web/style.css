@@ -1034,3 +1034,4 @@ html[data-theme="dark"] mark, html[data-theme="dark"] .kwk { color: #111; }
 html[data-theme="dark"] .aihit .aiscore, html[data-theme="dark"] .aiwhy, html[data-theme="dark"] .nitem .nfile { color: #c4b5fd; }
 html[data-theme="dark"] table.dt tr.dtrow.picked td { background: #52525b; color: #fff; }
 html[data-theme="dark"] .wprose .cm { color: var(--ink); }
+.cite.citekey { font-family: var(--mono); font-size: .82em; background: var(--tint2); padding: 0 3px; border-radius: 2px; }

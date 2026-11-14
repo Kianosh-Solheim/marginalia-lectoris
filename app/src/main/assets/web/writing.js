@@ -618,6 +618,7 @@ async function showWriter(id, params) {
     toolbarButton('▤ Notes', 'Your notes beside the text: drag one in to quote or cite it (Ctrl+Alt+N)', () => notesP.toggle(), () => notesP && notesP.isOpen()),
     toolbarButton('Bibliography', 'Insert the bibliography here (it lists everything you cite)', () => citing.insertBibliography(editor)),
     styleBtn,
+    toolbarButton('@ Keys', 'Show the citations as citation keys ([@tilly2017, p. 275]) or in the chosen style. Only how they look here changes; exports are not affected.', () => { citing.setShowKeys(editor, !citing.showKeys); refreshBar(); }, () => citing.showKeys),
     toolbarButton('Tx', 'Clear formatting', () => chain().unsetAllMarks().clearNodes().run()),
   ];
   bar.append(...btns);
