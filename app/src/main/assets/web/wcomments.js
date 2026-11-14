@@ -141,7 +141,7 @@ class Commenting {
     this.col.hidden = !all.length;
     // The words of hidden (resolved) comments are not marked; the active one is marked more strongly.
     this.css.textContent = all.filter(id => !shown.includes(id)).map(id => `.wprose .cm[data-cid="${id}"]{background:none;border-bottom:0}`).join('') +
-      (this.active && shown.includes(this.active) ? `.wprose .cm[data-cid="${this.active}"]{background:#fcd34d}` : '');
+      (this.active && shown.includes(this.active) ? `.wprose .cm[data-cid="${this.active}"]{background:var(--hl3)}` : '');
     // What is being typed survives a redraw.
     const typing = this.list.querySelector('textarea[data-focus]');
     if (typing && this.editing) this.editing.draft = typing.value;

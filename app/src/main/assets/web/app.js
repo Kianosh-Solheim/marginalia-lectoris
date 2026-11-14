@@ -214,6 +214,27 @@ function showLogin() {
 
 // ------------------------------------------------------------------ header
 
+// Light or dark: Auto follows the computer's own setting; the choice is kept in this browser.
+const THEMES = [['auto', '◐', 'Auto: follows your computer'], ['light', '☀', 'Light'], ['dark', '☾', 'Dark']];
+function applyTheme() {
+  let t = 'auto'; try { t = localStorage.getItem('ml.theme') || 'auto'; } catch (_) {}
+  const dark = t === 'dark' || (t === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  return t;
+}
+applyTheme();
+if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+function themeButton() {
+  const cur = applyTheme(), i = Math.max(0, THEMES.findIndex(t => t[0] === cur));
+  const name = t => t[1] + ' ' + t[0][0].toUpperCase() + t[0].slice(1);
+  const b = h('button', { class: 'btn quiet', title: `Colours: ${THEMES[i][2]}. Click to change.` }, name(THEMES[i]));
+  b.addEventListener('click', () => {
+    const next = THEMES[(THEMES.findIndex(t => t[0] === applyTheme()) + 1) % THEMES.length];
+    try { localStorage.setItem('ml.theme', next[0]); } catch (_) {}
+    applyTheme(); b.textContent = name(next); b.title = `Colours: ${next[2]}. Click to change.`; toast('Colours: ' + next[2], 1500);
+  });
+  return b;
+}
 function header() {
   const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero'], ['search', 'Search', '#/search'], ['writing', 'Writing', '#/writing'], ['settings', 'Settings', '#/settings']];
   const search = h('input', { type: 'search', class: 'search', placeholder: 'Search title, author, tag…', value: state.query });
@@ -231,6 +252,7 @@ function header() {
     search,
     h('button', { class: 'btn fill', onclick: () => file.click(), title: 'Or drag files anywhere onto this page' }, '+ Add files'),
     file,
+    themeButton(),
     h('button', { class: 'btn quiet', title: 'Sign this browser out', onclick: async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); } }, 'Sign out')
   ));
 }
@@ -1577,7 +1599,7 @@ function renderBook(main, d) {
       d.placeholder ? null : h('span', null, `${pct(d.progress)}% read`),
       d.chapter ? h('span', null, d.chapter) : null,
       h('span', null, `${d.highlights} note${d.highlights === 1 ? '' : 's'}`)),
-    d.placeholder ? null : h('div', { class: 'bar', style: { height: '4px', background: 'var(--rule)', marginBottom: '16px' } }, h('i', { style: { display: 'block', height: '100%', background: '#000', width: pct(d.progress) + '%' } })),
+    d.placeholder ? null : h('div', { class: 'bar', style: { height: '4px', background: 'var(--rule)', marginBottom: '16px' } }, h('i', { style: { display: 'block', height: '100%', background: 'var(--ink)', width: pct(d.progress) + '%' } })),
     h('div', { class: 'row' },
       d.placeholder ? h('button', { class: 'btn fill', onclick: () => placeholderFetch(d, again) }, 'Get the file from Zotero') : null,
       d.placeholder ? h('button', { class: 'btn', onclick: () => placeholderUpload(d, again) }, 'Add the file from this computer…') : null,
@@ -1813,7 +1835,7 @@ function renderFolder(main, d) {
     h('div', { class: 'by' }, d.displayAuthor || d.author || ''),
     tags.length ? h('div', { class: 'tags' }, tags.map(t => h('span', { class: 'tag' }, '#' + t))) : null,
     h('div', { class: 'facts' }, h('span', null, `${pct(d.progress)}% read`), resume && d.progress > 0 ? h('span', null, `Reading: ${resume.title}`) : null, h('span', null, `${d.highlights} notes`)),
-    h('div', { class: 'bar', style: { height: '4px', background: 'var(--rule)', marginBottom: '16px' } }, h('i', { style: { display: 'block', height: '100%', background: '#000', width: pct(d.progress) + '%' } })),
+    h('div', { class: 'bar', style: { height: '4px', background: 'var(--rule)', marginBottom: '16px' } }, h('i', { style: { display: 'block', height: '100%', background: 'var(--ink)', width: pct(d.progress) + '%' } })),
     h('div', { class: 'row' },
       resume ? h('button', { class: 'btn fill', onclick: () => { location.hash = `#/read/${resume.id}`; } }, d.progress > 0 ? 'Continue reading' : 'Read from the start') : null,
       h('button', { class: 'btn', onclick: () => file.click(), title: 'Or drag files onto this page' }, '+ Add files'), file,
@@ -2815,7 +2837,7 @@ async function openReader(id, params) {
 function endOfChapterCard(ctx) {
   const nav = ctx.nav;
   if (!nav) return null;
-  return h('div', { class: 'section', style: { background: '#fff', maxWidth: '560px', margin: '0 auto', width: 'calc(100% - 32px)' } },
+  return h('div', { class: 'section', style: { background: 'var(--card)', maxWidth: '560px', margin: '0 auto', width: 'calc(100% - 32px)' } },
     h('div', { class: 'label' }, `End of chapter ${nav.number} of ${nav.count} · ${nav.title}`),
     nav.next
       ? h('div', null, h('h2', { class: 'serif', style: { margin: '6px 0 2px' } }, nav.next.title), nav.next.author ? h('div', { class: 'serif', style: { fontStyle: 'italic' } }, nav.next.author) : null,
