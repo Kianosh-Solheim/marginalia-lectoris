@@ -47,11 +47,13 @@ object CslData {
         val sub = rec[BibField.SUBTITLE]
         val t = rec[BibField.TITLE].ifBlank { d.title }.let { if (sub.isNotBlank() && !it.endsWith(sub, true)) "$it: $sub" else it }
         val o = JSONObject().put("id", "ml:${d.id}").put("type", if (chapter) "chapter" else if (article) "article-journal" else "book").put("title", t)
-        if (d.author.isNotBlank()) {
-            val edited = EditedVolumes.isEditedVolume(ctx, d)
-            if (edited && rec[BibField.EDITOR].isBlank()) o.put("editor", names(EditedVolumes.editors(d))) else o.put("author", names(d.author))
+        // An edited volume is cited under its editors: they stand where the author would, so no author is given.
+        val byEditors = !chapter && !article && EditedVolumes.citesByEditors(d)
+        if (byEditors) o.put("editor", names(EditedVolumes.editors(d)))
+        else {
+            if (d.author.isNotBlank()) o.put("author", names(d.author))
+            if (rec[BibField.EDITOR].isNotBlank()) o.put("editor", names(rec[BibField.EDITOR]))
         }
-        if (rec[BibField.EDITOR].isNotBlank()) o.put("editor", names(rec[BibField.EDITOR]))
         if (rec[BibField.TRANSLATOR].isNotBlank()) o.put("translator", names(rec[BibField.TRANSLATOR]))
         date(rec[BibField.YEAR].ifBlank { runCatching { MarkdownExporter.extractPublishedYear(d) }.getOrDefault("") })?.let { o.put("issued", it) }
         o.putIf("container-title", rec[BibField.JOURNAL].ifBlank { rec[BibField.BOOKTITLE] }).putIf("publisher", rec[BibField.PUBLISHER]).putIf("publisher-place", rec[BibField.PLACE])

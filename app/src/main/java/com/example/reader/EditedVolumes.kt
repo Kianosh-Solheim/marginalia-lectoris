@@ -171,6 +171,20 @@ object EditedVolumes {
         put(context, document.id, cur.copy(enabled = enabled))
     }
 
+    /**
+     * True when the whole book is cited under its editors in place of an author: it is an edited
+     * volume (chapter view) and not itself a chapter or an article. A book with an author and an
+     * editor that is not in chapter view (an edition of one author's work) keeps its author.
+     */
+    fun citesByEditors(document: DocumentEntity): Boolean {
+        if (document.id <= 0 || document.category.equals("ARTICLE", true)) return false
+        val ctx = appContext ?: BibStore.appContext ?: return false
+        return runCatching {
+            BibStore.init(ctx)
+            if (BibStore.get(document.id).entryType == "incollection") false else isEditedVolume(ctx, document) && editors(document).isNotBlank()
+        }.getOrDefault(false)
+    }
+
     /** The book's editors: the Editor field, or the book's author with "(ed.)" and similar removed. */
     fun editors(document: DocumentEntity): String {
         BibStore.get(document.id)[BibField.EDITOR].takeIf { it.isNotBlank() }?.let { return it }

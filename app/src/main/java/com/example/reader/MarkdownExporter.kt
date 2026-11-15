@@ -614,7 +614,7 @@ object MarkdownExporter {
         }.toList()
 
         val exportedSourceFilename = formatExportedSourceFilename(document)
-        val authorsYaml = formatAuthorsFrontmatter(document.author)
+        val authorsYaml = formatAuthorsFrontmatter(if (EditedVolumes.citesByEditors(document)) EditedVolumes.editors(document) else document.author)
         val locusText = formatLocusText(highlight, document)
         val cleanNoteTitle = highlight.title.trim().ifBlank { "Untitled Note" }
 
@@ -726,7 +726,7 @@ object MarkdownExporter {
             }
         }.toList()
 
-        val authorsYaml = formatAuthorsFrontmatter(document.author)
+        val authorsYaml = formatAuthorsFrontmatter(if (EditedVolumes.citesByEditors(document)) EditedVolumes.editors(document) else document.author)
         val exportedSourceFilename = formatExportedSourceFilename(document)
         val exportedCoverFilename = formatExportedCoverFilename(document)
 
@@ -1272,7 +1272,7 @@ object MarkdownExporter {
         val sb = StringBuilder()
         sb.appendLine("---")
         sb.appendLine("title: \"${document.title.replace("\"", "\\\"")}\"")
-        val authorsYaml = formatAuthorsFrontmatter(document.author)
+        val authorsYaml = formatAuthorsFrontmatter(if (EditedVolumes.citesByEditors(document)) EditedVolumes.editors(document) else document.author)
         if (authorsYaml.isNotBlank()) {
             sb.appendLine(authorsYaml)
         }
@@ -1297,7 +1297,7 @@ object MarkdownExporter {
         sb.appendLine("# [[${document.title}]]")
         sb.appendLine()
         sb.appendLine("> [!abstract] Book Metadata")
-        sb.appendLine("> - **Author:** ${document.author}")
+        sb.appendLine("> - **${if (EditedVolumes.citesByEditors(document)) "Editor" else "Author"}:** ${if (EditedVolumes.citesByEditors(document)) EditedVolumes.editors(document) else document.author}")
         sb.appendLine("> - **Format:** ${document.fileType.uppercase()} • ${document.category}")
         sb.appendLine("> - **Reading Progress:** Page ${document.currentPage} of ${document.totalPages} ($progressPercent)")
         sb.appendLine("> - **Total Annotations:** ${highlights.size} highlights & notes")

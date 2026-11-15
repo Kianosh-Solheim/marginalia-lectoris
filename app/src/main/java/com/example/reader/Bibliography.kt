@@ -282,11 +282,32 @@ object Citations {
         }
     }
 
+    /**
+     * Who a whole work is cited under: the editors when it is an edited volume (they stand where the
+     * author would), otherwise its authors. The second value says whether they are editors.
+     */
+    fun citedPeople(document: DocumentEntity, rec: BibRecord): Pair<List<Person>, Boolean> {
+        if (!isChapter(rec) && EditedVolumes.citesByEditors(document)) {
+            val eds = people(EditedVolumes.editors(document))
+            if (eds.isNotEmpty()) return eds to true
+        }
+        return people(document.author) to false
+    }
+
+    /** The names with the mark of editors after them, as each style writes it. */
+    private fun edMark(names: String, style: CitationStyle, editors: Boolean, many: Boolean): String = when {
+        !editors || names.isBlank() -> names
+        style == CitationStyle.APA7 -> "$names (${if (many) "Eds." else "Ed."})."
+        style == CitationStyle.HARVARD -> "$names (${if (many) "eds." else "ed."})"
+        style == CitationStyle.MLA9 -> "${names.trimEnd('.')}, ${if (many) "editors" else "editor"}"
+        else -> "${names.trimEnd('.')}, ${if (many) "eds." else "ed."}"
+    }
+
     private fun inv(p: Person) = if (p.given.isBlank()) p.family else "${p.family}, ${p.given}"
 
     /** In-text citation, e.g. (Rawls 1971, 52) for Chicago author-date. [page] may be blank. */
     fun inText(style: CitationStyle, document: DocumentEntity, rec: BibRecord, page: String): String {
-        val ps = people(document.author)
+        val ps = citedPeople(document, rec).first
         val y = year(document, rec)
         val fam = when {
             ps.isEmpty() -> title(document, rec).take(40)
@@ -306,8 +327,8 @@ object Citations {
 
     /** Full Chicago footnote. */
     private fun note(document: DocumentEntity, rec: BibRecord, page: String): String {
-        val ps = people(document.author)
-        val names = namesAuthorDate(ps, invertFirst = false)
+        val (ps, byEditors) = citedPeople(document, rec)
+        val names = edMark(namesAuthorDate(ps, invertFirst = false), CitationStyle.CHICAGO_NOTES, byEditors, ps.size > 1)
         val y = year(document, rec)
         val t = title(document, rec)
         val pg = if (page.isNotBlank()) ", $page" else ""
@@ -332,7 +353,8 @@ object Citations {
     /** Reference-list / bibliography entry. Titles are wrapped in *asterisks* for italics. */
     fun reference(style: CitationStyle, document: DocumentEntity, rec: BibRecord): String {
         if (isChapter(rec)) return chapterReference(style, document, rec)
-        val ps = people(document.author)
+        val (ps, byEditors) = citedPeople(document, rec)
+        fun ed(names: String) = edMark(names, style, byEditors, ps.size > 1)
         val y = year(document, rec)
         val t = title(document, rec)
         val link = doiOrUrl(rec)
@@ -349,12 +371,12 @@ object Citations {
             CitationStyle.CHICAGO_AUTHOR_DATE -> {
                 val names = namesAuthorDate(ps, invertFirst = true)
                 if (article) listOf(
-                    end(names), "$y.", "“$t.”", "*$journal*" + (if (vol.isNotBlank()) " $vol" else "") +
+                    end(ed(names)), "$y.", "“$t.”", "*$journal*" + (if (vol.isNotBlank()) " $vol" else "") +
                         (if (iss.isNotBlank()) " ($iss)" else "") + (if (pages.isNotBlank()) ": $pages." else "."),
                     link
                 ).filter { it.isNotBlank() && it != "." }.joinToString(" ").trim()
                 else listOf(
-                    end(names), "$y.", "*$t*.", edition,
+                    end(ed(names)), "$y.", "*$t*.", edition,
                     listOf(place, publisher).filter { it.isNotBlank() }.joinToString(": ").let { if (it.isNotBlank()) "$it." else "" },
                     link
                 ).filter { it.isNotBlank() }.joinToString(" ")
@@ -366,18 +388,18 @@ object Citations {
                     else -> ps.dropLast(1).joinToString(", ") { "${it.family}, ${it.initials}" } + ", & ${ps.last().family}, ${ps.last().initials}"
                 }
                 if (article) listOf(
-                    names, "($y).", "$t.", "*$journal*" + (if (vol.isNotBlank()) ", *$vol*" else "") +
+                    ed(names), "($y).", "$t.", "*$journal*" + (if (vol.isNotBlank()) ", *$vol*" else "") +
                         (if (iss.isNotBlank()) "($iss)" else "") + (if (pages.isNotBlank()) ", $pages." else "."),
                     link
                 ).filter { it.isNotBlank() }.joinToString(" ")
-                else listOf(names, "($y).", "*$t*" + (if (edition.isNotBlank()) " ($edition)" else "") + ".", if (publisher.isNotBlank()) "$publisher." else "", link)
+                else listOf(ed(names), "($y).", "*$t*" + (if (edition.isNotBlank()) " ($edition)" else "") + ".", if (publisher.isNotBlank()) "$publisher." else "", link)
                     .filter { it.isNotBlank() }.joinToString(" ")
             }
             CitationStyle.HARVARD -> {
                 val names = namesAuthorDate(ps, invertFirst = true)
-                if (article) "${end(names)} ($y) ‘$t’, *$journal*" + (if (vol.isNotBlank()) ", $vol" else "") + (if (iss.isNotBlank()) "($iss)" else "") +
+                if (article) "${end(ed(names))} ($y) ‘$t’, *$journal*" + (if (vol.isNotBlank()) ", $vol" else "") + (if (iss.isNotBlank()) "($iss)" else "") +
                     (if (pages.isNotBlank()) ", pp. $pages" else "") + "." + (if (link.isNotBlank()) " $link" else "")
-                else "${end(names)} ($y) *$t*." + (if (edition.isNotBlank()) " $edition" else "") +
+                else "${end(ed(names))} ($y) *$t*." + (if (edition.isNotBlank()) " $edition" else "") +
                     listOf(place, publisher).filter { it.isNotBlank() }.joinToString(": ").let { if (it.isNotBlank()) " $it." else "" }
             }
             CitationStyle.MLA9 -> {
@@ -387,16 +409,16 @@ object Citations {
                     ps.size == 2 -> "${inv(ps[0])}, and ${ps[1].given} ${ps[1].family}"
                     else -> "${inv(ps[0])}, et al"
                 }
-                if (article) listOf(end(names), "“$t.”", "*$journal*,", (if (vol.isNotBlank()) "vol. $vol," else ""), (if (iss.isNotBlank()) "no. $iss," else ""), "$y,", (if (pages.isNotBlank()) "pp. $pages." else ""))
+                if (article) listOf(end(ed(names)), "“$t.”", "*$journal*,", (if (vol.isNotBlank()) "vol. $vol," else ""), (if (iss.isNotBlank()) "no. $iss," else ""), "$y,", (if (pages.isNotBlank()) "pp. $pages." else ""))
                     .filter { it.isNotBlank() }.joinToString(" ").trimEnd(',') + (if (link.isNotBlank()) " $link" else "")
-                else listOf(end(names), "*$t*.", if (publisher.isNotBlank()) "$publisher," else "", "$y.").filter { it.isNotBlank() }.joinToString(" ")
+                else listOf(end(ed(names)), "*$t*.", if (publisher.isNotBlank()) "$publisher," else "", "$y.").filter { it.isNotBlank() }.joinToString(" ")
             }
             CitationStyle.CHICAGO_NOTES -> {
                 // Chicago bibliography (notes-bibliography system).
                 val names = namesAuthorDate(ps, invertFirst = true)
-                if (article) "${end(names)} “$t.” *$journal*" + (if (vol.isNotBlank()) " $vol" else "") + (if (iss.isNotBlank()) ", no. $iss" else "") +
+                if (article) "${end(ed(names))} “$t.” *$journal*" + (if (vol.isNotBlank()) " $vol" else "") + (if (iss.isNotBlank()) ", no. $iss" else "") +
                     " ($y)" + (if (pages.isNotBlank()) ": $pages" else "") + "." + (if (link.isNotBlank()) " $link" else "")
-                else "${end(names)} *$t*." + (if (edition.isNotBlank()) " $edition" else "") +
+                else "${end(ed(names))} *$t*." + (if (edition.isNotBlank()) " $edition" else "") +
                     listOf(place, publisher).filter { it.isNotBlank() }.joinToString(": ").let { if (it.isNotBlank()) " $it, $y." else " $y." }
             }
         }.replace(Regex("\\s+"), " ").replace(" .", ".").trim()
@@ -411,7 +433,7 @@ object Citations {
     /** Stable citation key: familyYearFirstword, e.g. rawls1971theory. */
     fun citeKey(document: DocumentEntity, rec: BibRecord): String {
         rec[BibField.CITEKEY].takeIf { it.isNotBlank() }?.let { return it }
-        val fam = people(document.author).firstOrNull()?.family.orEmpty()
+        val fam = citedPeople(document, rec).first.firstOrNull()?.family.orEmpty()
         val y = year(document, rec).takeIf { it != "n.d." }.orEmpty()
         val stop = setOf("the", "a", "an", "on", "of", "en", "et", "ei", "det", "den", "om")
         val word = title(document, rec).split(Regex("[^\\p{L}\\p{N}]+")).firstOrNull { it.isNotBlank() && it.lowercase() !in stop }.orEmpty()
@@ -425,9 +447,11 @@ object Citations {
     fun bibtex(document: DocumentEntity, rec: BibRecord): String {
         val article = isArticle(document, rec)
         val type = rec.entryType.ifBlank { if (isChapter(rec)) "incollection" else if (article) "article" else "book" }
-        val authors = people(document.author).joinToString(" and ") { if (it.given.isBlank()) it.family else "${it.family}, ${it.given}" }
+        // An edited volume is entered under its editors, without an author.
+        val (cited, byEditors) = citedPeople(document, rec)
+        val authors = cited.joinToString(" and ") { if (it.given.isBlank()) it.family else "${it.family}, ${it.given}" }
         val entries = LinkedHashMap<String, String>()
-        if (authors.isNotBlank()) entries["author"] = authors
+        if (authors.isNotBlank()) entries[if (byEditors) "editor" else "author"] = authors
         entries["title"] = rec[BibField.TITLE].ifBlank { document.title }
         BibField.entries.filter { it != BibField.TITLE && it != BibField.CITEKEY && it.bibtexKey.isNotBlank() }.forEach { f ->
             val v = rec[f]
