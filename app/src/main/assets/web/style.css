@@ -1068,3 +1068,15 @@ body.wsbody { overflow: hidden; }
 .wsframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--paper); }
 .wsframe.hidden { visibility: hidden; pointer-events: none; }
 .ws.dragging .wsframe { pointer-events: none; }
+
+/* Page numbers laid down by hand */
+.pagenos { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.pagenos:hover { text-decoration-style: solid; }
+.pnrows { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.pnrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+.pnrow input { width: auto; }
+.pnprev { font-family: var(--mono); font-size: 12px; margin: 10px 0 4px; line-height: 1.6; }
+.pnchanges { max-height: 45vh; overflow-y: auto; border: 1px solid var(--rule); }
+.pnchanges table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pnchanges th, .pnchanges td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--rule); }
+.pnchanges th { font-family: var(--mono); font-size: 10px; text-transform: uppercase; color: var(--grey); position: sticky; top: 0; background: var(--paper); }

@@ -507,6 +507,8 @@ fun KOReaderQuickScrubberDialog(
     chapterTitle: String,
     onDismiss: () -> Unit,
     onJumpToPage: (Int) -> Unit,
+    /** PDF: opens the dialog where the printed page numbers are laid down. */
+    onPageNumbers: (() -> Unit)? = null,
     epubBook: com.example.reader.EpubBook? = null,
     epubPages: List<com.example.reader.EpubPage> = emptyList(),
     hasPageList: Boolean = epubBook?.hasPageList == true || epubPages.any { it.pageEquivalentLabel.isNotBlank() },
@@ -1006,8 +1008,15 @@ fun KOReaderQuickScrubberDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", fontFamily = FontFamily.Monospace, color = Color(0xFF52525B))
+            Row {
+                if (onPageNumbers != null) {
+                    TextButton(onClick = onPageNumbers) {
+                        Text("Page numbers…", fontFamily = FontFamily.Monospace, color = Color.Black)
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", fontFamily = FontFamily.Monospace, color = Color(0xFF52525B))
+                }
             }
         }
     )

@@ -198,8 +198,15 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                             tags = if (b.has("tags")) com.example.reader.NoteSuggestionEngine.joinTagsList(
                                 com.example.reader.NoteSuggestionEngine.parseTagsList(b.optString("tags"))) else h.tags,
                             colorHex = b.optString("colorHex", h.colorHex).ifBlank { h.colorHex },
-                            highlightedText = b.optString("highlightedText", h.highlightedText).ifBlank { h.highlightedText }
+                            highlightedText = b.optString("highlightedText", h.highlightedText).ifBlank { h.highlightedText },
+                            // The printed page typed in by hand; the pages in the file ("|PDF:4–5") stay as they are.
+                            printedPageLabel = if (b.has("printedPageLabel")) {
+                                val typed = b.optString("printedPageLabel").trim().replace(Regex("\\s*[-–—]+\\s*"), "–")
+                                val pdf = h.printedPageLabel.substringAfter("|PDF:", "")
+                                if (pdf.isNotBlank()) "$typed|PDF:$pdf" else typed
+                            } else h.printedPageLabel
                         )
+                        if (b.has("printedPageLabel") && updated.printedPageLabel != h.printedPageLabel) com.example.reader.PageNumbering.setManual(context, h.id, true)
                         ops.updateHighlight(updated)
                         HttpResponse.json(hlJson(updated).toString())
                     }
@@ -356,6 +363,26 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 HttpResponse.json(JSONObject().put("q", q).put("count", hits.size).put("variants", variantsJson(pq)).put("query", pq.toJson()).put("status", searchStatusJson(doc)).put("indexing", progressJson())
                     .put("hits", JSONArray().apply { hits.forEach { put(hitJson(it)) } })
                     .put("notes", JSONArray().apply { notes.forEach { put(noteHitJson(it)) } }).toString())
+            }
+            // The printed page numbers of a PDF, laid down by hand (sections), and the notes that follow them.
+            what == "page-numbers" && m == "GET" -> HttpResponse.json(JSONObject()
+                .put("sections", JSONArray().apply { com.example.reader.PageNumbering.sections(context, doc.id).forEach { put(JSONObject().put("from", it.from).put("start", it.start).put("roman", it.roman)) } })
+                .toString())
+            what == "page-numbers" && m == "PUT" -> {
+                val b = JSONObject(req.bodyText()); val arr = b.optJSONArray("sections") ?: JSONArray()
+                val secs = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.map {
+                    com.example.reader.PageNumbering.Section(it.optInt("from", 1).coerceAtLeast(1), it.optInt("start", 1).coerceAtLeast(1), it.optBoolean("roman"))
+                }.sortedBy { it.from }
+                val changes = com.example.reader.PageNumbering.changes(context, doc.id, secs, ops.repository.getHighlightsListForDocument(doc.id))
+                val save = b.optBoolean("save"); val renumber = save && b.optBoolean("renumber")
+                if (save) {
+                    com.example.reader.PageNumbering.setSections(context, doc.id, secs)
+                    noPageLabels.remove(doc.id)
+                    if (renumber) changes.forEach { c -> runCatching { ops.updateHighlight(c.note.copy(printedPageLabel = c.newLabel)) } }
+                }
+                HttpResponse.json(JSONObject().put("saved", save).put("renumbered", if (renumber) changes.size else 0)
+                    .put("changes", JSONArray().apply { changes.forEach { c -> put(JSONObject().put("id", c.note.id).put("title", c.note.title).put("page", c.note.pageNumber)
+                        .put("old", c.note.printedPageLabel.substringBefore("|PDF:").trim()).put("new", c.newLabel.substringBefore("|PDF:").trim())) } }).toString())
             }
             what == "highlights" && m == "GET" -> HttpResponse.json(JSONArray().apply {
                 fillMissingPageLabels(doc, ops.repository.getHighlightsListForDocument(doc.id)).forEach { put(hlJson(it)) }
@@ -589,6 +616,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         .put("pageNumber", h.pageNumber)
         .put("printedPageLabel", h.printedPageLabel.substringBefore("|PDF:").trim())
         .put("pdfPages", h.printedPageLabel.substringAfter("|PDF:", "").trim())
+        .put("pageManual", com.example.reader.PageNumbering.isManual(context, h.id))
         .put("chapterTitle", if (madeUpChapter.matches(h.chapterTitle.trim())) "" else h.chapterTitle)
         .put("paragraphCitation", h.paragraphCitation)
         .put("pageEquivalent", h.pageEquivalent)
@@ -1002,6 +1030,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
      * Pages field (an article of pages 182–220 in a file with two cover sheets in front).
      */
     private fun printedLabel(doc: DocumentEntity, page: Int): String = runCatching {
+        // Numbers laid down by the reader for this document come first.
+        com.example.reader.PageNumbering.label(context, doc.id, page)?.let { return@runCatching it }
         val r = renderer(doc)
         fun read(p: Int) = runCatching { r.extractPageTextData((p - 1).coerceAtLeast(0)).printedPageLabel.trim() }.getOrDefault("")
         val own = read(page)
@@ -1072,7 +1102,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             val page = b.optInt("page", 1).coerceAtLeast(1)
             val endPage = b.optInt("endPage", page).coerceAtLeast(page)
             val chapter = b.optString("chapter").ifBlank { pdfChapter(doc, page) }.ifBlank { "Page $page" }
-            val first = b.optString("printedLabel").ifBlank { printedLabel(doc, page) }
+            val laidDown = com.example.reader.PageNumbering.sections(context, doc.id).isNotEmpty()
+            val first = if (laidDown) printedLabel(doc, page) else b.optString("printedLabel").ifBlank { printedLabel(doc, page) }
             val last = if (endPage > page) printedLabel(doc, endPage) else ""
             // A quotation over several pages keeps both ends: the printed pages and the pages in the file.
             val printed = if (endPage > page) com.example.reader.PdfQuotePageSpan(page, endPage, first, last).toStoredPrintedPageLabel() else first

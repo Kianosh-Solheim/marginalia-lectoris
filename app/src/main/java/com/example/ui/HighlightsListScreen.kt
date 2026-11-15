@@ -340,6 +340,7 @@ fun HighlightsListScreen(
             onDelete = { onDeleteHighlight(editingHighlight); highlightToEdit = null },
             onDismiss = { highlightToEdit = null },
             onSave = { title, quote, notes, page, printedPage, chapter, colorHex, tags, paragraphCitation, pageEquivalent, epubCfi ->
+                if (printedPage.trim() != editingHighlight.printedPageLabel.trim()) com.example.reader.PageNumbering.setManual(context, editingHighlight.id, true)
                 onUpdateHighlight(
                     editingHighlight.copy(
                         title = title.trim().ifBlank { "Note - Page $page" },

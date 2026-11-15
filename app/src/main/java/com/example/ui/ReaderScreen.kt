@@ -680,6 +680,7 @@ fun ReaderScreen(
     var showHighlightsSheet by remember { mutableStateOf(false) }
     var showExportPreviewDialog by remember { mutableStateOf(false) }
     var showAddHighlightDialog by remember { mutableStateOf(false) }
+    var showPageNumbersDialog by remember { mutableStateOf(false) }
     // A quotation being continued on the next page (the note dialog is put aside meanwhile).
     var noteContinuation by remember(document.id) { mutableStateOf<com.example.reader.NoteContinuation?>(null) }
     var showAddChapterDialog by remember { mutableStateOf(false) }
@@ -1054,7 +1055,9 @@ fun ReaderScreen(
                             showTtsBar = true
                             ttsManager.speakSelection(quote, pageNum)
                         },
-                        onRequestHighlight = { quote, page, printedPage, chapterTitle, colorHex ->
+                        onRequestHighlight = { quote, page, readPrintedPage, chapterTitle, colorHex ->
+                            // Page numbers laid down for this document come before those read off the page.
+                            val printedPage = com.example.reader.PageNumbering.relabel(context, document.id, page, readPrintedPage)
                             highlightQuoteText = quote
                             highlightPageNumber = page
                             highlightPrintedPageLabel = printedPage
@@ -1065,7 +1068,8 @@ fun ReaderScreen(
                             highlightColorHex = colorHex
                             showAddHighlightDialog = true
                         },
-                        onQuickSaveHighlight = quick@{ quote, page, printedPage, chapterTitle, colorHex ->
+                        onQuickSaveHighlight = quick@{ quote, page, readPrintedPage, chapterTitle, colorHex ->
+                            val printedPage = com.example.reader.PageNumbering.relabel(context, document.id, page, readPrintedPage)
                             if (noteContinuation != null) {
                                 // The second half of a continued quotation always goes back to its note.
                                 highlightQuoteText = quote; highlightPageNumber = page; highlightPrintedPageLabel = printedPage
@@ -1676,6 +1680,11 @@ fun ReaderScreen(
         )
     }
 
+    // The printed page numbers of this PDF, laid down by hand.
+    if (showPageNumbersDialog) {
+        PageNumbersDialog(documentId = document.id, currentPage = currentActivePage, onDismiss = { showPageNumbersDialog = false })
+    }
+
     // KOReader Quick Scrubber Dialog
     if (showQuickScrubberDialog) {
         val currentEpubBook = if (isDaisyDocument) daisyEpubBook else pdfEbookDocument?.epubBook
@@ -1689,6 +1698,7 @@ fun ReaderScreen(
                 targetPageRequest = (targetPage - 1).coerceAtLeast(0)
                 jumpRequestToken++
             },
+            onPageNumbers = if (document.fileType.equals("PDF", ignoreCase = true)) { { showQuickScrubberDialog = false; showPageNumbersDialog = true } } else null,
             epubBook = currentEpubBook,
             epubPages = activeEpubPages,
             hasPageList = currentEpubBook?.hasPageList == true || activeEpubHasPageListMetadata || activeEpubPages.any { it.pageEquivalentLabel.isNotBlank() },
@@ -2241,6 +2251,8 @@ fun ReaderScreen(
             onDelete = { onDeleteHighlight(editingHighlight); highlightToEdit = null },
             onDismiss = { highlightToEdit = null },
             onSave = { title, quote, notes, page, printedPage, chapter, colorHex, tags, paragraphCitation, pageEquivalent, epubCfi ->
+                // A page typed in by hand is kept when the document is renumbered.
+                if (printedPage.trim() != editingHighlight.printedPageLabel.trim()) com.example.reader.PageNumbering.setManual(context, editingHighlight.id, true)
                 onUpdateHighlight(
                     editingHighlight.copy(
                         title = title.trim().ifBlank { "Note - Page $page" },

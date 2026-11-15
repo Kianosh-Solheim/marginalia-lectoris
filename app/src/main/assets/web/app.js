@@ -2197,14 +2197,101 @@ function noteItem(n, d, onChanged) {
   return el;
 }
 
+// ----- page numbers laid down by hand
+
+const ROMAN = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
+const toRoman = n => { let s = ''; if (n <= 0) return ''; ROMAN.forEach(([v, r]) => { while (n >= v) { s += r; n -= v; } }); return s; };
+const fromRoman = t => { let s = String(t).toLowerCase().trim(), n = 0; if (!/^[ivxlcdm]+$/.test(s)) return NaN; ROMAN.forEach(([v, r]) => { while (s.startsWith(r)) { n += v; s = s.slice(r.length); } }); return s ? NaN : n; };
+/** The printed number of a PDF page under sections [{ from, start, roman }]: pages before the first section count backwards from it. */
+function pageLabelFor(sections, page) {
+  const secs = sections.slice().sort((a, b) => a.from - b.from);
+  if (!secs.length) return null;
+  const s = secs.filter(x => x.from <= page).pop() || secs[0];
+  const k = s.start + (page - s.from);
+  return k <= 0 ? '' : s.roman ? toRoman(k) : String(k);
+}
+/**
+ * The dialog where the printed page numbers of a PDF are laid down: "PDF page 4 is printed page 183",
+ * and for a book further sections (roman numerals, then starting again at 1). The notes are renumbered
+ * to match after you have seen the list.
+ */
+async function pageNumbersDialog(d, current, total, currentLabel, onDone) {
+  let saved = [];
+  try { saved = (await api(`doc/${d.id}/page-numbers`)).sections || []; } catch (e) { fail(e); return; }
+  modal((box, close) => {
+    box.classList.add('wide');
+    const rows = saved.length ? saved.map(s => ({ from: String(s.from), start: s.roman ? toRoman(s.start) : String(s.start) }))
+      : [{ from: String(current), start: currentLabel && currentLabel !== String(current) ? String(currentLabel) : '' }];
+    const list = h('div', { class: 'pnrows' }), prev = h('div', { class: 'pnprev muted' }), err = h('div', { style: { color: 'var(--red)', fontSize: '13px' } });
+    const parse = () => {
+      const out = [];
+      for (const r of rows) {
+        if (!r.from.trim() && !r.start.trim()) continue;
+        const from = +r.from, roman = /^[ivxlcdm]+$/i.test(r.start.trim()), start = roman ? fromRoman(r.start) : +r.start;
+        if (!Number.isInteger(from) || from < 1 || from > total || !Number.isInteger(start) || start < 1) return null;
+        out.push({ from, start, roman });
+      }
+      return out.sort((a, b) => a.from - b.from);
+    };
+    const drawPrev = () => {
+      const secs = parse(); err.textContent = '';
+      if (secs === null) { prev.textContent = ''; err.textContent = `Each line needs a PDF page (1–${total}) and the page number printed on it (a number, or roman numerals such as xii).`; return; }
+      if (!secs.length) { prev.textContent = 'Nothing laid down: the numbers are read off the pages automatically.'; return; }
+      // The start, each place the numbering changes, and the end.
+      const show = new Set([1, 2, total]); secs.forEach(s => { [s.from - 1, s.from, s.from + 1].forEach(p => { if (p >= 1 && p <= total) show.add(p); }); });
+      prev.textContent = 'PDF page → printed page:   ' + [...show].sort((a, b) => a - b).map(p => `${p} → ${pageLabelFor(secs, p) || '—'}`).join('   ·   ');
+    };
+    const draw = () => {
+      clear(list);
+      rows.forEach((r, i) => {
+        const f = h('input', { type: 'number', min: '1', max: String(total), value: r.from, style: { width: '90px' } }), st = h('input', { value: r.start, placeholder: 'e.g. 183 or xii', style: { width: '130px' } });
+        f.addEventListener('input', () => { r.from = f.value; drawPrev(); }); st.addEventListener('input', () => { r.start = st.value; drawPrev(); });
+        list.append(h('div', { class: 'pnrow' }, h('span', null, i ? 'and from PDF page' : 'PDF page'), f, h('span', null, 'is printed page'), st,
+          rows.length > 1 ? h('button', { class: 'btn quiet', title: 'Remove this section', onclick: () => { rows.splice(i, 1); draw(); } }, '×') : null));
+      });
+      drawPrev();
+    };
+    const put = json => api(`doc/${d.id}/page-numbers`, { method: 'PUT', json });
+    const finish = async (secs, renumber) => {
+      try { const r = await put({ sections: secs, save: true, renumber }); close(); toast(secs.length ? `Page numbers saved${r.renumbered ? ` · ${r.renumbered} note${r.renumbered === 1 ? '' : 's'} renumbered` : ''}` : 'Back to automatic page numbers', 2800); onDone && onDone(); }
+      catch (e) { fail(e); }
+    };
+    const save = async () => {
+      const secs = parse(); if (secs === null) { drawPrev(); return; }
+      let r; try { r = await put({ sections: secs, save: false }); } catch (e) { fail(e); return; }
+      if (!r.changes.length) { finish(secs, false); return; }
+      // The notes that would change, to look over first.
+      clear(box).append(h('h2', null, `Renumber ${r.changes.length} note${r.changes.length === 1 ? '' : 's'}?`),
+        h('p', { class: 'muted', style: { fontSize: '13px' } }, 'These notes get a new page number. Notes whose page you typed in yourself are left alone.'),
+        h('div', { class: 'pnchanges' }, h('table', null, h('tr', null, h('th', null, 'Note'), h('th', null, 'PDF page'), h('th', null, 'Now'), h('th', null, 'Becomes')),
+          r.changes.map(c => h('tr', null, h('td', null, c.title), h('td', null, String(c.page)), h('td', null, c.old || '—'), h('td', null, h('b', null, c.new || '—')))))),
+        h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'),
+          h('button', { class: 'btn', title: 'Save the page numbers for new notes, and leave the existing notes as they are', onclick: () => finish(secs, false) }, 'Save, leave the notes'),
+          h('button', { class: 'btn fill', onclick: () => finish(secs, true) }, 'Renumber')));
+    };
+    box.append(h('h2', null, 'Page numbers'),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Say which printed page a PDF page is, and every other page follows by counting; the numbers are then no longer read off the pages. For a book, add a section where the numbering starts again: roman numerals for the front matter (write xii), then 1 for the first chapter. Pages before the first line count backwards.'),
+      list, h('button', { class: 'btn quiet', onclick: () => { rows.push({ from: '', start: '1' }); draw(); } }, '+ Add a section'), prev, err,
+      h('div', { class: 'foot' },
+        saved.length ? h('button', { class: 'btn quiet', style: { marginRight: 'auto' }, title: 'Forget what is laid down and read the numbers off the pages again', onclick: () => finish([], false) }, 'Back to automatic') : null,
+        h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
+    draw();
+  });
+}
+
 function editNote(n, onSaved) {
   modal((box, close) => {
     let color = n.colorHex || '#FFEB3B';
     const t = h('input', { value: n.title }), body = h('textarea', { rows: 7 }, n.userNotes || ''), g = tagInput(n.tags || '', true);
+    // The printed page, to correct by hand (a range as 183–184). A page typed here is kept when the document is renumbered.
+    const hasPage = n.pageNumber > 0 && (n.fileType ? /pdf/i.test(n.fileType) : true) && !n.epubCfi;
+    const pg = h('input', { value: n.printedPageLabel || '', placeholder: 'e.g. 183 or 183–184', style: { maxWidth: '180px' } });
     const save = async () => {
       try {
         const old = n.title;
-        const r = await api(`highlight/${n.id}`, { method: 'PATCH', json: { title: t.value, userNotes: body.value, tags: g.value, colorHex: color } });
+        const json = { title: t.value, userNotes: body.value, tags: g.value, colorHex: color };
+        if (hasPage && pg.value.trim() !== (n.printedPageLabel || '').trim()) json.printedPageLabel = pg.value.trim();
+        const r = await api(`highlight/${n.id}`, { method: 'PATCH', json });
         Object.assign(n, r);
         const moved = await retitleLinks(old, r.title, n.id);
         if (moved) toast(`Note saved · ${moved} link${moved === 1 ? '' : 's'} to it updated`, 2500); tagCache = null; close(); toast('Note saved'); onSaved && onSaved(r);
@@ -2216,6 +2303,8 @@ function editNote(n, onSaved) {
       h('div', { class: 'quote' }, n.highlightedText),
       h('label', null, h('span', { class: 'label' }, 'Title'), t),
       h('label', null, h('span', { class: 'label' }, 'Note'), body),
+      hasPage ? h('label', null, h('span', { class: 'label' }, 'Printed page' + (n.pageManual ? ' · typed in by you' : '')), h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, pg,
+        n.pdfPages || /pdf/i.test(n.fileType || '') ? h('span', { class: 'muted', style: { fontSize: '12px' } }, 'PDF p. ' + (n.pdfPages || n.pageNumber)) : null)) : null,
       h('div', { class: 'tagwrap' }, h('span', { class: 'label' }, 'Tags'), g._widget),
       h('div', null, h('div', { class: 'label', style: { marginBottom: '4px' } }, 'Colour'), swatches(color, c => { color = c; }))),
       h('div', { class: 'foot' },
@@ -3210,8 +3299,12 @@ async function openPdf(ctx, params) {
     rangeChunkSize: 65536, disableAutoFetch: true, disableStream: true
   });
   const pdf = await task.promise;
-  const labels = await pdf.getPageLabels().catch(() => null);
+  let labels = await pdf.getPageLabels().catch(() => null);
   const n = pdf.numPages;
+  // Page numbers laid down by hand for this document come before those in the file.
+  let pageSections = [];
+  try { pageSections = (await api(`doc/${d.id}/page-numbers`)).sections || []; } catch (_) {}
+  if (pageSections.length) labels = Array.from({ length: n }, (_, i) => pageLabelFor(pageSections, i + 1));
   const scroll = h('div', { class: 'pdfscroll' }), pagesEl = h('div', { class: 'pdfpages' });
   scroll.append(pagesEl);
   ctx.mainArea.append(scroll);
@@ -3369,7 +3462,7 @@ async function openPdf(ctx, params) {
 
   let current = 1;
   const slider = h('input', { type: 'range', min: 1, max: n, value: 1 });
-  const where = h('span', null, '');
+  const where = h('span', { class: 'pagenos', title: 'Page numbers: say which printed page this is, and the rest follows', onclick: () => pageNumbersDialog(d, current, n, labels && labels[current - 1], () => route()) }, '');
   const chapterOf = p => { let t = ''; ctx.tocItems.forEach(x => { if (x.page <= p) t = x.title; }); return t; };
   function updatePlace() {
     const mid = scroll.scrollTop + scroll.clientHeight * 0.35;
