@@ -157,7 +157,20 @@ function swatches(current, onPick) {
 
 // ------------------------------------------------------------------ routing
 
+// Inside a tab of the tabbed view (tabs.js), the app runs in a frame.
+const EMBEDDED = (() => { try { return window.top !== window.self && window.parent.location.origin === location.origin; } catch (_) { return false; } })();
+let lastRouteHash = null;
 function route() {
+  if (workspace) return;   // the frame around the tabs has no pages of its own
+  // In a tab: something opened with Ctrl+click goes to a new tab, and this one stays where it was.
+  if (EMBEDDED && window.tabOpenUntil && Date.now() < window.tabOpenUntil && lastRouteHash != null && location.hash !== lastRouteHash) {
+    window.tabOpenUntil = 0;
+    parent.postMessage({ ml: 'open', hash: location.hash, side: !!window.tabOpenSide }, location.origin);
+    history.replaceState(null, '', lastRouteHash);
+    return;
+  }
+  lastRouteHash = location.hash || '#/';
+  if (EMBEDDED) tabReport();
   const hash = location.hash.replace(/^#\/?/, '');
   const [path, qs] = hash.split('?');
   const params = new URLSearchParams(qs || '');
@@ -224,6 +237,7 @@ function applyTheme() {
 }
 applyTheme();
 if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+window.addEventListener('storage', e => { if (e.key === 'ml.theme') applyTheme(); });   // the other tabs follow
 function themeButton() {
   const cur = applyTheme(), i = Math.max(0, THEMES.findIndex(t => t[0] === cur));
   const name = t => t[1] + ' ' + t[0][0].toUpperCase() + t[0].slice(1);
@@ -252,6 +266,7 @@ function header() {
     search,
     h('button', { class: 'btn fill', onclick: () => file.click(), title: 'Or drag files anywhere onto this page' }, '+ Add files'),
     file,
+    EMBEDDED ? null : h('button', { class: 'btn quiet', title: 'Open several things at once in tabs, two of them side by side', onclick: () => { localSet('ml.tabs', '1'); showWorkspace(location.hash || '#/'); } }, '▭ Tabs'),
     themeButton(),
     h('button', { class: 'btn quiet', title: 'Sign this browser out', onclick: async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); } }, 'Sign out')
   ));
@@ -898,6 +913,9 @@ function docMenu(d, onChanged) {
   return [
     canRead(d) ? { label: d.progress > 0 ? 'Continue reading' : 'Read', fn: () => { location.hash = `#/read/${d.id}`; } } : null,
     { label: d.folder ? 'Open the folder book' : 'Open details', fn: () => { location.hash = `#/book/${d.id}`; } },
+    // In the tabbed view: in a tab of its own, or in the other pane.
+    EMBEDDED ? { label: 'Open in a new tab', fn: () => parent.postMessage({ ml: 'open', hash: canRead(d) ? `#/read/${d.id}` : `#/book/${d.id}` }, location.origin) } : null,
+    EMBEDDED ? { label: 'Open to the side', fn: () => parent.postMessage({ ml: 'open', hash: canRead(d) ? `#/read/${d.id}` : `#/book/${d.id}`, side: true }, location.origin) } : null,
     '-',
     { label: 'Export', sub: exportsFor() },
     { label: 'Copy', sub: copies },
@@ -2143,13 +2161,22 @@ function noteLocus(n, d) {
   return bits.join(' · ');
 }
 
+/** A note that can be dragged: into a writing document (also in another tab) it is quoted or cited; elsewhere its quote is dropped as text. */
+function noteDragData(el, n) {
+  el.addEventListener('dragstart', e => {
+    if (e.target !== el && e.target.closest && e.target.closest('a, button, input, textarea')) return;
+    e.dataTransfer.setData('application/x-ml-note', String(n.id));
+    e.dataTransfer.setData('text/plain', n.highlightedText || n.userNotes || n.title || '');
+    e.dataTransfer.effectAllowed = 'copy';
+  });
+}
 function noteItem(n, d, onChanged) {
   const tags = splitTags(n.tags);
   const openIt = () => {
     if (!d || !canRead(d)) return;
     location.hash = isPdf(d) ? `#/read/${d.id}?page=${n.pageNumber}&hl=${n.id}` : `#/read/${d.id}?pos=${n.pageNumber}&hl=${n.id}`;
   };
-  const el = h('div', { class: 'note' },
+  const el = h('div', { class: 'note', draggable: 'true', title: 'Drag into a writing document to quote or cite it' },
     h('div', { class: 'sw', style: { background: n.colorHex || '#E4E4E7' } }),
     h('div', { style: { minWidth: 0 } },
       h('div', { class: 'nt' }, n.title),
@@ -2166,6 +2193,7 @@ function noteItem(n, d, onChanged) {
           try { await api(`highlight/${n.id}`, { method: 'DELETE' }); toast('Note deleted'); onChanged && onChanged(); } catch (e) { fail(e); }
         }) }, 'Delete'))));
   onContext(el, () => noteMenu(n, d, onChanged, d && canRead(d) ? openIt : null));
+  noteDragData(el, n);
   return el;
 }
 
@@ -2787,12 +2815,13 @@ async function openReader(id, params) {
       side.append(h('h3', null, 'Notes', h('span', { class: 'mono muted', style: { fontSize: '12px', fontWeight: 400, marginLeft: '6px' } }, ctx.notes.length)));
       if (!ctx.notes.length) side.append(h('div', { class: 'muted' }, 'Select text in the book to highlight it or add a note.'));
       ctx.notes.slice().sort((a, b) => a.pageNumber - b.pageNumber).forEach(n => {
-        const ni = h('div', { class: 'nitem' + (n.file ? ' otherfile' : ''), title: n.file ? `Made in ${n.file}: opens that file` : '', onclick: () => n.file ? openNoteInFile(d, n) : readerOpen && readerOpen.goToNote(n) },
+        const ni = h('div', { class: 'nitem' + (n.file ? ' otherfile' : ''), draggable: 'true', title: n.file ? `Made in ${n.file}: opens that file` : 'Click to go there · drag into a writing document to quote or cite it', onclick: () => n.file ? openNoteInFile(d, n) : readerOpen && readerOpen.goToNote(n) },
           n.title ? h('div', { class: 'ntitle' }, n.title) : null,
           h('div', { class: 'q', style: { borderLeftColor: n.colorHex || '#E4E4E7' } }, n.highlightedText),
           n.userNotes ? h('div', { style: { fontSize: '13px', marginTop: '3px', whiteSpace: 'pre-wrap' } }, n.userNotes.length > 220 ? n.userNotes.slice(0, 220) + '…' : n.userNotes) : null,
           h('div', { class: 'w' }, noteLocus(n, d), n.file ? h('span', { class: 'nfile' }, ' · in ' + n.file) : null, ' · ', h('a', { href: 'javascript:void 0', onclick: e => { e.stopPropagation(); editNote(n, () => { ctx.refreshNotes(); }); } }, 'edit')));
         onContext(ni, () => noteMenu(n, d, () => ctx.refreshNotes(), () => readerOpen && readerOpen.goToNote(n)));
+        noteDragData(ni, n);
         side.append(ni);
       });
     }
@@ -3904,6 +3933,7 @@ async function openEpub(ctx, params) {
     const s = await api('session');
     state.device = s.device || '';
     if (!s.signedIn) return showLogin();
+    if (tabsOn()) return showWorkspace(location.hash);
     route();
   } catch (e) {
     clear(document.getElementById('app')).append(h('div', { class: 'login' }, h('div', { class: 'box' }, h('h1', null, 'Marginalia Lectoris'), h('p', null, e.message))));

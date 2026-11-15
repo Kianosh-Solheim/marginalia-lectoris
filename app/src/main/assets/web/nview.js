@@ -522,12 +522,13 @@ function noteMdQuick(n) {
  * Makes [el] draggable out of the browser: dropped on an open Obsidian note (or any text box) it
  * leaves [text()]; in Chrome and Edge, dropped on a folder it becomes the file at [url].
  */
-function dragToApp(el, text, file) {
+function dragToApp(el, text, file, noteId) {
   if (!el) return el;
   el.setAttribute('draggable', 'true'); el.classList.add('nvdrag');
   el.addEventListener('dragstart', e => {
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('text/plain', text());
+    if (noteId != null) e.dataTransfer.setData('application/x-ml-note', String(noteId));
     if (file) { try { e.dataTransfer.setData('DownloadURL', `text/markdown:${file.name}:${new URL(file.url, location.href).href}`); } catch (_) {} }
   });
   return el;
@@ -536,7 +537,7 @@ function noteDrag(el, n) {
   // The exact export is fetched when the pointer comes near, so it is there by the time the drag starts.
   el.addEventListener('pointerenter', () => { noteMd(n).catch(() => {}); }, { once: true });
   const k = () => n.id + ':' + (n.title || '') + ':' + (n.userNotes || '').length + ':' + (n.tags || '');
-  return dragToApp(el, () => noteMdCache.get(k()) || noteMdQuick(n), { name: mdName(n.title) + '.md', url: `/api/doc/${n.documentId}/export/note?id=${n.id}` });
+  return dragToApp(el, () => noteMdCache.get(k()) || noteMdQuick(n), { name: mdName(n.title) + '.md', url: `/api/doc/${n.documentId}/export/note?id=${n.id}` }, n.id);
 }
 
 /** Which vault, and which folder in it, notes are sent to (kept in this browser). */

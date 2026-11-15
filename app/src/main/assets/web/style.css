@@ -1044,3 +1044,27 @@ textarea.quoteedit { width: 100%; box-sizing: border-box; font-family: var(--ser
 .nxtick { display: flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
 .nxlogo { width: 84px; height: 64px; border: 1px solid var(--rule); display: flex; align-items: center; justify-content: center; background: var(--card); font-size: 11px; }
 .nxlogo img { max-width: 100%; max-height: 100%; }
+
+/* Tabs: several things open at once, two side by side */
+body.wsbody { overflow: hidden; }
+.ws { display: flex; height: 100vh; background: var(--desk); }
+.wspane { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.ws:not(.split) .wspane:last-child, .ws:not(.split) .wsdivider { display: none; }
+.ws.split .wspane:last-child { flex: 1 1 0; }
+.wsdivider { flex: 0 0 6px; cursor: col-resize; background: var(--rule); }
+.wsdivider:hover, .ws.dragging .wsdivider { background: var(--indigo); }
+.wsstrip { display: flex; align-items: stretch; gap: 2px; background: var(--wash); border-bottom: 1.5px solid var(--ink); padding: 4px 6px 0; min-height: 32px; overflow-x: auto; }
+.wstab { display: flex; align-items: center; gap: 6px; max-width: 220px; min-width: 70px; padding: 4px 6px 4px 10px; font-size: 12px; cursor: pointer; border: 1px solid var(--rule); border-bottom: 0; background: var(--wash); color: var(--grey); user-select: none; }
+.wstab.on { background: var(--paper); color: var(--ink); border-color: var(--ink); font-weight: 600; }
+.wstab.over { box-shadow: -3px 0 0 var(--indigo); }
+.wstt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.wsx { border: 0; background: none; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; }
+.wsx:hover { color: var(--red); }
+.wsadd, .wsbtn { border: 0; background: none; color: var(--grey); cursor: pointer; font: inherit; font-size: 12px; padding: 0 8px; white-space: nowrap; }
+.wsadd { font-size: 16px; }
+.wsadd:hover, .wsbtn:hover, .wsbtn.on { color: var(--ink); }
+.wsfill { flex: 1; min-width: 8px; }
+.wsframes { position: relative; flex: 1; min-height: 0; background: var(--paper); }
+.wsframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--paper); }
+.wsframe.hidden { visibility: hidden; pointer-events: none; }
+.ws.dragging .wsframe { pointer-events: none; }

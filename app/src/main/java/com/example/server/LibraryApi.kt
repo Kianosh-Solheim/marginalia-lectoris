@@ -358,7 +358,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                     .put("notes", JSONArray().apply { notes.forEach { put(noteHitJson(it)) } }).toString())
             }
             what == "highlights" && m == "GET" -> HttpResponse.json(JSONArray().apply {
-                ops.repository.getHighlightsListForDocument(doc.id).forEach { put(hlJson(it)) }
+                fillMissingPageLabels(doc, ops.repository.getHighlightsListForDocument(doc.id)).forEach { put(hlJson(it)) }
             }.toString())
             what == "highlights" && m == "POST" -> HttpResponse.json(hlJson(addHighlight(doc, JSONObject(req.bodyText()))).toString(), 201)
             what == "progress" && m == "POST" -> {
@@ -589,7 +589,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         .put("pageNumber", h.pageNumber)
         .put("printedPageLabel", h.printedPageLabel.substringBefore("|PDF:").trim())
         .put("pdfPages", h.printedPageLabel.substringAfter("|PDF:", "").trim())
-        .put("chapterTitle", h.chapterTitle)
+        .put("chapterTitle", if (madeUpChapter.matches(h.chapterTitle.trim())) "" else h.chapterTitle)
         .put("paragraphCitation", h.paragraphCitation)
         .put("pageEquivalent", h.pageEquivalent)
         .put("epubCfi", h.epubCfi)
@@ -996,14 +996,57 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         PdfDocumentRenderer(File(doc.filePath), context).also { renderers[doc.id] = it }
     }
 
+    /**
+     * The page number printed on a PDF page. When it cannot be read off the page itself, it is
+     * worked out from a nearby page whose number can be read, and failing that from the item's
+     * Pages field (an article of pages 182–220 in a file with two cover sheets in front).
+     */
     private fun printedLabel(doc: DocumentEntity, page: Int): String = runCatching {
-        renderer(doc).extractPageTextData((page - 1).coerceAtLeast(0)).printedPageLabel
+        val r = renderer(doc)
+        fun read(p: Int) = runCatching { r.extractPageTextData((p - 1).coerceAtLeast(0)).printedPageLabel.trim() }.getOrDefault("")
+        val own = read(page)
+        if (own.isNotBlank()) return@runCatching own
+        val count = r.pageCount
+        for (d in 1..4) for (q in listOf(page - d, page + d)) {
+            if (q !in 1..count) continue
+            val near = read(q).toIntOrNull() ?: continue
+            val v = near + (page - q)
+            if (v > 0) return@runCatching v.toString()
+        }
+        val m = Regex("^(\\d+)\\s*[-–—]+\\s*(\\d+)$").find(com.example.reader.BibStore.get(doc.id)[com.example.reader.BibField.PAGES].trim())
+        if (m != null) {
+            val first = m.groupValues[1].toInt(); val last = m.groupValues[2].toInt()
+            val lead = count - (last - first + 1)          // sheets in front of the article itself
+            if (last >= first && lead in 0..3 && page > lead) return@runCatching (first + page - 1 - lead).toString()
+        }
+        ""
     }.getOrDefault("")
+
+    /** Books whose page numbers could not be worked out (not tried again until the app restarts). */
+    private val noPageLabels = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+
+    /** Notes on a PDF saved without a printed page number get one now, where it can be worked out. */
+    private suspend fun fillMissingPageLabels(doc: DocumentEntity, notes: List<HighlightEntity>): List<HighlightEntity> {
+        if (!doc.fileType.equals("PDF", true) || doc.id in noPageLabels) return notes
+        val missing = notes.filter { it.printedPageLabel.isBlank() && it.pageNumber > 0 }.take(40)
+        if (missing.isEmpty()) return notes
+        val fixed = HashMap<Long, HighlightEntity>()
+        for (h in missing) {
+            val label = printedLabel(doc, h.pageNumber)
+            if (label.isBlank()) { noPageLabels.add(doc.id); break }
+            val next = h.copy(printedPageLabel = label)
+            runCatching { ops.updateHighlight(next) }.onSuccess { fixed[h.id] = next }
+        }
+        return if (fixed.isEmpty()) notes else notes.map { fixed[it.id] ?: it }
+    }
+
+    /** "Pages 1–20" and the like are stand-ins for a missing table of contents, not chapters. */
+    private val madeUpChapter = Regex("^(Pages \\d+\\s*[–-]\\s*\\d+|Page \\d+|Full Document)$")
 
     private fun pdfChapter(doc: DocumentEntity, page: Int): String = runCatching {
         val count = renderer(doc).pageCount
         PdfChapterHelper.extractOrGenerateChapters(File(doc.filePath), count, doc.chaptersJson)
-            .filter { it.pageNumber <= page }.maxByOrNull { it.pageNumber }?.title.orEmpty()
+            .filter { it.pageNumber <= page }.maxByOrNull { it.pageNumber }?.title.orEmpty().let { if (madeUpChapter.matches(it.trim())) "" else it }
     }.getOrDefault("")
 
     // ------------------------------------------------------------------------------- notes

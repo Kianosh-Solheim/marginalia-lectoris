@@ -137,10 +137,11 @@ function notesPanel(editor, citing, onToggle) {
       const id = e.dataTransfer && e.dataTransfer.getData(NOTE_MIME);
       if (!id) return false;
       e.preventDefault();
+      const p = view.posAtCoords({ left: e.clientX, top: e.clientY }), pos = p ? p.pos : null;
       const n = (wnotesCache || []).find(x => String(x.id) === id);
-      if (!n) return true;
-      const p = view.posAtCoords({ left: e.clientX, top: e.clientY });
-      insertNote(editor, citing, n, p ? p.pos : null);
+      if (n) { insertNote(editor, citing, n, pos); return true; }
+      // A note dragged in from elsewhere (another tab, a note written since): fetch the notes and look again.
+      api('highlights').then(r => { wnotesCache = r.highlights || []; const m = wnotesCache.find(x => String(x.id) === id); if (m) insertNote(editor, citing, m, pos); else toast('That note could not be found'); }).catch(fail);
       return true;
     },
   };
