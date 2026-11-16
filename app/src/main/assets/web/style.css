@@ -1222,3 +1222,36 @@ table.mx td.mxinfo a { color: inherit; }
 .palquote { margin: 12px 0 8px; padding: 6px 10px; border-left: 3px solid var(--ink); background: var(--hl, var(--wash)); font-size: 13.5px; line-height: 1.45; }
 .palsub { padding: 8px 16px; font-size: 13px; border-bottom: 1.5px solid var(--ink); background: var(--wash); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palfoot kbd { font-family: var(--mono); font-size: 10px; border: 1px solid var(--rule); padding: 0 4px; }
+
+/* Dictation: a microphone at the right of a field; bars that follow the voice while the tablet listens */
+.dfield { display: flex; flex-direction: column; gap: 3px; }
+.dictwrap { position: relative; display: block; }
+.dictwrap > input, .dictwrap > textarea { width: 100%; box-sizing: border-box; }
+.dictwrap > input { padding-right: 78px; }
+.dictwrap.area > textarea { padding-right: 44px; }
+.dictwrap > .dictctl { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); }
+.dictwrap.area > .dictctl { top: 6px; transform: none; flex-direction: column-reverse; align-items: flex-end; }
+.dictwrap.area > .dictctl.dlive { background: var(--paper); }
+.dictctl { display: inline-flex; gap: 3px; align-items: center; }
+.dlang { border: 0; background: transparent; color: var(--grey); font-family: var(--mono); font-size: 10px; font-weight: 700; cursor: pointer; padding: 4px 3px; }
+.dlang:hover { color: var(--ink); }
+.dlang[hidden] { display: none; }
+.dmic { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; border: 1px solid transparent; background: transparent; color: var(--ink); cursor: pointer; padding: 5px; min-width: 28px; min-height: 28px; justify-content: center; border-radius: 16px; }
+.dmic:hover { border-color: var(--ink); }
+.dmic.dtalk { border-color: var(--red, #b91c1c); background: var(--red, #b91c1c); color: #fff; padding: 4px 9px; animation: dpulse 1.4s ease-out infinite; }
+.dmic.dwork { border-color: var(--ink); padding: 4px 9px; cursor: default; }
+.dstop { width: 9px; height: 9px; background: #fff; display: inline-block; flex: none; }
+.dbars { display: inline-flex; align-items: center; gap: 3px; height: 20px; }
+.dbars i { display: block; width: 3px; height: 4px; background: #fff; border-radius: 2px; transition: height .17s ease; }
+.dtime { font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.dspin { width: 12px; height: 12px; border: 2px solid var(--rule); border-top-color: var(--ink); border-radius: 50%; display: inline-block; animation: dspin .8s linear infinite; }
+@keyframes dspin { to { transform: rotate(360deg); } }
+@keyframes dpulse { 0% { box-shadow: 0 0 0 0 rgba(185, 28, 28, .55); } 100% { box-shadow: 0 0 0 10px rgba(185, 28, 28, 0); } }
+@media (prefers-reduced-motion: reduce) { .dmic.dtalk { animation: none; } .dbars i { transition: none; } }
+.dictbar { height: 6px; border: 1px solid var(--ink); margin: 8px 0; }
+.dictbar[hidden] { display: none; }
+.dictbar i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .4s; }
+.dictctl.mini { opacity: 0; }
+td:hover .dictctl.mini, td:focus-within .dictctl.mini, .dictctl.mini.dlive, .wcmbox .dictctl.mini { opacity: 1; }
+.dictctl.mini .dmic { min-width: 22px; min-height: 22px; padding: 2px; }
+.dictctl.mini .dmic.dtalk, .dictctl.mini .dmic.dwork { padding: 2px 8px; }

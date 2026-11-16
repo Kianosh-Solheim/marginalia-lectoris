@@ -246,6 +246,7 @@ fun CreateHighlightDialog(
                             .weight(1f)
                             .testTag("highlight_title_input"),
                         singleLine = true,
+                        trailingIcon = { DictationMic(onText = { said -> title = (title.trimEnd() + " " + said.trim().trimEnd('.')).trim() }) },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color.Black,
                             unfocusedBorderColor = Color.Black,
@@ -408,6 +409,7 @@ fun CreateHighlightDialog(
                         .fillMaxWidth()
                         .testTag("highlight_notes_input"),
                     minLines = 2,
+                    trailingIcon = { DictationMic(onText = { said -> notes = if (notes.isBlank()) said.trim() else notes.trimEnd() + " " + said.trim() }) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.Black,
                         unfocusedBorderColor = Color.Black,

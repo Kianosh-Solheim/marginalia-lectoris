@@ -57,12 +57,12 @@ object LocalWhisper {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Models: Norwegian → NB-Whisper (National Library of Norway); English or unknown → OpenAI's multilingual Whisper. */
-    private data class Model(val file: String, val url: String, val bytes: Long)
+    internal data class Model(val file: String, val url: String, val bytes: Long)
     private val NORWEGIAN = Model("nb-whisper-small-q5_0.bin", "https://huggingface.co/NbAiLab/nb-whisper-small/resolve/main/ggml-model-q5_0.bin", 175_209_680)
     private val MULTILINGUAL = Model("whisper-small-q5_1.bin", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin", 190_085_487)
 
-    private fun modelFor(language: String) = if (language == "no") NORWEGIAN else MULTILINGUAL
-    private fun modelDir(context: Context) = File(context.filesDir, "whisper").apply { mkdirs() }
+    internal fun modelFor(language: String) = if (language == "no") NORWEGIAN else MULTILINGUAL
+    internal fun modelDir(context: Context) = File(context.filesDir, "whisper").apply { mkdirs() }
 
     fun modelsOnDevice(context: Context): List<String> = modelDir(context).listFiles()?.filter { it.extension == "bin" }?.map { it.name }.orEmpty()
 

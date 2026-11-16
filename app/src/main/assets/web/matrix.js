@@ -256,7 +256,7 @@ async function showMatrix(id) {
             n ? h('a', { href: '#/notes/n/' + n.id }, mxNoteLabel(n) + (n.printedPageLabel ? ' · p. ' + n.printedPageLabel : '')) : h('span', null, 'Deleted note'),
             h('button', { title: 'Unlink this note from the cell (the note stays)', onclick: () => { const cl = mxCell(r, c.id); cl.notes = (cl.notes || []).filter(x => x !== nid); changed(); draw_(); } }, '×')));
         });
-        chips.append(h('button', { class: 'mxlink', title: 'Link notes from this source to the cell — or drag a note here', onclick: () => pickNotes(r, c) }, '+ note'));
+        chips.append(h('button', { class: 'mxlink', title: 'Link notes from this source to the cell — or drag a note here', onclick: () => pickNotes(r, c) }, '+ note'), dictMic(ta, { cls: 'mini' }));
         const td = h('td', null, ta, chips);
         td.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('application/x-ml-note')) { e.preventDefault(); td.classList.add('over'); } });
         td.addEventListener('dragleave', () => td.classList.remove('over'));

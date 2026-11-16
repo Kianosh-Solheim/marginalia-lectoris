@@ -108,6 +108,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 return HttpResponse.json("{}").header("Set-Cookie", "$COOKIE=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
             }
             s == listOf("library") && m == "GET" -> return HttpResponse.json(library().toString())
+            s.firstOrNull() == "dictation" -> return dictationRoute(req, s.drop(1))
             s == listOf("highlights") && m == "GET" -> return HttpResponse.json(allHighlights().toString())
             s == listOf("tags") && m == "GET" -> {
                 val t = com.example.ui.TagIndex.load(context)
@@ -852,6 +853,24 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
     }
 
     // ------------------------------------------------------------------------------- recordings
+
+    /** Dictation with the tablet's microphone: the browser starts and stops it and fetches the text. */
+    private fun dictationRoute(req: HttpRequest, rest: List<String>): HttpResponse {
+        val d = com.example.reader.Dictation
+        if (req.method == "POST") {
+            val b = runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject())
+            try {
+                when (rest.firstOrNull().orEmpty()) {
+                    "start" -> d.start(context, b.optString("language", "no"))
+                    "stop" -> d.stop()
+                    "cancel", "clear" -> d.cancel()
+                    "model" -> d.downloadModel(context, b.optString("language", "no"))
+                    else -> throw NoSuchElementException("No such action.")
+                }
+            } catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "Dictation failed.") }
+        }
+        return HttpResponse.json(d.json(context).toString()).header("Cache-Control", "no-store")
+    }
 
     private fun recJson(r: com.example.reader.Recordings.Info): JSONObject = JSONObject()
         .put("id", r.id).put("started", r.startedAt).put("durationMs", r.durationMs).put("events", r.events)

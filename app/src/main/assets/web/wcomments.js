@@ -183,7 +183,7 @@ class Commenting {
       if (e.key === 'Escape') { e.preventDefault(); cancel(); }
     });
     ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 2 + 'px'; });
-    return h('div', { class: 'wcmbox' }, ta, h('div', { class: 'row', style: { gap: '4px', justifyContent: 'flex-end' } },
+    return h('div', { class: 'wcmbox' }, ta, h('div', { class: 'row', style: { gap: '4px', justifyContent: 'flex-end' } }, dictMic(ta, { key: 'wcm', cls: 'mini' }), h('span', { style: { flex: 1 } }),
       h('button', { class: 'btn quiet', onclick: cancel }, 'Cancel'), h('button', { class: 'btn fill', onclick: done }, 'Save')));
   }
   balloon(id) {
