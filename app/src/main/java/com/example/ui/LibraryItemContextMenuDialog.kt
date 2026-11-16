@@ -164,6 +164,8 @@ fun LibraryItemContextMenuDialog(
         mutableStateOf(NoteSuggestionEngine.parseTagsList(document.tags))
     }
     var inlineTagInput by remember { mutableStateOf("") }
+    var showMore by remember { mutableStateOf(false) }
+    var showAbout by remember { mutableStateOf(false) }
     var isGeneratingAiBookTags by remember { mutableStateOf(false) }
     var aiSuggestedBookTags by remember { mutableStateOf<List<String>>(emptyList()) }
     var aiBookTagsLanguage by remember { mutableStateOf<String?>(null) }
@@ -227,6 +229,417 @@ fun LibraryItemContextMenuDialog(
             ) {
                 HorizontalDivider(thickness = 1.5.dp, color = Color.Black)
 
+                // Quick secondary actions row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onOpenDocument,
+                        border = BorderStroke(1.5.dp, Color.Black),
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Black),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("context_menu_open_book")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Open", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    OutlinedButton(
+                        onClick = onTogglePinToWidget,
+                        border = BorderStroke(1.dp, Color(0xFFD4D4D8)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("context_menu_pin_widget")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PushPin,
+                            contentDescription = null,
+                            tint = Color.Black,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (document.isPinnedToWidget) "Unpin" else "Pin Widget",
+                            color = Color.Black,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onDeleteDocument,
+                        border = BorderStroke(1.dp, Color(0xFFFCA5A5)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("context_menu_delete_book")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = "Delete",
+                            tint = Color(0xFFB91C1C),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                // Option 1: Share (Source File, One/Multiple Notes as .md, or All Notes + Map of Content)
+                Surface(
+                    shape = RoundedCornerShape(0.dp),
+                    color = Color.White,
+                    border = BorderStroke(1.5.dp, Color.Black),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onShareClick() }
+                        .testTag("context_menu_share_options")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(0.dp),
+                            color = KaleidoPlumFill,
+                            border = BorderStroke(1.dp, Color.Black),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = null,
+                                    tint = KaleidoPlumInk,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Share",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black
+                            )
+                            Text(
+                                text = "Share ${document.fileType.uppercase()} file, one/multiple notes (.md), or all notes + $mocFilename (without ${document.fileType.uppercase()} & cover)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF18181B)
+                            )
+                        }
+                    }
+                }
+
+                // Option 2: Preview Notes on X.md (Interactive Preview)
+                Surface(
+                    shape = RoundedCornerShape(0.dp),
+                    color = Color.White,
+                    border = BorderStroke(1.5.dp, Color.Black),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPreviewNotesMoc() }
+                        .testTag("context_menu_preview_notes_md")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(0.dp),
+                            color = KaleidoCobaltFill,
+                            border = BorderStroke(1.dp, Color.Black),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Visibility,
+                                    contentDescription = null,
+                                    tint = KaleidoCobaltInk,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Preview $mocFilename",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "Interactive Map of Content — click any note to preview its full Markdown",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF18181B)
+                            )
+                        }
+                    }
+                }
+
+                // Option 3: Export All Notes & Source File (ZIP or Regular Folder)
+                Surface(
+                    shape = RoundedCornerShape(0.dp),
+                    color = Color.White,
+                    border = BorderStroke(1.5.dp, Color.Black),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onExportAllNotesAndSource() }
+                        .testTag("context_menu_export_all_bundle")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(0.dp),
+                            color = KaleidoSageFill,
+                            border = BorderStroke(1.dp, Color.Black),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Archive,
+                                    contentDescription = null,
+                                    tint = KaleidoSageInk,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Export All Notes & Source File",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black
+                            )
+                            Text(
+                                text = "Exports all highlights, $mocFilename, ${document.fileType.uppercase()} source file, and cover image as .ZIP or regular folder",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF18181B)
+                            )
+                        }
+                    }
+                }
+
+                MenuFold("More", "Details, bibliography, files, chapters, edited volume, recordings", showMore) { showMore = !showMore }
+                if (showMore) {
+                // Option 4: Edit Info, Author(s), Tags & Cover Image
+                Surface(
+                    shape = RoundedCornerShape(0.dp),
+                    color = Color.White,
+                    border = BorderStroke(1.5.dp, Color.Black),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEditDocumentInfo() }
+                        .testTag("context_menu_edit_info_and_cover")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = KaleidoAmberFill,
+                            border = BorderStroke(1.dp, Color.Black),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = null,
+                                    tint = KaleidoAmberInk,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Edit Info, Tags & Cover Image",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black
+                            )
+                            Text(
+                                text = "Edit author(s), add tags for $mocFilename, or upload/replace cover image",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF18181B)
+                            )
+                        }
+                    }
+                }
+
+                // Option 4a: shelf (book ↔ article) and bibliographic details / RIS
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val isArticle = document.category.equals("ARTICLE", ignoreCase = true)
+                    Surface(
+                        shape = RoundedCornerShape(0.dp), color = Color.White, border = BorderStroke(1.5.dp, Color.Black),
+                        modifier = Modifier.weight(1f).clickable { onChangeCategory(if (isArticle) "BOOK" else "ARTICLE") }
+                    ) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                            Text(if (isArticle) "Move to Books" else "Move to Articles", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
+                            Text("Now on the ${if (isArticle) "Articles" else "Books"} shelf", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
+                        }
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(0.dp), color = Color.White, border = BorderStroke(1.5.dp, Color.Black),
+                        modifier = Modifier.weight(1f).clickable { onOpenBibliography() }
+                    ) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                            Text("Bibliography & RIS", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
+                            Text("ISBN, DOI, publisher… · import/export RIS", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
+                        }
+                    }
+                }
+
+                // Option 4a: the item's files (other editions, cover, notes…), like a file explorer
+                if (com.example.reader.ItemFiles.isFileItem(document) && !com.example.reader.ZoteroPlaceholders.isPlaceholder(document)) {
+                    Surface(
+                        shape = RoundedCornerShape(0.dp),
+                        color = Color.White,
+                        border = BorderStroke(1.5.dp, Color.Black),
+                        modifier = Modifier.fillMaxWidth().clickable { showItemFiles = true }
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(shape = RoundedCornerShape(6.dp), color = Color.White, border = BorderStroke(1.dp, Color.Black), modifier = Modifier.size(36.dp)) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(imageVector = Icons.Default.Folder, contentDescription = null, tint = Color.Black, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Files…", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
+                                Text("Every file of this item (main file, other editions, cover, notes); add, rename, make main", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
+                            }
+                        }
+                    }
+                }
+
+                // Option 4b: make this file a chapter of a folder book
+                if (!com.example.reader.FolderBooks.isFolder(document)) {
+                    val inFolder = remember(document.id) { com.example.reader.FolderBooks.folderOf(document.id) != null }
+                    Surface(
+                        shape = RoundedCornerShape(0.dp),
+                        color = Color.White,
+                        border = BorderStroke(1.5.dp, Color.Black),
+                        modifier = Modifier.fillMaxWidth().clickable { onAddToFolderBook() }
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(shape = RoundedCornerShape(6.dp), color = Color.White, border = BorderStroke(1.dp, Color.Black), modifier = Modifier.size(36.dp)) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(imageVector = Icons.Default.CreateNewFolder, contentDescription = null, tint = Color.Black, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(if (inFolder) "Move to another folder book…" else "Add to a folder book…", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
+                                Text("Make this file a chapter of a book made of several files (e.g. an edited volume)", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
+                            }
+                        }
+                    }
+                }
+
+                // Option 5: Edited volume — chapters with their own authors
+                if (!document.category.equals("ARTICLE", ignoreCase = true) && !com.example.reader.FolderBooks.isFolder(document)) {
+                    val isVolume = remember(document.id) { com.example.reader.EditedVolumes.isEditedVolume(context, document) }
+                    Surface(
+                        shape = RoundedCornerShape(0.dp),
+                        color = Color.White,
+                        border = BorderStroke(1.5.dp, Color.Black),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenChapters() }
+                            .testTag("context_menu_edited_volume")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color.White,
+                                border = BorderStroke(1.dp, Color.Black),
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                                        contentDescription = null,
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (isVolume) "Chapters & Authors" else "Edited Volume: Chapters & Authors",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.Black
+                                )
+                                Text(
+                                    text = if (isVolume) "See who wrote each chapter; cite, read or export one chapter at a time"
+                                    else "Treat each chapter as its own article with its own author. Tapping the book then shows its chapters",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF18181B)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Recordings made while reading this book
+                run {
+                    var showRecordings by remember { mutableStateOf(false) }
+                    val recChanges by com.example.reader.Recordings.changes.collectAsState()
+                    val recCount = remember(document.id, recChanges) {
+                        runCatching { com.example.reader.Recordings.list(context, document, settings).size }.getOrDefault(0)
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(0.dp), color = Color.White, border = BorderStroke(1.5.dp, Color.Black),
+                        modifier = Modifier.fillMaxWidth().clickable { showRecordings = true }
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Icon(Icons.Default.Mic, contentDescription = null, tint = Color.Black, modifier = Modifier.size(22.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(if (recCount > 0) "Recordings ($recCount)" else "Recordings", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
+                                Text("Talk while you read; play, transcribe and link what you said to your highlights", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
+                            }
+                        }
+                    }
+                    if (showRecordings) RecordingsDialog(document) { showRecordings = false }
+                }
+
+                }
+                MenuFold("Abstract and tags", if (activeBookTags.isEmpty()) "No tags yet" else "${activeBookTags.size} tags" , showAbout) { showAbout = !showAbout }
+                if (showAbout) {
                 if (document.summary.isNotBlank()) {
                     Surface(
                         shape = RoundedCornerShape(0.dp),
@@ -528,411 +941,6 @@ fun LibraryItemContextMenuDialog(
                     }
                 }
 
-                // Option 1: Share (Source File, One/Multiple Notes as .md, or All Notes + Map of Content)
-                Surface(
-                    shape = RoundedCornerShape(0.dp),
-                    color = Color.White,
-                    border = BorderStroke(1.5.dp, Color.Black),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onShareClick() }
-                        .testTag("context_menu_share_options")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(0.dp),
-                            color = KaleidoPlumFill,
-                            border = BorderStroke(1.dp, Color.Black),
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Share,
-                                    contentDescription = null,
-                                    tint = KaleidoPlumInk,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Share",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black
-                            )
-                            Text(
-                                text = "Share ${document.fileType.uppercase()} file, one/multiple notes (.md), or all notes + $mocFilename (without ${document.fileType.uppercase()} & cover)",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFF18181B)
-                            )
-                        }
-                    }
-                }
-
-                // Option 2: Preview Notes on X.md (Interactive Preview)
-                Surface(
-                    shape = RoundedCornerShape(0.dp),
-                    color = Color.White,
-                    border = BorderStroke(1.5.dp, Color.Black),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onPreviewNotesMoc() }
-                        .testTag("context_menu_preview_notes_md")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(0.dp),
-                            color = KaleidoCobaltFill,
-                            border = BorderStroke(1.dp, Color.Black),
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Visibility,
-                                    contentDescription = null,
-                                    tint = KaleidoCobaltInk,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Preview $mocFilename",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "Interactive Map of Content — click any note to preview its full Markdown",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFF18181B)
-                            )
-                        }
-                    }
-                }
-
-                // Option 3: Export All Notes & Source File (ZIP or Regular Folder)
-                Surface(
-                    shape = RoundedCornerShape(0.dp),
-                    color = Color.White,
-                    border = BorderStroke(1.5.dp, Color.Black),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onExportAllNotesAndSource() }
-                        .testTag("context_menu_export_all_bundle")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(0.dp),
-                            color = KaleidoSageFill,
-                            border = BorderStroke(1.dp, Color.Black),
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Archive,
-                                    contentDescription = null,
-                                    tint = KaleidoSageInk,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Export All Notes & Source File",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black
-                            )
-                            Text(
-                                text = "Exports all highlights, $mocFilename, ${document.fileType.uppercase()} source file, and cover image as .ZIP or regular folder",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFF18181B)
-                            )
-                        }
-                    }
-                }
-
-                // Option 4: Edit Info, Author(s), Tags & Cover Image
-                Surface(
-                    shape = RoundedCornerShape(0.dp),
-                    color = Color.White,
-                    border = BorderStroke(1.5.dp, Color.Black),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onEditDocumentInfo() }
-                        .testTag("context_menu_edit_info_and_cover")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = KaleidoAmberFill,
-                            border = BorderStroke(1.dp, Color.Black),
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = null,
-                                    tint = KaleidoAmberInk,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Edit Info, Tags & Cover Image",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black
-                            )
-                            Text(
-                                text = "Edit author(s), add tags for $mocFilename, or upload/replace cover image",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFF18181B)
-                            )
-                        }
-                    }
-                }
-
-                // Option 4a: shelf (book ↔ article) and bibliographic details / RIS
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val isArticle = document.category.equals("ARTICLE", ignoreCase = true)
-                    Surface(
-                        shape = RoundedCornerShape(0.dp), color = Color.White, border = BorderStroke(1.5.dp, Color.Black),
-                        modifier = Modifier.weight(1f).clickable { onChangeCategory(if (isArticle) "BOOK" else "ARTICLE") }
-                    ) {
-                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                            Text(if (isArticle) "Move to Books" else "Move to Articles", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
-                            Text("Now on the ${if (isArticle) "Articles" else "Books"} shelf", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
-                        }
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(0.dp), color = Color.White, border = BorderStroke(1.5.dp, Color.Black),
-                        modifier = Modifier.weight(1f).clickable { onOpenBibliography() }
-                    ) {
-                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                            Text("Bibliography & RIS", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
-                            Text("ISBN, DOI, publisher… · import/export RIS", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
-                        }
-                    }
-                }
-
-                // Option 4a: the item's files (other editions, cover, notes…), like a file explorer
-                if (com.example.reader.ItemFiles.isFileItem(document) && !com.example.reader.ZoteroPlaceholders.isPlaceholder(document)) {
-                    Surface(
-                        shape = RoundedCornerShape(0.dp),
-                        color = Color.White,
-                        border = BorderStroke(1.5.dp, Color.Black),
-                        modifier = Modifier.fillMaxWidth().clickable { showItemFiles = true }
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Surface(shape = RoundedCornerShape(6.dp), color = Color.White, border = BorderStroke(1.dp, Color.Black), modifier = Modifier.size(36.dp)) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(imageVector = Icons.Default.Folder, contentDescription = null, tint = Color.Black, modifier = Modifier.size(20.dp))
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Files…", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
-                                Text("Every file of this item (main file, other editions, cover, notes); add, rename, make main", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
-                            }
-                        }
-                    }
-                }
-
-                // Option 4b: make this file a chapter of a folder book
-                if (!com.example.reader.FolderBooks.isFolder(document)) {
-                    val inFolder = remember(document.id) { com.example.reader.FolderBooks.folderOf(document.id) != null }
-                    Surface(
-                        shape = RoundedCornerShape(0.dp),
-                        color = Color.White,
-                        border = BorderStroke(1.5.dp, Color.Black),
-                        modifier = Modifier.fillMaxWidth().clickable { onAddToFolderBook() }
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Surface(shape = RoundedCornerShape(6.dp), color = Color.White, border = BorderStroke(1.dp, Color.Black), modifier = Modifier.size(36.dp)) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(imageVector = Icons.Default.CreateNewFolder, contentDescription = null, tint = Color.Black, modifier = Modifier.size(20.dp))
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(if (inFolder) "Move to another folder book…" else "Add to a folder book…", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
-                                Text("Make this file a chapter of a book made of several files (e.g. an edited volume)", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
-                            }
-                        }
-                    }
-                }
-
-                // Option 5: Edited volume — chapters with their own authors
-                if (!document.category.equals("ARTICLE", ignoreCase = true) && !com.example.reader.FolderBooks.isFolder(document)) {
-                    val isVolume = remember(document.id) { com.example.reader.EditedVolumes.isEditedVolume(context, document) }
-                    Surface(
-                        shape = RoundedCornerShape(0.dp),
-                        color = Color.White,
-                        border = BorderStroke(1.5.dp, Color.Black),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onOpenChapters() }
-                            .testTag("context_menu_edited_volume")
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = Color.White,
-                                border = BorderStroke(1.dp, Color.Black),
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.MenuBook,
-                                        contentDescription = null,
-                                        tint = Color.Black,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (isVolume) "Chapters & Authors" else "Edited Volume: Chapters & Authors",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.Black
-                                )
-                                Text(
-                                    text = if (isVolume) "See who wrote each chapter; cite, read or export one chapter at a time"
-                                    else "Treat each chapter as its own article with its own author. Tapping the book then shows its chapters",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF18181B)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Recordings made while reading this book
-                run {
-                    var showRecordings by remember { mutableStateOf(false) }
-                    val recChanges by com.example.reader.Recordings.changes.collectAsState()
-                    val recCount = remember(document.id, recChanges) {
-                        runCatching { com.example.reader.Recordings.list(context, document, settings).size }.getOrDefault(0)
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(0.dp), color = Color.White, border = BorderStroke(1.5.dp, Color.Black),
-                        modifier = Modifier.fillMaxWidth().clickable { showRecordings = true }
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Icon(Icons.Default.Mic, contentDescription = null, tint = Color.Black, modifier = Modifier.size(22.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(if (recCount > 0) "Recordings ($recCount)" else "Recordings", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
-                                Text("Talk while you read; play, transcribe and link what you said to your highlights", style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
-                            }
-                        }
-                    }
-                    if (showRecordings) RecordingsDialog(document) { showRecordings = false }
-                }
-
-                HorizontalDivider(thickness = 1.5.dp, color = Color.Black)
-
-                // Quick secondary actions row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onOpenDocument,
-                        border = BorderStroke(1.dp, Color(0xFFD4D4D8)),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("context_menu_open_book")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.MenuBook,
-                            contentDescription = null,
-                            tint = Color.Black,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Open", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    }
-
-                    OutlinedButton(
-                        onClick = onTogglePinToWidget,
-                        border = BorderStroke(1.dp, Color(0xFFD4D4D8)),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("context_menu_pin_widget")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PushPin,
-                            contentDescription = null,
-                            tint = Color.Black,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (document.isPinnedToWidget) "Unpin" else "Pin Widget",
-                            color = Color.Black,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-
-                    OutlinedButton(
-                        onClick = onDeleteDocument,
-                        border = BorderStroke(1.dp, Color(0xFFFCA5A5)),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("context_menu_delete_book")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.DeleteOutline,
-                            contentDescription = "Delete",
-                            tint = Color(0xFFB91C1C),
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
                 }
             }
         },
@@ -943,6 +951,23 @@ fun LibraryItemContextMenuDialog(
             }
         }
     )
+}
+
+/** A row that folds part of the menu away; tap to show or hide it. */
+@Composable
+private fun MenuFold(label: String, sub: String, open: Boolean, onToggle: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(0.dp), color = Color(0xFFF4F4F5), border = BorderStroke(1.5.dp, Color.Black),
+        modifier = Modifier.fillMaxWidth().clickable { onToggle() }
+    ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = Color.Black)
+                Text(sub, style = MaterialTheme.typography.labelSmall, color = Color(0xFF18181B))
+            }
+            Text(if (open) "▴" else "▾", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+        }
+    }
 }
 
 /**
