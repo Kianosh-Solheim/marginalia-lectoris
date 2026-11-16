@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.reader.Dictation
@@ -174,7 +176,10 @@ fun DictationSettingsSection() {
     var mode by remember { mutableStateOf(Dictation.mode(context)) }
     var service by remember { mutableStateOf(Dictation.service(context)) }
     var fast by remember { mutableStateOf(Dictation.fast(context)) }
-    val able = remember { runCatching { com.example.reader.Transcripts.onlineProviders(context) }.getOrDefault(emptyList()) }
+    var able by remember { mutableStateOf(Dictation.services(context)) }
+    var elevenKey by remember { mutableStateOf("") }
+    var elevenHint by remember { mutableStateOf(Dictation.elevenLabsKeyHint(context)) }
+    var elevenSaved by remember { mutableStateOf(able.any { it.id == Dictation.ELEVENLABS }) }
     val aiLabel = remember { runCatching { com.example.reader.AiPreferences(context).load().provider.label }.getOrDefault("") }
 
     Column(
@@ -197,13 +202,36 @@ fun DictationSettingsSection() {
         Text("ONLINE SERVICE", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
         FlowRow {
             DictationChoice("As under AI ($aiLabel)", service == "ai") { service = "ai"; Dictation.saveSettings(context, null, "ai", null, null) }
-            able.forEach { p -> DictationChoice(p.label, service == p.name) { service = p.name; Dictation.saveSettings(context, null, p.name, null, null) } }
+            able.forEach { p -> DictationChoice(p.label, service == p.id) { service = p.id; Dictation.saveSettings(context, null, p.id, null, null) } }
         }
         Text(
-            if (able.isEmpty()) "No service has an API key yet (Gemini, OpenAI or Other, under AI above). Until then dictation is written offline."
+            if (able.isEmpty()) "No service has an API key yet (Gemini, OpenAI or Other under AI above, or ElevenLabs below). Until then dictation is written offline."
             else "Only services with a saved API key are listed. Claude cannot write speech; with Claude chosen under AI, the first of these is used.",
             fontSize = 12.sp, color = Color(0xFF3F3F46)
         )
+
+        Text("ELEVENLABS KEY", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+        OutlinedTextField(
+            value = elevenKey,
+            onValueChange = { elevenKey = it },
+            label = { Text(if (elevenSaved) "Saved ••••$elevenHint — paste a new key to replace it" else "Paste your ElevenLabs API key") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            shape = RoundedCornerShape(4.dp),
+            modifier = Modifier.fillMaxWidth()
+        )
+        FlowRow(modifier = Modifier.padding(top = 6.dp)) {
+            DictationChoice("Save key", false) {
+                if (elevenKey.isNotBlank()) runCatching { Dictation.saveElevenLabsKey(context, elevenKey) }
+                    .onSuccess { elevenKey = ""; elevenSaved = true; elevenHint = Dictation.elevenLabsKeyHint(context); able = Dictation.services(context); Toast.makeText(context, "ElevenLabs key saved on this tablet. Choose ElevenLabs under Online service to use it.", Toast.LENGTH_LONG).show() }
+                    .onFailure { Toast.makeText(context, "Could not save the key.", Toast.LENGTH_LONG).show() }
+            }
+            if (elevenSaved) DictationChoice("Remove key", false) {
+                runCatching { Dictation.saveElevenLabsKey(context, "") }
+                    .onSuccess { elevenSaved = false; elevenHint = ""; able = Dictation.services(context); if (service == Dictation.ELEVENLABS) { service = "ai"; Dictation.saveSettings(context, null, "ai", null, null) } }
+            }
+        }
+        Text("For ElevenLabs speech-to-text (Scribe). Stored encrypted on this tablet and never included in backups.", fontSize = 12.sp, color = Color(0xFF3F3F46))
 
         Text("OFFLINE MODEL", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
         FlowRow {

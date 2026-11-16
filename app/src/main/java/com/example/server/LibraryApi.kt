@@ -865,9 +865,10 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                     "stop" -> d.stop()
                     "cancel", "clear" -> d.cancel()
                     "model" -> d.downloadModel(context, b.optString("language", "no"))
+                    "key" -> d.saveElevenLabsKey(context, b.optString("key"))
                     "settings" -> d.saveSettings(context,
                         b.optString("mode").takeIf { it == "auto" || it == "online" || it == "offline" },
-                        b.optString("service").takeIf { it == "ai" || it == "GEMINI" || it == "OPENAI" || it == "CUSTOM" },
+                        b.optString("service").takeIf { it == "ai" || it == "GEMINI" || it == "OPENAI" || it == "CUSTOM" || it == "ELEVENLABS" },
                         if (b.has("fast")) b.optBoolean("fast") else null,
                         if (b.has("speechModel")) b.optString("speechModel") else null)
                     else -> throw NoSuchElementException("No such action.")

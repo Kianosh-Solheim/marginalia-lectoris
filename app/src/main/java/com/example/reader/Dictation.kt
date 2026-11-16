@@ -73,8 +73,8 @@ object Dictation {
 
     /** "auto": online when the tablet has internet, otherwise offline; "online"; "offline". */
     fun mode(context: Context): String = prefs(context).getString("mode", "auto").let { if (it == "online" || it == "offline") it else "auto" }
-    /** "ai": the provider chosen under Settings → AI; or GEMINI, OPENAI, CUSTOM. */
-    fun service(context: Context): String = prefs(context).getString("service", "ai").let { if (it == "GEMINI" || it == "OPENAI" || it == "CUSTOM") it else "ai" }
+    /** "ai": the provider chosen under Settings → AI; or GEMINI, OPENAI, CUSTOM, ELEVENLABS. */
+    fun service(context: Context): String = prefs(context).getString("service", "ai").let { if (it == "GEMINI" || it == "OPENAI" || it == "CUSTOM" || it == ELEVENLABS) it else "ai" }
     /** Offline: the small, quick models instead of the accurate ones. */
     fun fast(context: Context): Boolean = prefs(context).getBoolean("fast", false)
     /** The speech model asked of an OpenAI-compatible service; blank: the usual one. */
@@ -89,12 +89,30 @@ object Dictation {
         e.apply()
     }
 
+    /** An online service that can write speech: one of the AI providers, or ElevenLabs (which has a key of its own). */
+    data class Service(val id: String, val label: String, val ai: AiProvider?)
+
+    const val ELEVENLABS = "ELEVENLABS"
+
+    /** The services that have an API key on this tablet. */
+    fun services(context: Context): List<Service> {
+        val ai = runCatching { Transcripts.onlineProviders(context) }.getOrDefault(emptyList()).map { Service(it.name, it.label, it) }
+        val eleven = runCatching { AiPreferences(context).hasSecret(ELEVENLABS) }.getOrDefault(false)
+        return if (eleven) ai + Service(ELEVENLABS, "ElevenLabs", null) else ai
+    }
+
+    /** The ElevenLabs key: saved encrypted beside the AI keys, never in backups. A blank [key] removes it. */
+    fun saveElevenLabsKey(context: Context, key: String) = AiPreferences(context).saveSecret(ELEVENLABS, key.trim())
+    fun elevenLabsKeyHint(context: Context): String =
+        runCatching { AiPreferences(context).let { if (it.hasSecret(ELEVENLABS)) it.readSecret(ELEVENLABS).trim().takeLast(4) else "" } }.getOrDefault("")
+
     /** The online service a dictation would go to, or null when none has an API key. */
-    fun provider(context: Context): AiProvider? {
-        val able = runCatching { Transcripts.onlineProviders(context) }.getOrDefault(emptyList())
+    fun provider(context: Context): Service? {
+        val able = services(context)
         return when (val want = service(context)) {
-            "ai" -> runCatching { AiPreferences(context).load().provider }.getOrNull()?.takeIf { it in able } ?: able.firstOrNull()
-            else -> runCatching { AiProvider.valueOf(want) }.getOrNull()?.takeIf { it in able }
+            // "As under AI" never picks ElevenLabs by itself; that one is chosen by name.
+            "ai" -> runCatching { AiPreferences(context).load().provider }.getOrNull().let { p -> able.firstOrNull { it.ai != null && it.ai == p } ?: able.firstOrNull { it.ai != null } }
+            else -> able.firstOrNull { it.id == want }
         }
     }
 
@@ -140,7 +158,8 @@ object Dictation {
             .put("internet", NoteAiAssistant.isInternetAvailable(context))
             .put("provider", provider(context)?.label ?: "")
             .put("aiProvider", runCatching { AiPreferences(context).load().provider.label }.getOrDefault(""))
-            .put("providers", JSONArray().apply { runCatching { Transcripts.onlineProviders(context) }.getOrDefault(emptyList()).forEach { put(JSONObject().put("id", it.name).put("label", it.label)) } })
+            .put("providers", JSONArray().apply { services(context).forEach { put(JSONObject().put("id", it.id).put("label", it.label)) } })
+            .put("elevenlabs", JSONObject().put("saved", runCatching { AiPreferences(context).hasSecret(ELEVENLABS) }.getOrDefault(false)).put("last4", elevenLabsKeyHint(context)))
             .put("available", WhisperNative.available)
             .put("permission", hasPermission(context))
             .put("models", JSONObject().put("no", hasModel(context, "no")).put("en", hasModel(context, "en")))
@@ -284,19 +303,40 @@ object Dictation {
         return b.array()
     }
 
-    private fun httpFault(provider: AiProvider, code: Int, body: String): Nothing = throw IllegalStateException(when (code) {
-        401, 403 -> "${provider.label} refused the API key. Check it in Settings → AI."
-        404 -> "${provider.label} does not know the speech model or the address. Check Settings → Dictation."
-        429 -> "${provider.label}: rate or quota limit reached. Try again later."
-        else -> "${provider.label} could not write the dictation (HTTP $code). ${body.take(160)}"
+    private fun httpFault(label: String, code: Int, body: String): Nothing = throw IllegalStateException(when (code) {
+        401, 403 -> "$label refused the API key. Check it in Settings."
+        404 -> "$label does not know the speech model or the address. Check Settings → Dictation."
+        429 -> "$label: rate or quota limit reached. Try again later."
+        else -> "$label could not write the dictation (HTTP $code). ${body.take(160)}"
     })
 
+    /** ElevenLabs Scribe (speech-to-text). */
+    private fun elevenLabs(context: Context, sound: ByteArray, language: String, wanted: String): String {
+        val key = AiPreferences(context).readSecret(ELEVENLABS)
+        check(key.isNotBlank()) { "Add your ElevenLabs API key in Settings → Dictation." }
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("model_id", wanted.takeIf { it.startsWith("scribe", ignoreCase = true) } ?: "scribe_v2")
+            .addFormDataPart("file", "dictation.wav", sound.toRequestBody("audio/wav".toMediaType()))
+            .addFormDataPart("language_code", language)
+            .addFormDataPart("tag_audio_events", "false")
+            .addFormDataPart("timestamps_granularity", "none")
+            .build()
+        http.newCall(Request.Builder().url("https://api.elevenlabs.io/v1/speech-to-text").header("xi-api-key", key).post(body).build()).execute().use { r ->
+            val t = r.body?.string().orEmpty()
+            if (!r.isSuccessful) httpFault("ElevenLabs", r.code, runCatching { JSONObject(t).optJSONObject("detail")?.optString("message") }.getOrNull()?.takeIf { it.isNotBlank() } ?: t)
+            return JSONObject(t).optString("text").replace(Regex("\\s+"), " ").trim()
+        }
+    }
+
     /** Sends what was said to the online service and returns the text. */
-    private fun transcribeOnline(context: Context, pcm: ShortArray, language: String, provider: AiProvider): String {
+    private fun transcribeOnline(context: Context, pcm: ShortArray, language: String, service: Service): String {
         val ai = AiPreferences(context)
+        val sound = wav(pcm)
+        val wanted = speechModel(context)
+        val provider = service.ai
+        if (provider == null) return elevenLabs(context, sound, language, wanted)
         val key = ai.readKey(provider)
         check(key.isNotBlank()) { "Add your ${provider.label} API key in Settings → AI." }
-        val sound = wav(pcm)
         if (provider == AiProvider.GEMINI) {
             val model = ai.model(AiProvider.GEMINI).ifBlank { AiProvider.GEMINI.defaultModel }
             val prompt = "Transcribe this dictation. The speech is in ${if (language == "en") "English" else "Norwegian (write it as spoken, Bokmål or Nynorsk)"}. " +
@@ -311,7 +351,7 @@ object Dictation {
                 .header("x-goog-api-key", key).post(body.toString().toRequestBody("application/json".toMediaType())).build()
             http.newCall(req).execute().use { r ->
                 val t = r.body?.string().orEmpty()
-                if (!r.isSuccessful) httpFault(provider, r.code, t)
+                if (!r.isSuccessful) httpFault(provider.label, r.code, t)
                 val parts = JSONObject(t).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts") ?: JSONArray()
                 return (0 until parts.length()).mapNotNull { parts.optJSONObject(it)?.takeUnless { p -> p.optBoolean("thought") }?.optString("text") }
                     .joinToString("").replace(Regex("\\s+"), " ").trim()
@@ -322,7 +362,7 @@ object Dictation {
             check(u != null && u.isHttps) { "Set an HTTPS address for the Other provider in Settings → AI." }
             u.toString()
         }
-        val model = speechModel(context).ifBlank { if (provider == AiProvider.CUSTOM && url.contains("groq", ignoreCase = true)) "whisper-large-v3-turbo" else "whisper-1" }
+        val model = wanted.takeUnless { it.startsWith("scribe", ignoreCase = true) }.orEmpty().ifBlank { if (provider == AiProvider.CUSTOM && url.contains("groq", ignoreCase = true)) "whisper-large-v3-turbo" else "whisper-1" }
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("file", "dictation.wav", sound.toRequestBody("audio/wav".toMediaType()))
             .addFormDataPart("model", model)
@@ -331,7 +371,7 @@ object Dictation {
             .build()
         http.newCall(Request.Builder().url(url).header("Authorization", "Bearer $key").post(body).build()).execute().use { r ->
             val t = r.body?.string().orEmpty()
-            if (!r.isSuccessful) httpFault(provider, r.code, t)
+            if (!r.isSuccessful) httpFault(provider.label, r.code, t)
             return JSONObject(t).optString("text").replace(Regex("\\s+"), " ").trim()
         }
     }

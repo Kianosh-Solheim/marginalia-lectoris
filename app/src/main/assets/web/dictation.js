@@ -137,15 +137,22 @@ function dictationSettingsSection() {
   function draw(st) {
     clear(body);
     const now = st.online ? `Right now: written online by ${st.provider}.` : st.mode === 'offline' ? 'Right now: written offline, on the tablet.'
-      : !st.provider ? 'Right now: written offline — no online service has an API key yet (Gemini, OpenAI or Other, under AI).' : !st.internet ? 'Right now: the tablet has no internet' + (st.mode === 'online' ? ', so dictation will not work.' : ', so it is written offline.') : 'Right now: written offline.';
+      : !st.provider ? 'Right now: written offline — no online service has an API key yet (Gemini, OpenAI or Other under AI, or ElevenLabs below).' : !st.internet ? 'Right now: the tablet has no internet' + (st.mode === 'online' ? ', so dictation will not work.' : ', so it is written offline.') : 'Right now: written offline.';
     const sm = h('input', { value: st.speechModel || '', placeholder: 'Leave empty for the usual one', style: { maxWidth: '300px' } });
     sm.addEventListener('change', () => save({ speechModel: sm.value.trim() }));
+    const el = st.elevenlabs || {}, key = h('input', { type: 'password', placeholder: el.saved ? 'Paste a new key to replace it' : 'Paste key', autocomplete: 'off', spellcheck: 'false', style: { maxWidth: '260px' } });
+    const sendKey = async k => { try { let d = await api('dictation/key', { method: 'POST', json: { key: k } }); if (!k && d.service === 'ELEVENLABS') d = await api('dictation/settings', { method: 'POST', json: { service: 'ai' } }); draw(d); toast(k ? 'Key saved on the tablet' : 'Key removed', 1600); } catch (e) { fail(e); } };
+    key.addEventListener('keydown', e => { if (e.key === 'Enter' && key.value.trim()) sendKey(key.value.trim()); });
     body.append(
       h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Who writes the text'), h('div', { class: 'muted' }, 'Online is quick, but the sound of what you say is sent to the service. Offline, nothing leaves the tablet.')),
         h('div', null, pick(st.mode, [['auto', 'Online when the tablet has internet, otherwise offline'], ['online', 'Always online'], ['offline', 'Always offline']], v => save({ mode: v })), h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, now))),
       h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Online service'), h('div', { class: 'muted' }, 'Only services with a saved API key are listed. Claude cannot write speech.')),
         pick(st.service, [['ai', `As under AI (${st.aiProvider || '—'})`], ...(st.providers || []).map(p => [p.id, p.label])], v => save({ service: v }))),
-      h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Speech model at the service'), h('div', { class: 'muted' }, 'For OpenAI and Other only, e.g. whisper-large-v3-turbo at Groq.')), sm),
+      h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Speech model at the service'), h('div', { class: 'muted' }, 'For OpenAI, Other and ElevenLabs, e.g. whisper-large-v3-turbo at Groq or scribe_v2 at ElevenLabs.')), sm),
+      h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'ElevenLabs API key'), h('div', { class: 'muted' }, 'For ElevenLabs speech-to-text (Scribe). Stored encrypted on the tablet and never included in backups. After saving, choose ElevenLabs under Online service.')),
+        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, h('span', { class: 'mono', style: { fontSize: '12px' } }, el.saved ? `Saved  ••••${el.last4 || ''}` : 'No key'), key,
+          h('button', { class: 'btn fill', onclick: () => { if (key.value.trim()) sendKey(key.value.trim()); else toast('Paste a key first'); } }, 'Save'),
+          el.saved ? h('button', { class: 'btn', onclick: () => confirmBox('Remove this key?', 'The ElevenLabs key is deleted from the tablet. Dictation falls back to the other services or to offline.', 'Remove', () => sendKey('')) }, 'Remove') : null)),
       h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Offline model'), h('div', { class: 'muted' }, 'Fast is several times quicker and makes more mistakes. Each model is downloaded once, when you first dictate with it.')),
         pick(st.fast ? 'fast' : 'accurate', [['accurate', 'Accurate (Small, about 180 MB)'], ['fast', 'Fast (Base, about 60 MB)']], v => save({ fast: v === 'fast' }))));
   }
