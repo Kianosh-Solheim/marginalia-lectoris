@@ -1123,3 +1123,14 @@ html[data-theme="dark"] .palbox { box-shadow: 0 10px 40px rgba(0,0,0,.7); }
 .palmain { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .palline { display: flex; gap: 10px; align-items: baseline; min-width: 0; flex: 1 1 0; }
 .palmore { font-size: 12px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Writing bar in named groups */
+.wtoolbar { gap: 0 4px; align-items: stretch; padding: 3px 10px 4px; }
+.wgroup { display: flex; flex-direction: column; padding: 0 8px 0 6px; border-right: 1px solid var(--rule); }
+.wgroup:last-child { border-right: 0; }
+.wgname { font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: var(--soft); padding: 0 2px; line-height: 1.5; }
+.wgrow { display: flex; gap: 2px; align-items: center; flex-wrap: wrap; }
+.wtoolbar .wgroup .wstylebtn { margin-left: 4px; }
+.wtoolbar .wgroup .wstyle { margin: 0 4px 0 0; }
+.wtoolbar .wgroup .wstylebtn { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wtoolbar .wgroup .tb { padding: 3px 5px; min-width: 24px; } .wgroup { padding: 0 6px 0 4px; } .wtoolbar .wgroup .wstylebtn { max-width: 150px; }

@@ -621,7 +621,9 @@ async function showWriter(id, params) {
     toolbarButton('@ Keys', 'Show the citations as citation keys ([@tilly2017, p. 275]) or in the chosen style. Only how they look here changes; exports are not affected.', () => { citing.setShowKeys(editor, !citing.showKeys); refreshBar(); }, () => citing.showKeys),
     toolbarButton('Tx', 'Clear formatting', () => chain().unsetAllMarks().clearNodes().run()),
   ];
-  bar.append(...btns);
+  // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
+  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [20, 22]]];
+  bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
   wbody.append(notesP.el);
