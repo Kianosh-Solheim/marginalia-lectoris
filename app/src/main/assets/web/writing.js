@@ -486,6 +486,7 @@ async function showWriter(id, params) {
   const wbody = h('div', { class: 'wbody' }, h('div', { class: 'wscroll' }, h('div', { class: 'wsheetrow' }, h('div', { class: 'wsheet' }, page, fnList), cmCol)));
   let commenting = null;   // the comments (wcomments.js)
   let notesP = null;   // the notes panel (wnotes.js)
+  let outlineP = null; // the outline (woutline.js)
   app.append(
     h('div', { class: 'wtop' },
       h('a', { class: 'btn quiet', href: '#/writing', title: 'All documents' }, '← Writing'),
@@ -557,7 +558,7 @@ async function showWriter(id, params) {
       },
     },
     onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); recomputeSoon(); if (notesP) notesP.refresh(); },
-    onSelectionUpdate: () => { refreshBar(); if (commenting) commenting.selectionChanged(); },
+    onSelectionUpdate: () => { refreshBar(); if (commenting) commenting.selectionChanged(); if (outlineP) outlineP.refresh(); },
   });
 
   // ----- toolbar
@@ -620,22 +621,27 @@ async function showWriter(id, params) {
     styleBtn,
     toolbarButton('@ Keys', 'Show the citations as citation keys ([@tilly2017, p. 275]) or in the chosen style. Only how they look here changes; exports are not affected.', () => { citing.setShowKeys(editor, !citing.showKeys); refreshBar(); }, () => citing.showKeys),
     toolbarButton('Tx', 'Clear formatting', () => chain().unsetAllMarks().clearNodes().run()),
+    toolbarButton('☰ Outline', 'The headings of the document in a panel: click to go there, drag to move a section (Ctrl+Alt+O)', () => outlineP.toggle(), () => outlineP && outlineP.isOpen()),
   ];
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
-  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [20, 22]]];
+  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 20, 22]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
   wbody.append(notesP.el);
-  const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; };
+  outlineP = outlinePanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
+  wbody.prepend(outlineP.el);
+  const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } };
   window.addEventListener('resize', placeNotes);
   if (localGet('ml.wnotesOpen', '')) notesP.open();
+  if (localGet('ml.woutlineOpen', '')) outlineP.open();
   document.addEventListener('click', () => { tableMenu.hidden = true; });
   function refreshBar() {
     btns.forEach(b => { if (b._on) b.classList.toggle('on', !!b._on()); });
     styleSel.value = editor.isActive('codeBlock') ? 'code' : editor.isActive('blockquote') ? 'quote' : [1, 2, 3, 4].find(l => editor.isActive('heading', { level: l })) ? 'h' + [1, 2, 3, 4].find(l => editor.isActive('heading', { level: l })) : 'p';
   }
   function refresh() {
+    if (outlineP) outlineP.refresh();
     words.textContent = `${editor.storage.characterCount.words()} words`;
     // The footnotes, numbered, under the text.
     clear(fnList);
@@ -708,6 +714,7 @@ async function showWriter(id, params) {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c')) { e.preventDefault(); citing.insert(editor); }
     if (e.ctrlKey && e.altKey && (e.key === 'e' || e.key === 'E' || e.code === 'KeyE')) { e.preventDefault(); mathDialog(editor, null); }
     if (e.ctrlKey && e.altKey && (e.key === 'm' || e.key === 'M' || e.code === 'KeyM')) { e.preventDefault(); commenting.add(); }
+    if (e.ctrlKey && e.altKey && (e.key === 'o' || e.key === 'O' || e.code === 'KeyO')) { e.preventDefault(); outlineP.toggle(); }
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }
   };
   document.addEventListener('keydown', onKey);

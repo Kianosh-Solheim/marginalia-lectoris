@@ -20,7 +20,7 @@ function paletteActions() {
   const theme = t => () => { try { localStorage.setItem('ml.theme', t); } catch (_) {} applyTheme(); if (typeof route === 'function' && !workspace && document.querySelector('header.top')) route(); };
   const list = [
     ['Library', 'Go to', go('#/'), 'home all books articles'], ['Books', 'Go to', go('#/books'), ''], ['Articles', 'Go to', go('#/articles'), ''],
-    ['Notes', 'Go to', go('#/notes'), 'vault highlights'], ['Writing', 'Go to', go('#/writing'), 'documents editor'], ['Search in the texts', 'Go to', go('#/search'), 'full text find'],
+    ['Notes', 'Go to', go('#/notes'), 'vault highlights'], ['Writing', 'Go to', go('#/writing'), 'documents editor'], ['Literature matrices', 'Go to', go('#/matrix'), 'matrix table compare sources synthesis'], ['Search in the texts', 'Go to', go('#/search'), 'full text find'],
     ['Zotero', 'Go to', go('#/zotero'), ''], ['Presentations', 'Go to', go('#/presentations'), 'slides'], ['Settings', 'Go to', go('#/settings'), 'preferences backup ai'],
     ['New writing document', 'Do', async () => { try { const d = await api('writing', { method: 'POST', json: { title: 'Untitled' } }); location.hash = '#/write/' + encodeURIComponent(d.id) + '?new=1'; } catch (e) { fail(e); } }, 'create write'],
     ['Colours: dark', 'Do', theme('dark'), 'theme night mode'], ['Colours: light', 'Do', theme('light'), 'theme day mode'], ['Colours: follow the computer', 'Do', theme('auto'), 'theme auto'],
