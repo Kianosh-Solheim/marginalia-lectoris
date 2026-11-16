@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccessTime
@@ -126,6 +127,12 @@ import java.util.Locale
  * KOReader 5-Tab Top Menu Bar:
  * [Back/File] - [TOC/Navigation] - [Typesetting] - [Obsidian & Highlights Hub] - [Settings]
  */
+/** One entry of the reader's "More" menu. */
+private class ReaderMenuEntry(
+    val icon: androidx.compose.ui.graphics.vector.ImageVector, val label: String, val sub: String,
+    val on: Boolean, val tag: String, val onClick: () -> Unit
+)
+
 /** One tool in the reader's top bar: a square cell with an icon and a small label; inverted when on. */
 @Composable
 private fun ReaderToolCell(
@@ -282,39 +289,71 @@ fun KOReaderTopBar(
                     modifier = Modifier.border(1.dp, ink),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // The tools used all the time sit in the bar; the rest are gathered under "More".
                     val cells = mutableListOf<@Composable () -> Unit>()
-                    cells += { ReaderToolCell(Icons.Default.Folder, "Book", activeTheme, onOpenFileMenu, tag = "koreader_tab_file") }
+                    val more = mutableListOf<ReaderMenuEntry>()
+                    var moreOpen by remember { mutableStateOf(false) }
                     cells += { ReaderToolCell(Icons.AutoMirrored.Filled.List, "Contents", activeTheme, onOpenTocMenu, tag = "koreader_tab_toc") }
                     if (onOpenSearch != null) cells += { ReaderToolCell(Icons.Default.FindInPage, "Search", activeTheme, onOpenSearch, tag = "koreader_tab_search") }
-                    if (onTogglePdfEbookMode != null && isPdf) {
-                        cells += { ReaderToolCell(Icons.Default.AutoStories, "Reflow", activeTheme, onTogglePdfEbookMode, active = isPdfEbookMode, tag = "koreader_tab_pdf_ebook_mode") }
-                    }
-                    if (onOpenPdfCropMenu != null && isPdf && !isPdfEbookMode) {
-                        val isCropped = document.pdfCropLeft > 0.005f || document.pdfCropTop > 0.005f ||
-                            document.pdfCropRight < 0.995f || document.pdfCropBottom < 0.995f
-                        cells += { ReaderToolCell(Icons.Default.Crop, "Crop", activeTheme, onOpenPdfCropMenu, active = isCropped, tag = "koreader_tab_pdf_crop") }
-                    }
-                    if (onOpenPdfTextToolsMenu != null && isPdf) {
-                        val custom = !document.pdfTextExtractionMode.equals("AUTO", ignoreCase = true) && document.pdfTextExtractionMode.isNotBlank() ||
-                            document.pdfPageExtractionOverridesJson.isNotBlank()
-                        cells += { ReaderToolCell(Icons.Default.Search, "Text", activeTheme, onOpenPdfTextToolsMenu, active = custom, tag = "koreader_tab_pdf_text_tools") }
-                    }
-                    cells += { ReaderToolCell(Icons.Default.FormatSize, "Type", activeTheme, onOpenTypesettingMenu, tag = "koreader_tab_typesetting") }
-                    if (onToggleTtsBar != null) {
-                        cells += { ReaderToolCell(Icons.Default.RecordVoiceOver, "Listen", activeTheme, onToggleTtsBar, active = isTtsPlaying || isTtsBarVisible, tag = "koreader_tab_tts") }
-                    }
-                    if (onToggleRecording != null) {
-                        cells += { ReaderToolCell(Icons.Default.Mic, if (isRecording) "Stop rec." else "Record", activeTheme, onToggleRecording, active = isRecording, tag = "koreader_tab_record") }
-                    }
-                    if (onToggleGlossae != null) {
-                        cells += { ReaderToolCell(Icons.Default.Layers, "Glossae", activeTheme, onToggleGlossae, active = glossaeEnabled, tag = "koreader_tab_glossae") }
-                    }
                     cells += {
                         ReaderToolCell(Icons.Default.DriveFileRenameOutline, "Notes", activeTheme, onOpenAnnotationsMenu,
                             badge = if (highlightsCount > 0) (if (highlightsCount > 99) "99+" else highlightsCount.toString()) else null,
                             tag = "koreader_tab_annotations")
                     }
-                    cells += { ReaderToolCell(Icons.Default.Settings, "Tools", activeTheme, onOpenSettingsMenu, tag = "koreader_tab_settings") }
+                    cells += { ReaderToolCell(Icons.Default.FormatSize, "Type", activeTheme, onOpenTypesettingMenu, tag = "koreader_tab_typesetting") }
+                    if (onToggleTtsBar != null) {
+                        cells += { ReaderToolCell(Icons.Default.RecordVoiceOver, "Listen", activeTheme, onToggleTtsBar, active = isTtsPlaying || isTtsBarVisible, tag = "koreader_tab_tts") }
+                    }
+                    // A recording in progress stays in sight, so it can be stopped with one tap.
+                    if (onToggleRecording != null && isRecording) {
+                        cells += { ReaderToolCell(Icons.Default.Mic, "Stop rec.", activeTheme, onToggleRecording, active = true, tag = "koreader_tab_record") }
+                    }
+                    more += ReaderMenuEntry(Icons.Default.Folder, "Book", "Details, citation, files", false, "koreader_tab_file", onOpenFileMenu)
+                    if (onTogglePdfEbookMode != null && isPdf) {
+                        more += ReaderMenuEntry(Icons.Default.AutoStories, "Reflow", "Read the PDF as flowing text", isPdfEbookMode, "koreader_tab_pdf_ebook_mode", onTogglePdfEbookMode)
+                    }
+                    if (onOpenPdfCropMenu != null && isPdf && !isPdfEbookMode) {
+                        val isCropped = document.pdfCropLeft > 0.005f || document.pdfCropTop > 0.005f ||
+                            document.pdfCropRight < 0.995f || document.pdfCropBottom < 0.995f
+                        more += ReaderMenuEntry(Icons.Default.Crop, "Crop", "Cut away the margins", isCropped, "koreader_tab_pdf_crop", onOpenPdfCropMenu)
+                    }
+                    if (onOpenPdfTextToolsMenu != null && isPdf) {
+                        val custom = !document.pdfTextExtractionMode.equals("AUTO", ignoreCase = true) && document.pdfTextExtractionMode.isNotBlank() ||
+                            document.pdfPageExtractionOverridesJson.isNotBlank()
+                        more += ReaderMenuEntry(Icons.Default.Search, "Text", "How the text of the PDF is read", custom, "koreader_tab_pdf_text_tools", onOpenPdfTextToolsMenu)
+                    }
+                    if (onToggleRecording != null && !isRecording) {
+                        more += ReaderMenuEntry(Icons.Default.Mic, "Record", "Talk while you read", false, "koreader_tab_record", onToggleRecording)
+                    }
+                    if (onToggleGlossae != null) {
+                        more += ReaderMenuEntry(Icons.Default.Layers, "Glossae", "Your notes laid over the text", glossaeEnabled, "koreader_tab_glossae", onToggleGlossae)
+                    }
+                    more += ReaderMenuEntry(Icons.Default.Settings, "Tools", "Reader settings and tools", false, "koreader_tab_settings", onOpenSettingsMenu)
+                    cells += {
+                        Box {
+                            ReaderToolCell(Icons.Default.Menu, "More", activeTheme, { moreOpen = true }, active = more.any { it.on }, tag = "koreader_tab_more")
+                            androidx.compose.material3.DropdownMenu(
+                                expanded = moreOpen,
+                                onDismissRequest = { moreOpen = false },
+                                modifier = Modifier.background(activeTheme.barColor).border(1.5.dp, ink)
+                            ) {
+                                more.forEach { e ->
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(e.label, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ink)
+                                                Text(e.sub, fontSize = 11.sp, color = activeTheme.secondaryTextColor)
+                                            }
+                                        },
+                                        leadingIcon = { Icon(e.icon, contentDescription = null, tint = ink, modifier = Modifier.size(22.dp)) },
+                                        trailingIcon = if (e.on) { { Text("ON", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = activeTheme.barColor, modifier = Modifier.background(ink).padding(horizontal = 4.dp)) } } else null,
+                                        onClick = { moreOpen = false; e.onClick() },
+                                        modifier = Modifier.testTag(e.tag)
+                                    )
+                                }
+                            }
+                        }
+                    }
                     cells.forEachIndexed { i, cell ->
                         if (i > 0) Box(Modifier.width(1.dp).height(52.dp).background(activeTheme.dividerColor))
                         cell()
