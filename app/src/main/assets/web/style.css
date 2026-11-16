@@ -1080,3 +1080,30 @@ body.wsbody { overflow: hidden; }
 .pnchanges table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .pnchanges th, .pnchanges td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--rule); }
 .pnchanges th { font-family: var(--mono); font-size: 10px; text-transform: uppercase; color: var(--grey); position: sticky; top: 0; background: var(--paper); }
+
+/* Header: main places, a second row for the library's shelves, the palette button and the ☰ menu */
+.subnav { padding-top: 0; padding-bottom: 8px; margin-top: -4px; }
+.shelves { display: flex; gap: 2px; flex-wrap: wrap; }
+.shelves button { border: 0; background: none; padding: 3px 10px; font-family: var(--mono); font-size: 11px; cursor: pointer; color: var(--grey); border-bottom: 2px solid transparent; }
+.shelves button:hover { color: var(--ink); }
+.shelves button.on { color: var(--ink); font-weight: 700; border-bottom-color: var(--ink); }
+.palbtn { display: inline-flex; gap: 8px; align-items: center; }
+kbd { font-family: var(--mono); font-size: 10px; border: 1px solid var(--rule2); border-bottom-width: 2px; padding: 0 5px; border-radius: 3px; color: var(--grey); background: var(--wash); white-space: nowrap; }
+.morebtn { font-size: 16px; padding: 4px 10px; }
+.menu.right .menu-pop { left: auto; right: 0; }
+/* The command palette */
+.palette { position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,.35); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; }
+.palbox { width: min(680px, 94vw); background: var(--paper); border: 1.5px solid var(--ink); box-shadow: 6px 6px 0 var(--ink); display: flex; flex-direction: column; max-height: 70vh; }
+.palbox > input { border: 0; border-bottom: 1.5px solid var(--ink); padding: 14px 16px; font-size: 17px; width: 100%; box-sizing: border-box; background: var(--paper); color: var(--ink); outline: none; }
+.pallist { overflow-y: auto; }
+.palrow { display: flex; gap: 10px; align-items: baseline; padding: 8px 16px; cursor: pointer; border-bottom: 1px solid var(--rule); }
+.palrow.on { background: var(--tint); }
+.palt { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+.pals { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 0; min-width: 0; }
+.palk { margin-left: auto; font-family: var(--mono); font-size: 10px; text-transform: uppercase; color: var(--grey); flex: none; }
+.palnone { padding: 16px; }
+.palfoot { padding: 6px 16px; font-size: 11px; border-top: 1px solid var(--rule); }
+.keys { display: grid; gap: 4px; }
+.keysg { margin-top: 10px; }
+.keyrow { display: grid; grid-template-columns: 170px 1fr; gap: 10px; align-items: baseline; font-size: 14px; }
+html[data-theme="dark"] .palbox { box-shadow: 0 10px 40px rgba(0,0,0,.7); }

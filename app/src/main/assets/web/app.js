@@ -250,26 +250,47 @@ function themeButton() {
   return b;
 }
 function header() {
-  const tabs = [['all', 'Library', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['notes', 'Notes', '#/notes'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero'], ['search', 'Search', '#/search'], ['writing', 'Writing', '#/writing'], ['settings', 'Settings', '#/settings']];
-  const search = h('input', { type: 'search', class: 'search', placeholder: 'Search title, author, tag…', value: state.query });
+  // The main places first; the kinds of library item sit in a second row when you are in the library.
+  const places = [['library', 'Library', '#/'], ['notes', 'Notes', '#/notes'], ['writing', 'Writing', '#/writing'], ['search', 'Search', '#/search']];
+  const shelves = [['all', 'Everything', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero']];
+  const inLibrary = shelves.some(s => s[0] === state.tab);
+  const place = inLibrary ? 'library' : state.tab;
+  const search = h('input', { type: 'search', class: 'search', placeholder: state.tab === 'notes' ? 'Filter the notes…' : 'Filter by title, author, tag…', value: state.query });
   search.addEventListener('input', () => {
     state.query = search.value;
     if (state.tab === 'notes') renderNotesList(); else renderShelf();
   });
   const file = h('input', { type: 'file', multiple: true, accept: '.pdf,.epub,.zip,.html,.htm,.xhtml,.txt,.md', hidden: true });
   file.addEventListener('change', () => { if (file.files.length) uploadFiles([...file.files]); file.value = ''; });
+  const more = menuButton('☰', [
+    EMBEDDED ? null : ['Tabs', 'Several things open at once, two of them side by side', () => { localSet('ml.tabs', '1'); showWorkspace(location.hash || '#/'); }],
+    ['Colours', 'Light, dark, or as the computer has it', () => themeDialog()],
+    ['Settings', 'Search, AI, backups, notes export…', () => { location.hash = '#/settings'; }],
+    ['Keyboard shortcuts', 'What the keys do', () => shortcutsDialog()],
+    ['Sign out', 'Sign this browser out', async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); }],
+  ].filter(Boolean), 'btn quiet morebtn');
+  more.classList.add('right'); more.querySelector('button').title = 'More: tabs, colours, settings, shortcuts, sign out';
   return h('header', { class: 'top' }, h('div', { class: 'top-inner' },
     h('div', { class: 'brand', onclick: () => { location.hash = '#/'; } }, 'Marginalia Lectoris', h('small', null, state.device || 'Tablet')),
-    h('nav', { class: 'tabs' }, tabs.map(([k, label, href]) =>
-      h('button', { class: state.tab === k ? 'on' : '', onclick: () => { location.hash = href; } }, label))),
+    h('nav', { class: 'tabs' }, places.map(([k, label, href]) =>
+      h('button', { class: place === k ? 'on' : '', onclick: () => { location.hash = href; } }, label))),
     h('div', { class: 'spacer' }),
-    search,
+    inLibrary || state.tab === 'notes' ? search : null,
+    h('button', { class: 'btn palbtn', title: 'Open a book, a note or a document, or do something — from anywhere (Ctrl+K)', onclick: () => openPalette() }, 'Go to…', h('kbd', null, 'Ctrl K')),
     h('button', { class: 'btn fill', onclick: () => file.click(), title: 'Or drag files anywhere onto this page' }, '+ Add files'),
-    file,
-    EMBEDDED ? null : h('button', { class: 'btn quiet', title: 'Open several things at once in tabs, two of them side by side', onclick: () => { localSet('ml.tabs', '1'); showWorkspace(location.hash || '#/'); } }, '▭ Tabs'),
-    themeButton(),
-    h('button', { class: 'btn quiet', title: 'Sign this browser out', onclick: async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); } }, 'Sign out')
-  ));
+    file, more),
+    inLibrary ? h('div', { class: 'top-inner subnav' }, h('nav', { class: 'shelves' }, shelves.map(([k, label, href]) =>
+      h('button', { class: state.tab === k ? 'on' : '', onclick: () => { location.hash = href; } }, label)))) : null);
+}
+/** Light, dark, or as the computer has it. */
+function themeDialog() {
+  modal((box, close) => {
+    const cur = applyTheme();
+    box.append(h('h2', null, 'Colours'), h('div', { class: 'wnmodes' }, THEMES.map(([k, icon, label]) => h('button', { class: 'wnmode' + (k === cur ? ' on' : ''), onclick: () => {
+      try { localStorage.setItem('ml.theme', k); } catch (_) {} applyTheme(); close(); toast('Colours: ' + label, 1500);
+    } }, h('b', null, icon + '  ' + label)))), h('div', { class: 'muted', style: { fontSize: '13px' } }, 'The reader keeps its own theme (White, Cream, Black).'),
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Close')));
+  });
 }
 
 // ------------------------------------------------------------------ recordings
