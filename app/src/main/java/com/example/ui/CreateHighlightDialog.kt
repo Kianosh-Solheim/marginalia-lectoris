@@ -147,6 +147,8 @@ fun CreateHighlightDialog(
         mutableStateOf(com.example.reader.NoteSuggestionEngine.parseTagsList(initialTags))
     }
     var customTagInput by remember { mutableStateOf("") }
+    var showExtras by remember { mutableStateOf(false) }
+    var showPlace by remember { mutableStateOf(false) }
 
     val suggestedTags = remember(quote, notes, chapter, documentTitle, activeTags) {
         com.example.reader.NoteSuggestionEngine.suggestTags(
@@ -375,46 +377,6 @@ fun CreateHighlightDialog(
                     }
                 }
 
-                // Suggested Titles based on Highlighted Text
-                if (suggestedTitles.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = "Suggested Titles (from highlighted text):",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF3F3F46)
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            suggestedTitles.forEachIndexed { idx, candidateTitle ->
-                                val isCurrentTitle = title.trim().equals(candidateTitle, ignoreCase = true)
-                                Surface(
-                                    shape = RoundedCornerShape(0.dp),
-                                    color = if (isCurrentTitle) KaleidoCobaltFill else Color.White,
-                                    border = BorderStroke(if (isCurrentTitle) 1.5.dp else 1.dp, Color.Black),
-                                    modifier = Modifier
-                                        .clickable { title = candidateTitle }
-                                        .testTag("suggested_title_chip_$idx")
-                                ) {
-                                    Text(
-                                        text = candidateTitle,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = if (isCurrentTitle) FontWeight.Bold else FontWeight.Medium,
-                                        color = Color.Black,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
                 OutlinedTextField(
                     value = quote,
                     onValueChange = { quote = it },
@@ -454,6 +416,48 @@ fun CreateHighlightDialog(
                         focusedLabelColor = Color.Black
                     )
                 )
+
+                MenuFold("Tags, colour and title suggestions", if (activeTags.isEmpty()) "No tags yet" else "${activeTags.size} tags", showExtras) { showExtras = !showExtras }
+                if (showExtras) {
+                // Suggested Titles based on Highlighted Text
+                if (suggestedTitles.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Suggested Titles (from highlighted text):",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF3F3F46)
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            suggestedTitles.forEachIndexed { idx, candidateTitle ->
+                                val isCurrentTitle = title.trim().equals(candidateTitle, ignoreCase = true)
+                                Surface(
+                                    shape = RoundedCornerShape(0.dp),
+                                    color = if (isCurrentTitle) KaleidoCobaltFill else Color.White,
+                                    border = BorderStroke(if (isCurrentTitle) 1.5.dp else 1.dp, Color.Black),
+                                    modifier = Modifier
+                                        .clickable { title = candidateTitle }
+                                        .testTag("suggested_title_chip_$idx")
+                                ) {
+                                    Text(
+                                        text = candidateTitle,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (isCurrentTitle) FontWeight.Bold else FontWeight.Medium,
+                                        color = Color.Black,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Individual Note Tags & Suggested Tags Section
                 Surface(
@@ -819,6 +823,9 @@ fun CreateHighlightDialog(
                     }
                 }
 
+                }
+                MenuFold("Page and place", listOf(if (printedPageLabel.isNotBlank()) "p. $printedPageLabel" else "", chapter.trim()).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "Where in the text this note belongs" }, showPlace) { showPlace = !showPlace }
+                if (showPlace) {
                 if (isPdfDocument || printedPageLabel.isNotBlank()) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -929,6 +936,7 @@ fun CreateHighlightDialog(
                             focusedLabelColor = Color.Black
                         )
                     )
+                }
                 }
             }
         },

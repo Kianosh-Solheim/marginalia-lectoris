@@ -955,7 +955,7 @@ fun LibraryItemContextMenuDialog(
 
 /** A row that folds part of the menu away; tap to show or hide it. */
 @Composable
-private fun MenuFold(label: String, sub: String, open: Boolean, onToggle: () -> Unit) {
+internal fun MenuFold(label: String, sub: String, open: Boolean, onToggle: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(0.dp), color = Color(0xFFF4F4F5), border = BorderStroke(1.5.dp, Color.Black),
         modifier = Modifier.fillMaxWidth().clickable { onToggle() }
