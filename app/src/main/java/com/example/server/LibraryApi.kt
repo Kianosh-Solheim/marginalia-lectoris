@@ -536,7 +536,9 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             .apply {
                 // For the details table: year, citation key, item type.
                 val rec = runCatching { BibStore.get(d.id) }.getOrNull()
-                put("year", rec?.get(BibField.YEAR)?.let { Regex("\\d{4}").find(it)?.value ?: it }.orEmpty())
+                put("year", rec?.get(BibField.YEAR)?.let { Regex("\\d{4}").find(it)?.value ?: it }.orEmpty()
+                    .ifBlank { runCatching { if (rec != null) Citations.year(d, rec).takeIf { y -> y != "n.d." }.orEmpty() else "" }.getOrDefault("") })
+                put("doi", rec?.get(BibField.DOI).orEmpty())
                 put("citekey", runCatching { if (rec != null) Citations.citeKey(d, rec) else "" }.getOrDefault(""))
                 put("entryType", rec?.entryType.orEmpty())
             }

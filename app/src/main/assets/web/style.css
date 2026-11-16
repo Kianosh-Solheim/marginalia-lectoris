@@ -1188,3 +1188,37 @@ table.mx td.over { box-shadow: inset 0 0 0 2px var(--indigo); }
 .mxlink { border: 1px dashed var(--grey); background: transparent; color: var(--grey); font-size: 11px; padding: 1px 6px; cursor: pointer; opacity: 0; }
 td:hover .mxlink, .mxlink:focus, td:focus-within .mxlink { opacity: 1; }
 .mxlink:hover { color: var(--ink); border-color: var(--ink); }
+.mxtabs { display: flex; flex-wrap: wrap; border: 1.5px solid var(--ink); margin-bottom: 10px; width: fit-content; }
+.mxtabs button { border: 0; border-right: 1px solid var(--ink); background: var(--card); color: var(--ink); padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+.mxtabs button:last-child { border-right: 0; }
+.mxtabs button.on { background: var(--ink); color: var(--paper); }
+.mxctl input[type=search], .mxctl select { width: 100%; box-sizing: border-box; }
+.mxtagpick { display: flex; flex-wrap: wrap; gap: 5px; max-height: 22vh; overflow: auto; }
+.mxtag { border: 1px solid var(--ink); background: var(--card); color: var(--ink); font-size: 12px; padding: 2px 8px; cursor: pointer; }
+.mxtag .mono { font-size: 10px; opacity: .6; }
+.mxtag.on { background: var(--ink); color: var(--paper); }
+table.mx th.mxinfo, table.mx td.mxinfo { min-width: 120px; width: 120px; font-size: 12px; color: var(--grey); overflow-wrap: anywhere; }
+table.mx th.mxinfo { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink); }
+table.mx td.mxinfo a { color: inherit; }
+
+/* Command palette: who and when on every source, a preview pane, actions */
+.palbox.wide { width: min(1080px, 96vw); }
+.palbody { display: flex; min-height: 0; flex: 1 1 auto; }
+.palbody .pallist { flex: 1 1 0; min-width: 0; }
+.palside { flex: none; width: 380px; border-left: 1.5px solid var(--ink); padding: 14px 16px; overflow-y: auto; background: var(--card); box-sizing: border-box; }
+.palside[hidden] { display: none; }
+@media (max-width: 860px) { .palside { display: none; } .palbox.wide { width: min(680px, 94vw); } }
+.palwho { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palmain .palt { display: block; }
+.palhead { display: flex; gap: 12px; align-items: flex-start; }
+.palbig { flex: none; width: 84px; border: 1px solid var(--rule); background: var(--wash); display: block; }
+.palbig img { width: 100%; display: block; }
+.palstitle { font-weight: 700; font-size: 17px; line-height: 1.25; }
+.palswho { font-size: 13.5px; margin-top: 4px; }
+.palsmeta { font-size: 11px; margin-top: 6px; overflow-wrap: anywhere; }
+.palstags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.palstags span { border: 1px solid var(--rule); font-size: 11.5px; padding: 1px 6px; }
+.palabs { font-size: 13.5px; line-height: 1.5; margin-top: 4px; white-space: pre-wrap; }
+.palquote { margin: 12px 0 8px; padding: 6px 10px; border-left: 3px solid var(--ink); background: var(--hl, var(--wash)); font-size: 13.5px; line-height: 1.45; }
+.palsub { padding: 8px 16px; font-size: 13px; border-bottom: 1.5px solid var(--ink); background: var(--wash); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palfoot kbd { font-family: var(--mono); font-size: 10px; border: 1px solid var(--rule); padding: 0 4px; }

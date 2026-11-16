@@ -12,10 +12,13 @@ async function matrixList() {
 }
 async function matrixPut(m) {
   m.modified = Date.now();
-  await api('note-pages', { method: 'PUT', json: { key: 'matrix:' + m.id, page: { name: m.name, columns: m.columns, rows: m.rows, created: m.created, modified: m.modified } } });
+  await api('note-pages', { method: 'PUT', json: { key: 'matrix:' + m.id, page: { name: m.name, columns: m.columns, rows: m.rows, show: m.show || {}, created: m.created, modified: m.modified } } });
 }
 const mxCell = (row, colId) => { row.cells = row.cells || {}; return row.cells[colId] || (row.cells[colId] = { text: '', notes: [] }); };
 const mxNoteLabel = n => (n.title || (n.highlightedText || n.userNotes || 'Note').replace(/\s+/g, ' ').slice(0, 60)).trim();
+/** Read-only columns filled from the library; switched on per matrix. */
+const MX_INFO = [['tags', 'Tags', d => splitTags(d.tags).join(', ')], ['year', 'Year', d => String(d.year || '')], ['citekey', 'Citekey', d => d.citekey || ''], ['doi', 'DOI', d => d.doi || '']];
+const mxInfoOn = m => MX_INFO.filter(([k]) => m.show && m.show[k]);
 const mxFilled = c => !!(c && ((c.text || '').trim() || (c.notes || []).length));
 
 /** The list of matrices. */
@@ -78,30 +81,96 @@ async function showMatrix(id) {
   const wrap = h('div', { class: 'mxwrap' });
   const grow = ta => { ta.style.height = 'auto'; ta.style.height = Math.max(54, ta.scrollHeight + 2) + 'px'; };
 
+  /** Sources come in four ways: ticked in the library, by tag, cited in a writing document, by author or year. */
   function addSources() {
-    const have = new Set(m.rows.map(r => r.doc)), pickable = (state.docs || []).filter(d => !have.has(d.id));
+    const have = new Set(m.rows.map(r => r.doc)), docs = state.docs || [];
+    const tagCount = new Map();
+    docs.forEach(d => splitTags(d.tags).forEach(t => { const k = norm(t); const e = tagCount.get(k) || { name: t, n: 0 }; e.n++; tagCount.set(k, e); }));
+    const allTags = [...tagCount.entries()].sort((a, b) => b[1].n - a[1].n || a[1].name.localeCompare(b[1].name));
     modal((box, close) => {
-      box.style.width = '680px';
-      const chosen = new Set();
+      box.style.width = '720px';
+      let mode = localGet('ml.mxAdd', 'lib'), chosen = new Set(), shown = [], note = '';
+      const pickedTags = new Set(); let allOf = false, cited = null, citedMissing = 0, writing = null;
       const q = h('input', { type: 'search', placeholder: 'Search the library' });
-      const list = h('div', { style: { maxHeight: '52vh', overflow: 'auto', borderTop: '1px solid var(--ink)', marginTop: '8px' } });
+      const who = h('input', { type: 'search', placeholder: 'Author', style: { flex: 2 } });
+      const y1 = h('input', { type: 'number', placeholder: 'From year', style: { flex: 1, minWidth: '90px' } }), y2 = h('input', { type: 'number', placeholder: 'To year', style: { flex: 1, minWidth: '90px' } });
+      const tabs = h('div', { class: 'seg mxtabs' }), controls = h('div', { class: 'mxctl' });
+      const list = h('div', { style: { maxHeight: '44vh', overflow: 'auto', borderTop: '1px solid var(--ink)', marginTop: '8px' } });
+      const info = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '6px', minHeight: '16px' } });
       const ok = h('button', { class: 'btn fill', disabled: true }, 'Add');
-      const draw = () => {
-        clear(list);
-        const terms = norm(q.value).split(/\s+/).filter(Boolean);
-        pickable.filter(x => terms.every(t => norm(x.title + ' ' + whoOf(x) + ' ' + (x.tags || '')).includes(t))).slice(0, 300).forEach(x => {
-          const cb = h('input', { type: 'checkbox', checked: chosen.has(x.id) });
-          cb.addEventListener('change', () => { if (cb.checked) chosen.add(x.id); else chosen.delete(x.id); ok.disabled = !chosen.size; ok.textContent = chosen.size ? `Add ${chosen.size}` : 'Add'; });
-          const nn = notes.filter(n => n.documentId === x.id).length;
-          list.append(h('label', { class: 'row', style: { padding: '7px 2px', borderBottom: '1px solid var(--rule)', cursor: 'pointer', flexWrap: 'nowrap' } }, cb,
-            h('span', { style: { minWidth: 0 } }, h('b', { class: 'serif' }, x.title), h('div', { class: 'muted', style: { fontSize: '12px' } }, [whoOf(x), nn ? `${nn} note${nn === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')))));
-        });
-        if (!list.firstChild) list.append(h('div', { class: 'muted', style: { padding: '10px 0' } }, pickable.length ? 'Nothing matches.' : 'Everything in the library is already in this matrix.'));
+      const count = () => { ok.disabled = !chosen.size; ok.textContent = chosen.size ? `Add ${chosen.size}` : 'Add'; };
+      const yearOf = d => +(String(d.year || '').match(/\d{4}/) || [0])[0];
+      /** What the chosen way finds; [tick] says whether the finds start out ticked. */
+      const matches = () => {
+        note = '';
+        if (mode === 'lib') { const terms = norm(q.value).split(/\s+/).filter(Boolean); return docs.filter(x => terms.every(t => norm([x.title, whoOf(x), x.tags, x.year, x.citekey].join(' ')).includes(t))); }
+        if (mode === 'tag') {
+          if (!pickedTags.size) { note = 'Choose one or more tags.'; return []; }
+          return docs.filter(d => { const mine = new Set(splitTags(d.tags).map(norm)); const hit = [...pickedTags].filter(t => mine.has(t)).length; return allOf ? hit === pickedTags.size : hit > 0; });
+        }
+        if (mode === 'doc') {
+          if (!cited) { note = 'Choose a document.'; return []; }
+          if (citedMissing) note = `${citedMissing} cited source${citedMissing === 1 ? ' is' : 's are'} only in Zotero, not in the library, and cannot be added.`;
+          return docs.filter(d => cited.has(d.id));
+        }
+        const a = norm(who.value).split(/\s+/).filter(Boolean), from = +y1.value || 0, to = +y2.value || 0;
+        if (!a.length && !from && !to) { note = 'Write an author, a year span, or both.'; return []; }
+        return docs.filter(d => a.every(t => norm(whoOf(d) + ' ' + (d.author || '')).includes(t)) && (!(from || to) || (yearOf(d) && (!from || yearOf(d) >= from) && (!to || yearOf(d) <= to))));
       };
-      q.addEventListener('input', draw);
-      ok.addEventListener('click', () => { chosen.forEach(did => m.rows.push({ doc: did, title: (docOf(did) || {}).title || '', cells: {} })); close(); changed(); draw_(); });
-      box.append(h('h2', null, 'Add sources to the matrix'), q, list, h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), ok));
-      draw();
+      const drawList = retick => {
+        shown = matches();
+        if (retick) chosen = new Set(mode === 'lib' ? [] : shown.filter(x => !have.has(x.id)).map(x => x.id));
+        clear(list);
+        shown.slice(0, 400).forEach(x => {
+          const inside = have.has(x.id);
+          const cb = h('input', { type: 'checkbox', checked: inside || chosen.has(x.id), disabled: inside });
+          cb.addEventListener('change', () => { if (cb.checked) chosen.add(x.id); else chosen.delete(x.id); count(); });
+          const nn = notes.filter(n => n.documentId === x.id).length, tg = splitTags(x.tags);
+          list.append(h('label', { class: 'row', style: { padding: '7px 2px', borderBottom: '1px solid var(--rule)', cursor: inside ? 'default' : 'pointer', flexWrap: 'nowrap', opacity: inside ? .5 : 1 } }, cb,
+            h('span', { style: { minWidth: 0 } }, h('b', { class: 'serif' }, x.title),
+              h('div', { class: 'muted', style: { fontSize: '12px' } }, [whoOf(x), x.year, inside ? 'already in the matrix' : (nn ? `${nn} note${nn === 1 ? '' : 's'}` : ''), tg.length ? tg.map(t => '#' + t).join(' ') : ''].filter(Boolean).join(' · ')))));
+        });
+        if (!list.firstChild) list.append(h('div', { class: 'muted', style: { padding: '10px 0' } }, note || 'Nothing matches.'));
+        const fresh = shown.filter(x => !have.has(x.id)).length;
+        info.textContent = list.firstChild && shown.length ? [`${shown.length} found`, shown.length - fresh ? `${shown.length - fresh} already in the matrix` : '', note].filter(Boolean).join(' · ') : '';
+        count();
+      };
+      const drawControls = () => {
+        clear(controls);
+        if (mode === 'lib') controls.append(q);
+        else if (mode === 'tag') {
+          const chips = h('div', { class: 'mxtagpick' });
+          if (!allTags.length) chips.append(h('span', { class: 'muted' }, 'No book or article has a tag yet.'));
+          allTags.forEach(([k, t]) => { const b = h('button', { class: 'mxtag' + (pickedTags.has(k) ? ' on' : ''), onclick: () => { if (pickedTags.has(k)) pickedTags.delete(k); else pickedTags.add(k); b.classList.toggle('on'); drawList(true); } }, '#' + t.name, h('span', { class: 'mono' }, ' ' + t.n)); chips.append(b); });
+          const all = h('input', { type: 'checkbox', checked: allOf }); all.addEventListener('change', () => { allOf = all.checked; drawList(true); });
+          controls.append(chips, h('label', { class: 'row', style: { flexDirection: 'row', fontSize: '13px', marginTop: '6px' } }, all, h('span', null, 'Only sources that carry all the chosen tags')));
+        } else if (mode === 'doc') {
+          const sel = h('select', null, h('option', { value: '' }, writing ? 'Choose a writing document…' : 'Loading…'));
+          const fill = () => { (writing || []).forEach(d => sel.append(h('option', { value: d.id }, d.title || 'Untitled'))); sel.firstChild.textContent = (writing || []).length ? 'Choose a writing document…' : 'No writing documents yet'; };
+          if (writing) fill(); else api('writing').then(w => { writing = Array.isArray(w) ? w : []; fill(); }).catch(fail);
+          sel.addEventListener('change', async () => {
+            cited = null; citedMissing = 0; if (!sel.value) return drawList(true);
+            try {
+              const d = await api('writing/' + encodeURIComponent(sel.value)), ids = citedIds(d.content || {});
+              cited = new Set();
+              ids.forEach(cid => { const p = String(cid).split(':'); const hit = p[0] === 'ml' ? docs.find(x => x.id === +p[1]) : p[0] === 'z' ? docs.find(x => x.zoteroKey && x.zoteroKey === p[1]) : null; if (hit) cited.add(hit.id); else citedMissing++; });
+              if (!ids.length) { cited = new Set(); }
+            } catch (e) { fail(e); }
+            drawList(true); if (cited && !cited.size && !citedMissing) info.textContent = 'This document cites nothing yet.';
+          });
+          controls.append(sel);
+        } else controls.append(h('div', { class: 'row', style: { flexDirection: 'row', gap: '8px' } }, who, y1, y2));
+      };
+      const drawTabs = () => {
+        clear(tabs);
+        [['lib', 'Library'], ['tag', 'By tag'], ['doc', 'Cited in a document'], ['who', 'Author or year']].forEach(([k, label]) =>
+          tabs.append(h('button', { class: mode === k ? 'on' : '', onclick: () => { mode = k; localSet('ml.mxAdd', k); drawTabs(); drawControls(); drawList(true); const f = controls.querySelector('input[type=search], select'); if (f) f.focus(); } }, label)));
+      };
+      q.addEventListener('input', () => drawList(false));
+      [who, y1, y2].forEach(x => x.addEventListener('input', () => drawList(true)));
+      ok.addEventListener('click', () => { docs.filter(d => chosen.has(d.id) && !have.has(d.id)).forEach(d => m.rows.push({ doc: d.id, title: d.title || '', cells: {} })); close(); changed(); draw_(); });
+      box.append(h('h2', null, 'Add sources to the matrix'), tabs, controls, list, info, h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), ok));
+      drawTabs(); drawControls(); drawList(true);
     });
   }
 
@@ -146,14 +215,15 @@ async function showMatrix(id) {
     if (used) confirmBox('Take this source out of the matrix?', `What you wrote about “${titleOf(r)}” in this matrix is removed. The source and its notes stay in the library.`, 'Take out', go); else go();
   }
   function moveRow(i, by) { const j = i + by; if (j < 0 || j >= m.rows.length) return; const [r] = m.rows.splice(i, 1); m.rows.splice(j, 0, r); changed(); draw_(); }
-  function sortRows(by) { const key = r => norm(by === 'author' ? whoOf(docOf(r.doc)) + ' ' + titleOf(r) : titleOf(r)); m.rows.sort((a, b) => key(a).localeCompare(key(b))); changed(); draw_(); }
+  function sortRows(by) { const key = r => norm(by === 'author' ? whoOf(docOf(r.doc)) + ' ' + titleOf(r) : by === 'year' ? (String((docOf(r.doc) || {}).year || '9999')) + ' ' + whoOf(docOf(r.doc)) : titleOf(r)); m.rows.sort((a, b) => key(a).localeCompare(key(b))); changed(); draw_(); }
 
   function draw_() {
     const top = wrap.scrollTop, left = wrap.scrollLeft;
     clear(wrap);
     if (!m.rows.length) { wrap.append(h('div', { class: 'empty' }, h('h2', null, 'No sources yet'), h('p', { class: 'muted' }, 'Choose the books and articles this matrix compares.'), h('button', { class: 'btn fill', onclick: addSources }, '+ Add sources'))); return; }
     const table = h('table', { class: 'mx' });
-    const head = h('tr', null, h('th', { class: 'mxsrc' }, 'Source'));
+    const infoCols = mxInfoOn(m);
+    const head = h('tr', null, h('th', { class: 'mxsrc' }, 'Source'), infoCols.map(([k, label]) => h('th', { class: 'mxinfo', title: 'From the library; change it on the source’s own page' }, label)));
     m.columns.forEach((c, i) => {
       const inp = h('input', { value: c.name, title: 'Rename the column' });
       inp.addEventListener('input', () => { c.name = inp.value; changed(); });
@@ -174,6 +244,7 @@ async function showMatrix(id) {
           h('button', { class: 'btn quiet mxmini', title: 'Move down', disabled: i === m.rows.length - 1, onclick: () => moveRow(i, 1) }, '↓'),
           d ? h('a', { class: 'btn quiet mxmini', href: '#/read/' + d.id, title: 'Read it' }, 'Read') : null,
           h('button', { class: 'btn quiet mxmini', title: 'Take this source out of the matrix', onclick: () => removeRow(i) }, '×'))));
+      infoCols.forEach(([k, label, get]) => tr.append(h('td', { class: 'mxinfo' + (k === 'tags' ? '' : ' mono') }, d ? (k === 'doi' && get(d) ? h('a', { href: 'https://doi.org/' + get(d).replace(/^(https?:\/\/)?(dx\.)?doi\.org\//i, ''), target: '_blank', rel: 'noopener' }, get(d)) : get(d)) : '')));
       m.columns.forEach(c => {
         const cell = (r.cells || {})[c.id] || { text: '', notes: [] };
         const ta = h('textarea', { placeholder: c.name, rows: 2 }, cell.text || '');
@@ -206,17 +277,20 @@ async function showMatrix(id) {
   function addCol() { const c = { id: mxNewId(), name: 'New column' }; m.columns.push(c); changed(); draw_(); const inputs = wrap.querySelectorAll('th input'); const last = inputs[inputs.length - 1]; if (last) { last.focus(); last.select(); wrap.scrollLeft = wrap.scrollWidth; } }
 
   const exp = async kind => { try { await flush(); await matrixExport(m, kind, { docOf, noteOf, whoOf, titleOf }); } catch (e) { fail(e); } };
-  main.append(h('div', { class: 'mxbar' },
+  const barHost = h('div');
+  function showBar() { clear(barHost).append(h('div', { class: 'mxbar' },
     h('a', { class: 'btn quiet', href: '#/matrix', title: 'All matrices' }, '‹ Matrices'), name,
     h('button', { class: 'btn fill', onclick: addSources }, '+ Add sources'),
     h('button', { class: 'btn', onclick: addCol }, '+ Column'),
-    menuButton('Sort ▾', [['By author', 'Then by title', () => sortRows('author')], ['By title', '', () => sortRows('title')]]),
+    menuButton('Sort ▾', [['By author', 'Then by title', () => sortRows('author')], ['By title', '', () => sortRows('title')], ['By year', 'Oldest first; sources without a year last', () => sortRows('year')]]),
+    menuButton('Show ▾', MX_INFO.map(([k, label]) => [(m.show && m.show[k] ? '✓ ' : '') + label, 'A read-only column from the library', () => { m.show = m.show || {}; m.show[k] = !m.show[k]; changed(); showBar(); draw_(); }])),
     menuButton('Export ▾', [
       ['Excel', 'A workbook (.xlsx)', () => exp('xlsx')],
       ['CSV', 'For any spreadsheet program', () => exp('csv')],
       ['Markdown table', 'One note for Obsidian, with [[links]] to your notes', () => exp('md')],
       ['Obsidian database', 'A Base: one note per source and a table over them (zip)', () => exp('base')]]),
-    h('span', { style: { flex: 1 } }), status), wrap);
+    h('span', { style: { flex: 1 } }), status)); }
+  showBar(); main.append(barHost, wrap);
   const fit = () => { wrap.style.height = Math.max(240, innerHeight - wrap.getBoundingClientRect().top - 12) + 'px'; };
   draw_(); fit(); window.addEventListener('resize', fit);
 }
@@ -241,7 +315,7 @@ async function mxXlsx(rows, widths) {
 
 /** Property names for Obsidian: short, lower case, one per column. */
 function mxKeys(columns) {
-  const taken = new Set(['matrix', 'title', 'author', 'notes_page', 'tags']);
+  const taken = new Set(['matrix', 'title', 'author', 'notes_page', 'tags', 'source_tags', 'year', 'citekey', 'doi']);
   return columns.map(c => {
     let k = norm(c.name).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'column', base = k, i = 2;
     while (taken.has(k)) k = base + '_' + i++;
@@ -252,11 +326,12 @@ function mxKeys(columns) {
 async function matrixExport(m, kind, { docOf, noteOf, whoOf, titleOf }) {
   const file = safeFileName(m.name || 'Literature matrix');
   const cellOf = (r, c) => (r.cells || {})[c.id] || { text: '', notes: [] };
+  const info = mxInfoOn(m), infoOf = (r, x) => { const d = docOf(r.doc); return d ? x[2](d) : ''; };
   const linked = cl => (cl.notes || []).map(noteOf).filter(Boolean);
   const plain = cl => [(cl.text || '').trim(), ...linked(cl).map(n => '– ' + mxNoteLabel(n) + (n.printedPageLabel ? ' (p. ' + n.printedPageLabel + ')' : ''))].filter(Boolean).join('\n');
   if (kind === 'xlsx' || kind === 'csv') {
-    const rows = [['Source', 'Author', ...m.columns.map(c => c.name)], ...m.rows.map(r => [titleOf(r), whoOf(docOf(r.doc)), ...m.columns.map(c => plain(cellOf(r, c)))])];
-    if (kind === 'xlsx') return saveBlob(await mxXlsx(rows, [38, 24, ...m.columns.map(() => 42)]), file + '.xlsx');
+    const rows = [['Source', 'Author', ...info.map(x => x[1]), ...m.columns.map(c => c.name)], ...m.rows.map(r => [titleOf(r), whoOf(docOf(r.doc)), ...info.map(x => infoOf(r, x)), ...m.columns.map(c => plain(cellOf(r, c)))])];
+    if (kind === 'xlsx') return saveBlob(await mxXlsx(rows, [38, 24, ...info.map(x => x[0] === 'year' ? 8 : 22), ...m.columns.map(() => 42)]), file + '.xlsx');
     const q = v => '"' + String(v).replace(/"/g, '""') + '"';
     return saveBlob(new Blob(['﻿' + rows.map(r => r.map(q).join(',')).join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' }), file + '.csv');
   }
@@ -264,10 +339,10 @@ async function matrixExport(m, kind, { docOf, noteOf, whoOf, titleOf }) {
   if (kind === 'md') {
     const td = s => String(s).replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
     const L = ['---', 'tags:', '  - Literature_matrix', '---', '', '# ' + (m.name || 'Literature matrix'), '',
-      '| Source | ' + m.columns.map(c => td(c.name)).join(' | ') + ' |', '|' + ' --- |'.repeat(m.columns.length + 1)];
+      '| Source | ' + [...info.map(x => x[1]), ...m.columns.map(c => td(c.name))].join(' | ') + ' |', '|' + ' --- |'.repeat(m.columns.length + info.length + 1)];
     m.rows.forEach(r => {
       const who = whoOf(docOf(r.doc));
-      L.push('| ' + td('**' + titleOf(r) + '**' + (who ? '\n' + who : '')) + ' | ' + m.columns.map(c => { const cl = cellOf(r, c); return td([(cl.text || '').trim(), linked(cl).map(link).join(' ')].filter(Boolean).join('\n')); }).join(' | ') + ' |');
+      L.push('| ' + td('**' + titleOf(r) + '**' + (who ? '\n' + who : '')) + ' | ' + info.map(x => td(infoOf(r, x)) + ' | ').join('') + m.columns.map(c => { const cl = cellOf(r, c); return td([(cl.text || '').trim(), linked(cl).map(link).join(' ')].filter(Boolean).join('\n')); }).join(' | ') + ' |');
     });
     return saveBlob(new Blob([L.join('\n') + '\n'], { type: 'text/markdown;charset=utf-8' }), file + '.md');
   }
@@ -277,14 +352,17 @@ async function matrixExport(m, kind, { docOf, noteOf, whoOf, titleOf }) {
   m.rows.forEach(r => {
     let f = mdName(titleOf(r)), k = 2; while (taken.has(f.toLowerCase())) f = mdName(titleOf(r)) + ' (' + k++ + ')'; taken.add(f.toLowerCase());
     const d = docOf(r.doc), L = ['---', 'matrix: ' + y(m.name), 'title: ' + y(titleOf(r)), 'author: ' + y(whoOf(d)), 'notes_page: ' + y('[[' + mdName('Notes on ' + titleOf(r)) + ']]')];
+    info.forEach(x => { const v = infoOf(r, x); if (x[0] === 'tags') L.push('source_tags:' + (v ? '' : ' []'), ...splitTags(v).map(t => '  - ' + y(t))); else if (x[0] === 'year' && /^\d{4}$/.test(v)) L.push('year: ' + v); else L.push(x[0] + ': ' + y(v)); });
     m.columns.forEach((c, i) => L.push(keys[i] + ': ' + y((cellOf(r, c).text || '').trim())));
     L.push('tags:', '  - Literature_matrix', '---', '', '# ' + titleOf(r), '');
     m.columns.forEach(c => { const cl = cellOf(r, c); if (!mxFilled(cl)) return; L.push('## ' + c.name, ''); if ((cl.text || '').trim()) L.push(cl.text.trim(), ''); const ln = linked(cl); if (ln.length) L.push(...ln.map(n => '- ' + link(n)), ''); });
     root.file(f + '.md', L.join('\n'));
   });
   const B = ['filters:', '  and:', '    - matrix == ' + y(m.name), 'properties:', '  file.name:', '    displayName: Source', '  note.author:', '    displayName: Author'];
+  const infoKey = x => x[0] === 'tags' ? 'source_tags' : x[0];
+  info.forEach(x => B.push('  note.' + infoKey(x) + ':', '    displayName: ' + y(x[1])));
   m.columns.forEach((c, i) => B.push('  note.' + keys[i] + ':', '    displayName: ' + y(c.name)));
-  B.push('views:', '  - type: table', '    name: ' + y(m.name || 'Matrix'), '    order:', '      - file.name', '      - note.author', ...keys.map(k => '      - note.' + k));
+  B.push('views:', '  - type: table', '    name: ' + y(m.name || 'Matrix'), '    order:', '      - file.name', '      - note.author', ...info.map(x => '      - note.' + infoKey(x)), ...keys.map(k => '      - note.' + k));
   root.file(folder + '.base', B.join('\n') + '\n');
   saveBlob(await zip.generateAsync({ type: 'blob' }), file + ' (Obsidian).zip');
   toast('Unpack the zip into your vault and open the .base file');
