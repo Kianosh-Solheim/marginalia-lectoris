@@ -15,6 +15,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -47,7 +49,9 @@ object Dictation {
         val percent: Int = 0,
         val language: String = "no",
         /** The text is being written by an online service. */
-        val online: Boolean = false
+        val online: Boolean = false,
+        /** Where the time went in the last dictation (JSON), for the line shown after it. */
+        val timing: String = ""
     )
 
     val state = MutableStateFlow(State())
@@ -58,6 +62,9 @@ object Dictation {
 
     @Volatile private var stopFlag = false
     @Volatile private var cancelFlag = false
+    @Volatile private var stopAt = 0L
+    /** Some services refuse the "no thinking" request; remembered so it is asked only once. */
+    @Volatile private var geminiPlain = false
 
     // The loaded model is kept for a few minutes, so a second dictation starts at once.
     private val whisperLock = Any()
@@ -80,8 +87,16 @@ object Dictation {
     /** The speech model asked of an OpenAI-compatible service; blank: the usual one. */
     fun speechModel(context: Context): String = prefs(context).getString("speechModel", "").orEmpty().trim()
 
-    fun saveSettings(context: Context, mode: String?, service: String?, fast: Boolean?, speechModel: String?) {
+    /** Online: write in pieces while you talk (at each pause), so little is left when you stop. */
+    fun stream(context: Context): Boolean = prefs(context).getBoolean("stream", true)
+    /** After stop, go over the whole recording once more and replace the pieces with that text. */
+    fun polish(context: Context): Boolean = prefs(context).getBoolean("polish", false)
+
+    fun saveSettings(context: Context, mode: String?, service: String?, fast: Boolean?, speechModel: String?, stream: Boolean? = null, polish: Boolean? = null) {
+        fixed = null
         val e = prefs(context).edit()
+        if (stream != null) e.putBoolean("stream", stream)
+        if (polish != null) e.putBoolean("polish", polish)
         if (mode != null) e.putString("mode", mode)
         if (service != null) e.putString("service", service)
         if (fast != null) e.putBoolean("fast", fast)
@@ -102,7 +117,7 @@ object Dictation {
     }
 
     /** The ElevenLabs key: saved encrypted beside the AI keys, never in backups. A blank [key] removes it. */
-    fun saveElevenLabsKey(context: Context, key: String) = AiPreferences(context).saveSecret(ELEVENLABS, key.trim())
+    fun saveElevenLabsKey(context: Context, key: String) { fixed = null; AiPreferences(context).saveSecret(ELEVENLABS, key.trim()) }
     fun elevenLabsKeyHint(context: Context): String =
         runCatching { AiPreferences(context).let { if (it.hasSecret(ELEVENLABS)) it.readSecret(ELEVENLABS).trim().takeLast(4) else "" } }.getOrDefault("")
 
@@ -139,20 +154,17 @@ object Dictation {
 
     private fun busy(): Boolean = state.value.phase.let { it == Phase.RECORDING || it == Phase.TRANSCRIBING || it == Phase.DOWNLOADING }
 
-    fun json(context: Context): JSONObject {
-        val s = state.value
-        return JSONObject()
-            .put("phase", s.phase.name.lowercase())
-            .put("level", s.level.toDouble())
-            .put("seconds", if (s.phase == Phase.RECORDING) ((System.currentTimeMillis() - s.startedAt) / 1000).toInt() else 0)
-            .put("text", s.text)
-            .put("error", s.error)
-            .put("percent", s.percent)
-            .put("language", s.language)
-            .put("writingOnline", s.online)
+    // What does not change while you talk (settings, keys, models) is worked out at most every few seconds:
+    // the browser asks five times a second, and reading keys means the key store each time.
+    @Volatile private var fixed: Pair<Long, JSONObject>? = null
+    private fun settingsJson(context: Context): JSONObject {
+        fixed?.let { if (System.currentTimeMillis() - it.first < 3000) return it.second }
+        val j = JSONObject()
             .put("mode", mode(context))
             .put("service", service(context))
             .put("fast", fast(context))
+            .put("stream", stream(context))
+            .put("polish", polish(context))
             .put("speechModel", speechModel(context))
             .put("online", goesOnline(context))
             .put("internet", NoteAiAssistant.isInternetAvailable(context))
@@ -164,6 +176,25 @@ object Dictation {
             .put("permission", hasPermission(context))
             .put("models", JSONObject().put("no", hasModel(context, "no")).put("en", hasModel(context, "en")))
             .put("modelMb", JSONObject().put("no", modelMegabytes(context, "no")).put("en", modelMegabytes(context, "en")))
+        fixed = System.currentTimeMillis() to j
+        return j
+    }
+
+    fun json(context: Context): JSONObject {
+        val s = state.value
+        val j = JSONObject()
+            .put("phase", s.phase.name.lowercase())
+            .put("level", s.level.toDouble())
+            .put("seconds", if (s.phase == Phase.RECORDING) ((System.currentTimeMillis() - s.startedAt) / 1000).toInt() else 0)
+            .put("text", s.text)
+            .put("error", s.error)
+            .put("percent", s.percent)
+            .put("language", s.language)
+            .put("writingOnline", s.online)
+        if (s.timing.isNotBlank()) runCatching { j.put("timing", JSONObject(s.timing)) }
+        val f = settingsJson(context)
+        f.keys().forEach { k -> j.put(k, f.get(k)) }
+        return j
     }
 
     /** Starts listening. Throws IllegalStateException with a message for the user when it cannot. */
@@ -191,13 +222,15 @@ object Dictation {
         if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) { rec.release(); throw IllegalStateException("The tablet's microphone is in use by something else.") }
         stopFlag = false
         cancelFlag = false
+        stopAt = 0L
+        fixed = null
         state.value = State(Phase.RECORDING, startedAt = System.currentTimeMillis(), language = l)
         val app = context.applicationContext
         scope.launch { capture(app, rec, l) }
     }
 
     /** Stops listening; the text follows (phase DONE). */
-    fun stop() { if (state.value.phase == Phase.RECORDING) stopFlag = true }
+    fun stop() { if (state.value.phase == Phase.RECORDING) { stopAt = System.currentTimeMillis(); stopFlag = true } }
 
     /** Drops what is being recorded or transcribed, and clears a finished text or an error. */
     fun cancel() {
@@ -209,22 +242,96 @@ object Dictation {
         }
     }
 
-    private fun capture(context: Context, rec: AudioRecord, language: String) {
-        val chunks = ArrayList<ShortArray>()
+    /** The whole recording in one go: online when [via] is given (falling back to the tablet's model when that fails in "auto"), else offline. */
+    private fun whole(context: Context, pcm: ShortArray, language: String, via: Service?): String {
+        fun offline(): String {
+            check(WhisperNative.available) { "Speech recognition is not part of this build of the app." }
+            check(hasModel(context, language)) { "The speech model is not on the tablet yet." }
+            // Whisper wants at least a second of sound; short dictations are padded with silence.
+            val samples = FloatArray(maxOf(pcm.size, RATE + RATE / 5))
+            for (i in pcm.indices) samples[i] = pcm[i] / 32768f
+            return transcribe(context, samples, language)
+        }
+        if (via == null) return offline()
+        return try {
+            transcribeOnline(context, pcm, language, via)
+        } catch (e: Throwable) {
+            if (cancelFlag || mode(context) != "auto" || !WhisperNative.available || !hasModel(context, language) || LocalWhisper.state.value.busy) throw e
+            Log.w("Dictation", "online failed, writing offline", e)
+            state.update { it.copy(online = false) }
+            offline()
+        }
+    }
+
+    private suspend fun capture(context: Context, rec: AudioRecord, language: String) {
+        val via = if (goesOnline(context)) provider(context) else null
+        val pieces = via != null && stream(context)
+        var all = ShortArray(RATE * 40)
         var total = 0
         var peak = 0
         val buf = ShortArray(RATE / 10)
+
+        // Pieces: at each pause what was just said is sent off, and the text grows while you talk.
+        val lock = Any()
+        val results = HashMap<Int, String>()
+        val jobs = ArrayList<Job>()
+        val failed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val took = java.util.Collections.synchronizedList(ArrayList<Long>())
+        var sent = 0
+        var from = 0          // where the present piece starts
+        var voiced = 0        // tenths of a second with speech in the present piece
+        var silent = 0        // tenths of a second of silence just now
+        var noise = 0.01      // how loud the room is when nobody talks
+
+        fun publish() {
+            if (cancelFlag) return
+            val text = synchronized(lock) {
+                val sb = StringBuilder()
+                var i = 0
+                while (results.containsKey(i)) { val t = results[i].orEmpty(); if (t.isNotBlank()) { if (sb.isNotEmpty()) sb.append(' '); sb.append(t) }; i++ }
+                sb.toString()
+            }
+            state.update { if (it.phase == Phase.RECORDING || it.phase == Phase.TRANSCRIBING) it.copy(text = text) else it }
+        }
+        fun send(a: Int, b: Int) {
+            val index = sent++
+            val pcm = all.copyOfRange(a, b)
+            val service = via ?: return
+            jobs += scope.launch {
+                val t0 = System.currentTimeMillis()
+                val text = try { transcribeOnline(context, pcm, language, service) } catch (e: Throwable) { Log.w("Dictation", "a piece failed", e); failed.set(true); "" }
+                took += System.currentTimeMillis() - t0
+                synchronized(lock) { results[index] = text }
+                publish()
+            }
+        }
+
         try {
             while (!stopFlag && !cancelFlag && total < MAX_SECONDS * RATE) {
                 val n = rec.read(buf, 0, buf.size)
                 if (n < 0) break
                 if (n == 0) continue
-                chunks += buf.copyOf(n)
+                if (total + n > all.size) all = all.copyOf(all.size * 2)
+                System.arraycopy(buf, 0, all, total, n)
                 total += n
                 var sum = 0.0
                 for (i in 0 until n) { val v = buf[i].toInt(); sum += v.toDouble() * v; val a = if (v < 0) -v else v; if (a > peak) peak = a }
                 val rms = Math.sqrt(sum / n) / 32768.0
-                state.value = state.value.copy(level = (rms * 8.0).coerceIn(0.0, 1.0).toFloat())
+                state.update { it.copy(level = (rms * 8.0).coerceIn(0.0, 1.0).toFloat()) }
+                if (!pieces || failed.get()) continue
+                val speech = rms > maxOf(0.006, noise * 2.5)
+                noise = if (rms < noise) (noise + rms) / 2 else minOf(0.05, noise * 1.01)
+                if (speech) { voiced++; silent = 0 } else silent++
+                val len = total - from
+                when {
+                    // a pause after something was said; or a long stretch, cut at the first breath; or simply too long
+                    (voiced >= 4 && silent >= 8 && len >= 2 * RATE) || (len >= 20 * RATE && silent >= 3) || len >= 28 * RATE -> {
+                        if (voiced >= 2) send(from, total)
+                        from = total; voiced = 0; silent = 0
+                    }
+                    // silence before anything is said is not sent along
+                    voiced == 0 && len > 3 * RATE -> from = total - RATE / 2
+                }
             }
         } catch (e: Throwable) {
             Log.w("Dictation", "recording failed", e)
@@ -232,6 +339,7 @@ object Dictation {
             runCatching { rec.stop() }
             runCatching { rec.release() }
         }
+        val released = System.currentTimeMillis()
         if (cancelFlag) { state.value = State(language = language); return }
         if (total < RATE / 2) { state.value = State(Phase.ERROR, error = "Nothing was recorded.", language = language); return }
         if (peak == 0) {
@@ -239,30 +347,37 @@ object Dictation {
                 error = "The tablet heard only silence. Android lets the app use the microphone only while Marginalia is open on the tablet's screen.")
             return
         }
-        val pcm = ShortArray(total)
-        var at = 0
-        for (c in chunks) { System.arraycopy(c, 0, pcm, at, c.size); at += c.size }
-        val via = if (goesOnline(context)) provider(context) else null
-        state.value = State(Phase.TRANSCRIBING, language = language, online = via != null)
+        state.update { it.copy(phase = Phase.TRANSCRIBING, level = 0f, online = via != null) }
         try {
-            fun offline(): String {
-                check(WhisperNative.available) { "Speech recognition is not part of this build of the app." }
-                check(hasModel(context, language)) { "The speech model is not on the tablet yet." }
-                // Whisper wants at least a second of sound; short dictations are padded with silence.
-                val samples = FloatArray(maxOf(total, RATE + RATE / 5))
-                for (i in 0 until total) samples[i] = pcm[i] / 32768f
-                return transcribe(context, samples, language)
+            var wholeMs = 0L
+            val text: String
+            if (pieces && !failed.get()) {
+                if (voiced >= 2 && total - from > RATE / 4) send(from, total)
+                jobs.joinAll()
+                if (failed.get() || polish(context)) {
+                    // A piece went wrong, or you asked for it: the whole recording once more, and that text replaces the pieces.
+                    val t0 = System.currentTimeMillis()
+                    text = whole(context, all.copyOf(total), language, via)
+                    wholeMs = System.currentTimeMillis() - t0
+                } else text = state.value.text
+            } else {
+                jobs.joinAll()
+                val t0 = System.currentTimeMillis()
+                text = whole(context, all.copyOf(total), language, via)
+                wholeMs = System.currentTimeMillis() - t0
             }
-            val text = if (via == null) offline() else try {
-                transcribeOnline(context, pcm, language, via)
-            } catch (e: Throwable) {
-                // "Online when there is internet": a service that fails falls back to the tablet's own model, when it has one.
-                if (cancelFlag || mode(context) != "auto" || !WhisperNative.available || !hasModel(context, language) || LocalWhisper.state.value.busy) throw e
-                Log.w("Dictation", "online failed, writing offline", e)
-                state.value = State(Phase.TRANSCRIBING, language = language, online = false)
-                offline()
-            }
-            state.value = if (cancelFlag) State(language = language) else State(Phase.DONE, text = text, language = language)
+            val done = System.currentTimeMillis()
+            val timing = JSONObject()
+                .put("service", if (state.value.online) via?.label ?: "" else "the tablet (offline)")
+                .put("spoken", total * 1000L / RATE)
+                .put("stopToMicFree", if (stopAt > 0) released - stopAt else 0)
+                .put("afterStop", if (stopAt > 0) done - stopAt else done - released)
+                .put("pieces", sent)
+                .put("pieceAvg", if (took.isEmpty()) 0L else took.sum() / took.size)
+                .put("pieceMax", took.maxOrNull() ?: 0L)
+                .put("whole", wholeMs)
+                .put("piecesFailed", failed.get())
+            state.value = if (cancelFlag) State(language = language) else State(Phase.DONE, text = text, language = language, online = state.value.online, timing = timing.toString())
         } catch (e: Throwable) {
             Log.w("Dictation", "transcription failed", e)
             state.value = if (cancelFlag) State(language = language)
@@ -346,12 +461,20 @@ object Dictation {
                 .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray()
                     .put(JSONObject().put("inline_data", JSONObject().put("mime_type", "audio/wav").put("data", android.util.Base64.encodeToString(sound, android.util.Base64.NO_WRAP))))
                     .put(JSONObject().put("text", prompt)))))
-                .put("generationConfig", JSONObject().put("temperature", 0))
-            val req = Request.Builder().url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
-                .header("x-goog-api-key", key).post(body.toString().toRequestBody("application/json".toMediaType())).build()
-            http.newCall(req).execute().use { r ->
-                val t = r.body?.string().orEmpty()
-                if (!r.isSuccessful) httpFault(provider.label, r.code, t)
+            fun ask(plain: Boolean): Pair<Int, String> {
+                // Transcribing needs no reasoning; without it the answer comes sooner.
+                val config = JSONObject().put("temperature", 0)
+                if (!plain) config.put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
+                body.put("generationConfig", config)
+                val req = Request.Builder().url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
+                    .header("x-goog-api-key", key).post(body.toString().toRequestBody("application/json".toMediaType())).build()
+                return http.newCall(req).execute().use { r -> r.code to r.body?.string().orEmpty() }
+            }
+            var answer = ask(geminiPlain)
+            if (answer.first == 400 && !geminiPlain) { geminiPlain = true; answer = ask(true) }
+            run {
+                val t = answer.second
+                if (answer.first !in 200..299) httpFault(provider.label, answer.first, t)
                 val parts = JSONObject(t).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts") ?: JSONArray()
                 return (0 until parts.length()).mapNotNull { parts.optJSONObject(it)?.takeUnless { p -> p.optBoolean("thought") }?.optString("text") }
                     .joinToString("").replace(Regex("\\s+"), " ").trim()

@@ -176,6 +176,8 @@ fun DictationSettingsSection() {
     var mode by remember { mutableStateOf(Dictation.mode(context)) }
     var service by remember { mutableStateOf(Dictation.service(context)) }
     var fast by remember { mutableStateOf(Dictation.fast(context)) }
+    var stream by remember { mutableStateOf(Dictation.stream(context)) }
+    var polish by remember { mutableStateOf(Dictation.polish(context)) }
     var able by remember { mutableStateOf(Dictation.services(context)) }
     var elevenKey by remember { mutableStateOf("") }
     var elevenHint by remember { mutableStateOf(Dictation.elevenLabsKeyHint(context)) }
@@ -198,6 +200,17 @@ fun DictationSettingsSection() {
             DictationChoice("Always offline", mode == "offline") { mode = "offline"; Dictation.saveSettings(context, "offline", null, null, null) }
         }
         Text("Online is quick, but the sound of what you say is sent to the service. Offline, nothing leaves the tablet.", fontSize = 12.sp, color = Color(0xFF3F3F46))
+
+        Text("WHEN THE TEXT IS WRITTEN (ONLINE)", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+        FlowRow {
+            DictationChoice("In pieces while I talk", stream) { stream = true; Dictation.saveSettings(context, null, null, null, null, stream = true) }
+            DictationChoice("All at once when I stop", !stream) { stream = false; Dictation.saveSettings(context, null, null, null, null, stream = false) }
+        }
+        FlowRow {
+            DictationChoice("Leave the pieces as they are", !polish) { polish = false; Dictation.saveSettings(context, null, null, null, null, polish = false) }
+            DictationChoice("Go over the whole once more after stop", polish) { polish = true; Dictation.saveSettings(context, null, null, null, null, polish = true) }
+        }
+        Text("In pieces: at each pause, what you just said is sent off, so little is left to wait for when you stop. Going over the whole once more gives better punctuation across the pauses, but you wait for it after stop.", fontSize = 12.sp, color = Color(0xFF3F3F46))
 
         Text("ONLINE SERVICE", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
         FlowRow {

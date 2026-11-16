@@ -8,19 +8,49 @@ const dictation = { active: null };   // { key, field, ui, phase, level, seconds
 const dictLang = () => (localGet('ml.dictLang', 'no') === 'en' ? 'en' : 'no');
 const DICT_MIC = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V22h2v-3.08A7 7 0 0 0 19 12h-2Z"/></svg>';
 
-/** Puts what was said into the field: at the cursor when the field has been used, else at the end. */
-function dictInsert(field, said, oneLine) {
-  let text = String(said || '').replace(/\s+/g, ' ').trim(); if (!text) return;
-  if (oneLine) text = text.replace(/[.。]$/, '');
-  const v = field.value, used = field._dictTouched;
-  const a = used && field.selectionStart != null ? field.selectionStart : v.length, b = used && field.selectionEnd != null ? field.selectionEnd : v.length;
-  const before = v.slice(0, a), after = v.slice(b);
-  const lead = before && !/\s$/.test(before) ? ' ' : '', trail = after && !/^\s/.test(after) ? ' ' : '';
-  field.value = before + lead + text + trail + after;
-  const pos = (before + lead + text).length;
-  field._dictTouched = true;
-  try { field.focus(); field.setSelectionRange(pos, pos); } catch (_) {}
-  field.dispatchEvent(new Event('input', { bubbles: true }));
+/**
+ * Shows the text of the running dictation in its field. It is called again and again while the text
+ * grows (and once more if the whole is rewritten at the end): the stretch it wrote before is replaced.
+ * The text starts at the cursor when the field has been used, else at the end.
+ */
+function dictApply(a, said, last) {
+  const f = a.field; if (!f || !f.isConnected) return;
+  let text = String(said || '').replace(/\s+/g, ' ').trim();
+  if (a.oneLine) text = text.replace(/[.。]$/, '');
+  if (text === (a.shown || '') && !last) return;
+  let v = f.value;
+  if (a.start == null) {
+    if (!text) return;
+    const used = f._dictTouched, s0 = used && f.selectionStart != null ? f.selectionStart : v.length, e0 = used && f.selectionEnd != null ? f.selectionEnd : v.length;
+    const before = v.slice(0, s0), after = v.slice(e0);
+    a.lead = before && !/\s$/.test(before) ? ' ' : ''; a.trail = after && !/^\s/.test(after) ? ' ' : '';
+    v = before + after; a.start = before.length; a.block = '';
+  }
+  if (text !== (a.shown || '')) {
+    if (v.slice(a.start, a.start + a.block.length) === a.block) {
+      const block = text ? a.lead + text + a.trail : '';
+      v = v.slice(0, a.start) + block + v.slice(a.start + a.block.length); a.block = block;
+    } else if (text.startsWith(a.shown || '')) {
+      // You have edited what was written so far: only what is new is added, at the end.
+      const more = text.slice((a.shown || '').length).trim(); if (more) v = v + (v && !/\s$/.test(v) ? ' ' : '') + more;
+      a.loose = true;
+    }
+    a.shown = text; f.value = v; f._dictTouched = true;
+    f.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  if (last || document.activeElement === f) { const pos = a.loose ? f.value.length : a.start + (a.block ? (a.lead + text).length : 0); try { if (last) f.focus(); f.setSelectionRange(pos, pos); } catch (_) {} }
+}
+
+/** After a dictation: where the time went. */
+function dictTiming(a, t) {
+  if (!t) return;
+  const sec = ms => (ms / 1000).toFixed(1) + ' s', mine = a.stopAt ? performance.now() - a.stopAt : 0;
+  const parts = [`Wait after stop: ${sec(mine || t.afterStop)}`, `tablet ${sec(t.afterStop)}`, `written by ${t.service}`];
+  if (t.pieces) parts.push(`${t.pieces} piece${t.pieces === 1 ? '' : 's'}, ${sec(t.pieceAvg)} each` + (t.pieceMax > t.pieceAvg * 1.5 ? ` (slowest ${sec(t.pieceMax)})` : ''));
+  if (t.whole) parts.push(`the whole in one go ${sec(t.whole)}`);
+  if (t.piecesFailed) parts.push('a piece failed, so the whole was written again');
+  dictation.last = parts.join(' · ');
+  toast(dictation.last, 9000);
 }
 
 function dictRelease() { const a = dictation.active; dictation.active = null; if (a && a.ui) a.ui.show(); }
@@ -35,14 +65,14 @@ async function dictPoll() {
   if (dictation.active !== a) return;
   if (st) {
     a.fails = 0;
-    if (st.phase === 'recording') { a.phase = 'rec'; a.level = st.level || 0; a.seconds = st.seconds || 0; }
-    else if (st.phase === 'transcribing') { a.phase = 'work'; a.online = !!st.writingOnline; }
-    else if (st.phase === 'done') { const f = a.field, said = st.text; dictRelease(); dictCancel(); if (said && said.trim()) { if (f && f.isConnected) dictInsert(f, said, a.oneLine); } else toast('No words were heard.'); return; }
+    if (st.phase === 'recording') { a.phase = a.stopAt ? 'work' : 'rec'; a.level = st.level || 0; a.seconds = st.seconds || 0; if (st.text) dictApply(a, st.text, false); }
+    else if (st.phase === 'transcribing') { a.phase = 'work'; a.online = !!st.writingOnline; if (st.text) dictApply(a, st.text, false); }
+    else if (st.phase === 'done') { const said = st.text; dictRelease(); dictCancel(); if ((said && said.trim()) || a.shown) { dictApply(a, said, true); dictTiming(a, st.timing); } else toast('No words were heard.'); return; }
     else if (st.phase === 'error') { dictRelease(); dictCancel(); modal((box, close) => box.append(h('h2', null, 'The dictation did not work'), h('p', null, st.error || 'Unknown fault.'), h('div', { class: 'foot' }, h('button', { class: 'btn fill', onclick: close }, 'Close')))); return; }
     else { dictRelease(); return; }   // idle: stopped from the tablet
     if (a.ui) a.ui.show();
   }
-  setTimeout(dictPoll, a.phase === 'rec' ? 180 : 500);
+  setTimeout(dictPoll, a.phase === 'rec' ? 180 : 150);
 }
 
 /** Asks before fetching the speech model (about 180 MB, once), then shows the download. */
@@ -101,7 +131,7 @@ function dictMic(field, opt = {}) {
   btn.addEventListener('mousedown', e => e.preventDefault());   // keep the cursor where it is in the field
   btn.addEventListener('click', async e => {
     e.preventDefault(); e.stopPropagation();
-    if (mine()) { if (dictation.active.phase === 'rec') { dictation.active.phase = 'work'; ui.show(); try { await api('dictation/stop', { method: 'POST', json: {} }); } catch (er) { fail(er); } } return; }
+    if (mine()) { if (dictation.active.phase === 'rec') { dictation.active.phase = 'work'; dictation.active.stopAt = performance.now(); ui.show(); try { await api('dictation/stop', { method: 'POST', json: {} }); } catch (er) { fail(er); } } return; }
     if (dictation.active) { toast('Another dictation is running. Stop it first.'); return; }
     const l = dictLang();
     let st; try { st = await api('dictation'); } catch (er) { return fail(er); }
@@ -146,6 +176,10 @@ function dictationSettingsSection() {
     body.append(
       h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Who writes the text'), h('div', { class: 'muted' }, 'Online is quick, but the sound of what you say is sent to the service. Offline, nothing leaves the tablet.')),
         h('div', null, pick(st.mode, [['auto', 'Online when the tablet has internet, otherwise offline'], ['online', 'Always online'], ['offline', 'Always offline']], v => save({ mode: v })), h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, now))),
+      h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'When the text is written (online)'), h('div', { class: 'muted' }, 'In pieces: at each pause, what you just said is sent off, so little is left to wait for when you stop. Going over the whole once more gives better punctuation across the pauses, but you wait for it after stop.')),
+        h('div', null, pick(st.stream ? 'pieces' : 'end', [['pieces', 'In pieces while I talk'], ['end', 'All at once when I stop']], v => save({ stream: v === 'pieces' })),
+          h('div', { style: { height: '6px' } }), pick(st.polish ? 'yes' : 'no', [['no', 'Leave the pieces as they are'], ['yes', 'Go over the whole once more after stop']], v => save({ polish: v === 'yes' })),
+          dictation.last ? h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, 'Last dictation — ' + dictation.last) : null)),
       h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Online service'), h('div', { class: 'muted' }, 'Only services with a saved API key are listed. Claude cannot write speech.')),
         pick(st.service, [['ai', `As under AI (${st.aiProvider || '—'})`], ...(st.providers || []).map(p => [p.id, p.label])], v => save({ service: v }))),
       h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Speech model at the service'), h('div', { class: 'muted' }, 'For OpenAI, Other and ElevenLabs, e.g. whisper-large-v3-turbo at Groq or scribe_v2 at ElevenLabs.')), sm),

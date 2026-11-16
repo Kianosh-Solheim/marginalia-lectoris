@@ -870,7 +870,9 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                         b.optString("mode").takeIf { it == "auto" || it == "online" || it == "offline" },
                         b.optString("service").takeIf { it == "ai" || it == "GEMINI" || it == "OPENAI" || it == "CUSTOM" || it == "ELEVENLABS" },
                         if (b.has("fast")) b.optBoolean("fast") else null,
-                        if (b.has("speechModel")) b.optString("speechModel") else null)
+                        if (b.has("speechModel")) b.optString("speechModel") else null,
+                        if (b.has("stream")) b.optBoolean("stream") else null,
+                        if (b.has("polish")) b.optBoolean("polish") else null)
                     else -> throw NoSuchElementException("No such action.")
                 }
             } catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "Dictation failed.") }
