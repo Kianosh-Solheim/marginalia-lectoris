@@ -1107,3 +1107,13 @@ kbd { font-family: var(--mono); font-size: 10px; border: 1px solid var(--rule2);
 .keysg { margin-top: 10px; }
 .keyrow { display: grid; grid-template-columns: 170px 1fr; gap: 10px; align-items: baseline; font-size: 14px; }
 html[data-theme="dark"] .palbox { box-shadow: 0 10px 40px rgba(0,0,0,.7); }
+
+/* Reader bar in groups: view · book · panels */
+.rbar .rgroup { border: 1px solid var(--rule); padding: 2px 4px; gap: 2px; }
+.rbar .rgroup .btn { border-color: transparent; padding: 4px 8px; }
+.rbar .rgroup .btn:hover { border-color: var(--ink); }
+.rbar .rsep { width: 1px; align-self: stretch; background: var(--rule); margin: 2px 2px; }
+.rseg { display: flex; }
+.rseg .btn { border-right-width: 0; }
+.rseg .btn:last-child { border-right-width: 1px; }
+@media (max-width: 900px) { .rbar { flex-wrap: wrap; } .rbar .rt { flex-basis: 40%; } }

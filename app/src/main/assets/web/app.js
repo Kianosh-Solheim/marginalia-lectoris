@@ -170,6 +170,7 @@ function route() {
     return;
   }
   lastRouteHash = location.hash || '#/';
+  window.paletteContext = null;   // the reader and others add what belongs to them
   if (EMBEDDED) tabReport();
   const hash = location.hash.replace(/^#\/?/, '');
   const [path, qs] = hash.split('?');
@@ -2858,10 +2859,14 @@ async function openReader(id, params) {
       if (!lside.hidden && !lside.firstChild && infoCtx) lside.append(infoPanel(infoCtx));
     } }, 'Info'),
     h('div', { class: 'rt' }, titleB, placeS),
+    // How it looks (text, type, zoom) · about the book · the side panels.
     zoomBox,
-    sideTabs.search = h('button', { class: 'btn', title: 'Search in this book (Ctrl/⌘-F)', onclick: () => toggleSide('search') }, 'Search'),
-    sideTabs.toc = h('button', { class: 'btn', onclick: () => toggleSide('toc') }, 'Contents'),
-    sideTabs.notes = h('button', { class: 'btn', onclick: () => toggleSide('notes') }, 'Notes'));
+    h('span', { class: 'rsep' }),
+    h('div', { class: 'rseg', title: 'The panel on the right' },
+      sideTabs.search = h('button', { class: 'btn', title: 'Search in this book (Ctrl/⌘-F)', onclick: () => toggleSide('search') }, 'Search'),
+      sideTabs.toc = h('button', { class: 'btn', title: 'The table of contents', onclick: () => toggleSide('toc') }, 'Contents'),
+      sideTabs.notes = h('button', { class: 'btn', title: 'Your notes in this book', onclick: () => toggleSide('notes') }, 'Notes')));
+  zoomBox.classList.add('rgroup');
   const readerRoot = h('div', { class: 'reader' }, bar, h('div', { class: 'rbody' }, lside, mainArea, side), status);
   app.append(readerRoot);
   applyReaderChrome(readerRoot);
@@ -2892,6 +2897,20 @@ async function openReader(id, params) {
     sideMode: () => sideMode,
     renderSide: null,
   };
+  // "Book": what belongs to the book itself rather than to how it is shown.
+  const bookItems = [
+    isPdf(d) ? ['Page numbers…', 'Say which printed page a PDF page is; the rest follows', () => { if (ctx.pageNumbers) ctx.pageNumbers(); else toast('The book is still opening'); }] : null,
+    ['Book page', 'Details, chapters and authors, files, citation', () => { location.hash = `#/book/${nav ? nav.id : d.id}`; }],
+    ['Its notes', 'This book in the Notes view: overview page, links, export', () => { location.hash = `#/notes/b/${d.id}`; }],
+    EMBEDDED ? ['Notes view to the side', 'Open this book’s notes in the other pane', () => parent.postMessage({ ml: 'open', hash: `#/notes/b/${d.id}`, side: true }, location.origin)] : null,
+    EMBEDDED ? ['Writing to the side', 'Open the writing documents in the other pane', () => parent.postMessage({ ml: 'open', hash: '#/writing', side: true }, location.origin)] : null,
+  ].filter(Boolean);
+  const bookMenu = menuButton('Book ▾', bookItems, 'btn');
+  bookMenu.classList.add('right');
+  bar.insertBefore(bookMenu, bar.querySelector('.rsep'));
+  window.paletteContext = [
+    ['Search in this book', 'Reader', () => toggleSide('search'), 'find'], ['Contents of this book', 'Reader', () => toggleSide('toc'), 'toc chapters'], ['Notes in this book', 'Reader', () => toggleSide('notes'), 'panel highlights'],
+  ].concat(bookItems.map(([t, sub, fn]) => [t.replace('…', '') + (t.startsWith('Page') ? ' of this book' : ' (this book)'), 'Reader', fn, sub]));
 
   function toggleSide(mode) {
     if (!side.hidden && sideMode === mode) { side.hidden = true; localSet('ml.side', '0'); }
@@ -3483,6 +3502,7 @@ async function openPdf(ctx, params) {
 
   let current = 1;
   const slider = h('input', { type: 'range', min: 1, max: n, value: 1 });
+  ctx.pageNumbers = () => pageNumbersDialog(d, current, n, labels && labels[current - 1], () => route());
   const where = h('span', { class: 'pagenos', title: 'Page numbers: say which printed page this is, and the rest follows', onclick: () => pageNumbersDialog(d, current, n, labels && labels[current - 1], () => route()) }, '');
   const chapterOf = p => { let t = ''; ctx.tocItems.forEach(x => { if (x.page <= p) t = x.title; }); return t; };
   function updatePlace() {
