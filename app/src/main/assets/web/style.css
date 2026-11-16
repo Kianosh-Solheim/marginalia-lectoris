@@ -1255,3 +1255,8 @@ table.mx td.mxinfo a { color: inherit; }
 td:hover .dictctl.mini, td:focus-within .dictctl.mini, .dictctl.mini.dlive, .wcmbox .dictctl.mini { opacity: 1; }
 .dictctl.mini .dmic { min-width: 22px; min-height: 22px; padding: 2px; }
 .dictctl.mini .dmic.dtalk, .dictctl.mini .dmic.dwork { padding: 2px 8px; }
+
+/* Dialogs can be dragged by their heading */
+.modal h2.grip { cursor: move; user-select: none; touch-action: none; }
+.scrim.moved { background: transparent; }
+.scrim.moved .modal { box-shadow: 0 8px 40px rgba(0, 0, 0, .45), 6px 6px 0 var(--ink); }

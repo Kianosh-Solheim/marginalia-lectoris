@@ -118,16 +118,52 @@ async function copyText(text, what = 'Copied') {
   }
 }
 
+/**
+ * A dialog can be dragged by its heading, to read what lies under it. Once it has been moved, the
+ * dimming goes away, the mouse wheel over the page scrolls the page, and a click beside the dialog
+ * no longer closes it (so a slip of the hand does not lose a note).
+ */
+function modalMovable(box, scrim) {
+  const grip = box.querySelector('h2'); if (!grip) return;
+  grip.classList.add('grip'); grip.title = 'Drag to move the window';
+  let x = 0, y = 0, from = null;
+  grip.addEventListener('pointerdown', e => {
+    if (e.button || e.target.closest('button, input, a, select')) return;
+    from = { px: e.clientX, py: e.clientY, x, y }; grip.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  grip.addEventListener('pointermove', e => {
+    if (!from) return;
+    const r0 = box.getBoundingClientRect();
+    let nx = from.x + e.clientX - from.px, ny = from.y + e.clientY - from.py;
+    // the heading stays within reach
+    nx += Math.max(0, 60 - (r0.right - x + nx)) - Math.max(0, (r0.left - x + nx) - (innerWidth - 60));
+    ny += Math.max(0, -(r0.top - y + ny)) - Math.max(0, (r0.top - y + ny) - (innerHeight - 50));
+    x = nx; y = ny; box.style.transform = `translate(${x}px, ${y}px)`;
+    scrim.classList.add('moved');
+  });
+  const drop = () => { from = null; };
+  grip.addEventListener('pointerup', drop); grip.addEventListener('pointercancel', drop);
+  grip.addEventListener('dblclick', () => { x = y = 0; box.style.transform = ''; scrim.classList.remove('moved'); });
+  scrim.addEventListener('wheel', e => {
+    if (e.target !== scrim || !scrim.classList.contains('moved')) return;
+    scrim.style.pointerEvents = 'none';
+    let el = document.elementFromPoint(e.clientX, e.clientY);
+    scrim.style.pointerEvents = '';
+    while (el && el !== document.documentElement) { const cs = getComputedStyle(el); if (/(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 2) break; el = el.parentElement; }
+    (el && el !== document.documentElement ? el : window).scrollBy(e.deltaX, e.deltaY);
+  }, { passive: true });
+}
 function modal(build, onClose) {
   const root = document.getElementById('modal-root');
   let closed = false;
   const close = () => { if (closed) return; closed = true; scrim.remove(); document.removeEventListener('keydown', onKey); if (onClose) onClose(); };
   const onKey = e => { if (e.key === 'Escape') close(); };
   const box = h('div', { class: 'modal', role: 'dialog' });
-  const scrim = h('div', { class: 'scrim', onmousedown: e => { if (e.target === scrim) close(); } }, box);
+  const scrim = h('div', { class: 'scrim', onmousedown: e => { if (e.target === scrim && !scrim.classList.contains('moved')) close(); } }, box);
   build(box, close);
   root.appendChild(scrim);
   document.addEventListener('keydown', onKey);
+  modalMovable(box, scrim);
   const first = box.querySelector('input, textarea');
   if (first) setTimeout(() => first.focus(), 30);
   return close;
@@ -235,6 +271,7 @@ function applyTheme() {
   let t = 'auto'; try { t = localStorage.getItem('ml.theme') || 'auto'; } catch (_) {}
   const dark = t === 'dark' || (t === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  try { pageThemeSync(); } catch (_) {}   // the book page follows, when it is set to
   return t;
 }
 applyTheme();
@@ -284,15 +321,26 @@ function header() {
     inLibrary ? h('div', { class: 'top-inner subnav' }, h('nav', { class: 'shelves' }, shelves.map(([k, label, href]) =>
       h('button', { class: state.tab === k ? 'on' : '', onclick: () => { location.hash = href; } }, label)))) : null);
 }
-/** Light, dark, or as the computer has it. */
+/** The two colour choices of this browser: the app (light / dark) and the book page. */
+function coloursControls(onChange) {
+  const box = h('div');
+  const draw = () => {
+    const cur = applyTheme(), page = pageThemeChoice();
+    clear(box).append(
+      h('div', { class: 'label', style: { marginBottom: '4px' } }, 'The app'),
+      h('div', { class: 'wnmodes' }, THEMES.map(([k, icon, label]) => h('button', { class: 'wnmode' + (k === cur ? ' on' : ''), onclick: () => { localSet('ml.theme', k); applyTheme(); draw(); onChange && onChange(); } }, h('b', null, icon + '  ' + label)))),
+      h('div', { class: 'label', style: { margin: '12px 0 4px' } }, 'The book page, when you read'),
+      h('div', { class: 'wnmodes' }, PAGE_THEMES.map(([k, label]) => h('button', { class: 'wnmode' + (k === page ? ' on' : ''), onclick: () => { setPageTheme(k); draw(); onChange && onChange(); } }, h('b', null, label)))),
+      h('div', { class: 'muted', style: { fontSize: '13px', marginTop: '8px' } }, '“Follows light / dark” makes the page black when the app is dark. Choose White or Cream to keep a light page in a dark app. These choices are kept in this browser; the tablet has its own under its reading settings.'));
+  };
+  draw();
+  return box;
+}
 function themeDialog() {
-  modal((box, close) => {
-    const cur = applyTheme();
-    box.append(h('h2', null, 'Colours'), h('div', { class: 'wnmodes' }, THEMES.map(([k, icon, label]) => h('button', { class: 'wnmode' + (k === cur ? ' on' : ''), onclick: () => {
-      try { localStorage.setItem('ml.theme', k); } catch (_) {} applyTheme(); close(); toast('Colours: ' + label, 1500);
-    } }, h('b', null, icon + '  ' + label)))), h('div', { class: 'muted', style: { fontSize: '13px' } }, 'The reader keeps its own theme (White, Cream, Black).'),
-      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Close')));
-  });
+  modal((box, close) => { box.append(h('h2', null, 'Colours'), coloursControls(), h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Close'))); });
+}
+function coloursSettingsSection() {
+  return h('section', { class: 'set-group', id: 'set-colours' }, h('h2', null, 'Colours (this browser)'), coloursControls());
 }
 
 // ------------------------------------------------------------------ recordings
@@ -1149,6 +1197,7 @@ function renderSettings(main, data) {
     g.fields.forEach(f => sec.appendChild(settingRow(f, data, main, save)));
     body.appendChild(sec);
   });
+  body.appendChild(coloursSettingsSection());
   body.appendChild(dictationSettingsSection());
   body.appendChild(notesExportSettingsSection());
   body.appendChild(searchSettingsSection());
@@ -3043,10 +3092,24 @@ function viewSwitch() {
   return box;
 }
 let rsSaveTimer = null, rsChangedAt = 0;
+// The colour of the book page belongs to this browser, not to the tablet (an e-ink screen wants its own).
+// 'AUTO' follows light/dark of the app; the tablet's own theme is kept aside and sent back untouched.
+let rsTabletTheme = 'WHITE';
+const PAGE_THEMES = [['AUTO', 'Follows light / dark'], ['WHITE', 'White'], ['CREAM', 'Cream'], ['DARK', 'Black']];
+function pageThemeChoice() { const v = localGet('ml.pageTheme', 'AUTO'); return PAGE_THEMES.some(t => t[0] === v) ? v : 'AUTO'; }
+function pageThemeNow() { const v = pageThemeChoice(); return v === 'AUTO' ? (document.documentElement.dataset.theme === 'dark' ? 'DARK' : 'WHITE') : v; }
+function pageThemeSync() {
+  const now = pageThemeNow(); if (RS.theme === now) return;
+  const before = Object.assign({}, RS); RS.theme = now;
+  rsListeners.forEach(fn => fn(RS, before));
+}
+function setPageTheme(v) { localSet('ml.pageTheme', v); pageThemeSync(); }
+window.addEventListener('storage', e => { if (e.key === 'ml.pageTheme') { try { pageThemeSync(); } catch (_) {} } });
+function rsFromTablet(o) { rsTabletTheme = o.theme || 'WHITE'; o.theme = pageThemeNow(); return o; }
 const rsListeners = new Set();
 
 async function loadReaderSettings() {
-  try { RS = Object.assign({}, RS_DEFAULTS, await api('reader-settings')); } catch (_) {}
+  try { RS = rsFromTablet(Object.assign({}, RS_DEFAULTS, await api('reader-settings'))); } catch (_) { RS.theme = pageThemeNow(); }
   return RS;
 }
 /** Changes settings here, applies them at once, and saves them on the tablet shortly after. */
@@ -3056,13 +3119,13 @@ function setReaderSettings(patch) {
   rsChangedAt = Date.now();
   rsListeners.forEach(fn => fn(RS, before));
   clearTimeout(rsSaveTimer);
-  rsSaveTimer = setTimeout(() => api('reader-settings', { method: 'PUT', json: RS }).catch(fail), 450);
+  rsSaveTimer = setTimeout(() => api('reader-settings', { method: 'PUT', json: Object.assign({}, RS, { theme: rsTabletTheme }) }).catch(fail), 450);
 }
 /** Picks up a change made on the tablet while the book is open here. */
 async function pollReaderSettings() {
   if (Date.now() - rsChangedAt < 4000) return;
   try {
-    const fresh = Object.assign({}, RS_DEFAULTS, await api('reader-settings'));
+    const fresh = rsFromTablet(Object.assign({}, RS_DEFAULTS, await api('reader-settings')));
     if (JSON.stringify(fresh) === JSON.stringify(RS) || Date.now() - rsChangedAt < 4000) return;
     const before = RS; RS = fresh;
     rsListeners.forEach(fn => fn(RS, before));
@@ -3089,9 +3152,9 @@ function readerSettingsButton(kind) {
     const own = !!RS.publisherStyles;
     const scroll = RS.viewMode === 'VERTICAL_SCROLL';
     pop.append(h('div', { class: 'rshead' }, h('b', null, 'Reading settings'), h('span', { class: 'muted' }, 'Shared with the tablet')));
-    pop.append(line('Theme', chips('theme', [['WHITE', 'White'], ['CREAM', 'Cream'], ['DARK', 'Black']])));
+    pop.append(line('Page colour', h('div', { class: 'row', style: { gap: '4px' } }, PAGE_THEMES.map(([v, label]) => h('button', { class: 'chip' + (pageThemeChoice() === v ? ' on' : ''), title: v === 'AUTO' ? 'Black when the app is dark, white when it is light' : '', onclick: () => { setPageTheme(v); draw(); } }, v === 'AUTO' ? 'Auto' : label))), 'For this browser only; the tablet keeps its own.'));
     if (kind !== 'epub') {
-      pop.append(h('div', { class: 'muted rsnote' }, 'PDFs keep their own pages; the theme tints them like on the tablet. Text settings apply to EPUBs.'));
+      pop.append(h('div', { class: 'muted rsnote' }, 'PDFs keep their own pages; Black turns them dark (pictures keep roughly their colours). Text settings apply to EPUBs.'));
       return;
     }
     const size = h('span', { class: 'mono', style: { minWidth: '44px', textAlign: 'center' } }, Math.round(RS.fontSizeSp) + ' pt');
@@ -3255,20 +3318,27 @@ function noteDialog(ctx, sel, color, onDone) {
     body.value = dr.userNotes || '';
     // The quotation can be tidied before it is saved (a stray page number, a running header).
     const quote = h('textarea', { class: 'quote quoteedit', rows: Math.min(10, Math.max(3, Math.ceil(sel.text.length / 90))), title: 'The quotation — you can edit it' }); quote.value = sel.text;
+    const pg = sel.pdf ? h('input', { value: dr.printed != null ? dr.printed : (sel.printed || ''), placeholder: 'e.g. 183 or 183–184', title: 'The page number printed in the book. Correct it here if it is wrong.', style: { maxWidth: '150px' } }) : null;
     const save = async () => {
       if (!quote.value.trim()) { toast('The quotation is empty'); return; }
-      try { await sel.save({ text: quote.value.trim(), title: t.value, userNotes: body.value, tags: g.value, colorHex: color }); tagCache = null; close(); toast('Note saved'); onDone(); }
+      try {
+        const r = await sel.save({ text: quote.value.trim(), title: t.value, userNotes: body.value, tags: g.value, colorHex: color });
+        // A printed page you corrected here is kept as yours (it is not renumbered later).
+        if (pg && r && r.id && pg.value.trim() !== (sel.printed || '').trim()) { try { Object.assign(r, await api(`highlight/${r.id}`, { method: 'PATCH', json: { printedPageLabel: pg.value.trim() } })); } catch (e) { fail(e); } }
+        tagCache = null; close(); toast('Note saved'); onDone();
+      }
       catch (e) { fail(e); }
     };
     // PDF: the quotation runs on to the next page. The note is put aside; you select the rest there.
     const onward = sel.pdf && ctx.goToPage ? h('button', { class: 'btn', title: 'The quotation continues on the next page: turn the page and select the rest. What you wrote here is kept.', onclick: () => {
-      close(); continueOnNextPage(ctx, sel, color, onDone, quote.value.trim(), { title: t.value, userNotes: body.value, tags: g.value });
+      close(); continueOnNextPage(ctx, sel, color, onDone, quote.value.trim(), { title: t.value, userNotes: body.value, tags: g.value });   // the printed pages are worked out anew for both pages
     } }, 'Continue on next page ›') : null;
     body.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); });
     linkComplete(body);
     box.append(h('h2', null, 'New note'), h('div', { class: 'fields' },
       quote,
       h('div', { class: 'label' }, sel.where || ''),
+      pg ? h('div', { class: 'row', style: { flexDirection: 'row', gap: '8px', alignItems: 'center' } }, h('span', { class: 'label' }, 'Printed page'), pg, h('span', { class: 'muted', style: { fontSize: '12px' } }, sel.printed ? 'Correct it if it is wrong.' : 'Not known — write it in if you like.')) : null,
       h('div', { class: 'dfield' }, h('span', { class: 'label' }, 'Title'), withMic(t, { oneLine: true })),
       h('div', { class: 'dfield' }, h('span', { class: 'label' }, 'Note'), withMic(body)),
       h('div', { class: 'tagwrap' }, h('span', { class: 'label' }, 'Tags'), g._widget),
@@ -3663,6 +3733,7 @@ async function openPdf(ctx, params) {
         text: fullText, draft: cont ? cont.draft : null, pdf: true, lastPage: b,
         pageRef: printedOk(lab) && lab !== String(a) ? (b > a && printedOk(labB) ? `${lab}–${labB}` : lab) : (b > a ? `${a}–${b}` : String(a)),
         where: `${chapterOf(a) ? chapterOf(a) + ' · ' : ''}PDF page ${a}${b > a ? '–' + b : ''}`,
+        printed: printedOk(lab) ? (b > a && printedOk(labB) ? `${lab}–${labB}` : lab) : '',
         loc: { page: a, chapter: chapterOf(a) },
         save: async extra => {
           const r = await api(`doc/${d.id}/highlights`, { method: 'POST', json: Object.assign({ text: fullText, page: a, endPage: b, chapter: chapterOf(a), printedLabel: lab && /\d|^[ivxlc]+$/i.test(lab) && lab !== String(a) ? lab : '' }, extra) });
