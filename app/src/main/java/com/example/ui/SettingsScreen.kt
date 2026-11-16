@@ -215,6 +215,8 @@ fun SettingsScreen(
 
             AiSettingsSection()
 
+            DictationSettingsSection()
+
             CitationSettingsSection()
 
             BackupSettingsSection()

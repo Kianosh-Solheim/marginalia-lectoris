@@ -8,11 +8,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
@@ -60,7 +66,7 @@ fun DictationMic(onText: (String) -> Unit, modifier: Modifier = Modifier) {
         try { Dictation.start(context, lang); mine = true; mineNow[0] = true }
         catch (e: IllegalStateException) { say(e.message) }
     }
-    fun wanted() { if (Dictation.hasModel(context, lang)) begin() else askModel = true }
+    fun wanted() { if (Dictation.goesOnline(context) || Dictation.hasModel(context, lang)) begin() else askModel = true }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) wanted() else say("Dictation needs the microphone. Allow it in Android's app settings.")
@@ -130,7 +136,7 @@ fun DictationMic(onText: (String) -> Unit, modifier: Modifier = Modifier) {
             onDismissRequest = { askModel = false },
             containerColor = Color.White,
             title = { Text("Download the speech model?") },
-            text = { Text("Dictation in ${if (lang == "en") "English" else "Norwegian"} needs a speech model on the tablet: about 180 MB, downloaded once. After that it works without the internet. Tap the microphone again when the download has finished.") },
+            text = { Text("Dictation in ${if (lang == "en") "English" else "Norwegian"} needs a speech model on the tablet when it is written offline: about ${Dictation.modelMegabytes(context, lang)} MB, downloaded once. After that it works without the internet. Tap the microphone again when the download has finished.") },
             confirmButton = {
                 TextButton(onClick = {
                     askModel = false
@@ -139,5 +145,71 @@ fun DictationMic(onText: (String) -> Unit, modifier: Modifier = Modifier) {
             },
             dismissButton = { TextButton(onClick = { askModel = false }) { Text("Not now", color = Color.Black) } }
         )
+    }
+}
+
+
+/** One of a few choices in Settings → Dictation; the chosen one is black. */
+@Composable
+private fun DictationChoice(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text = label,
+        fontSize = 13.sp,
+        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        color = if (selected) Color.White else Color.Black,
+        modifier = Modifier
+            .padding(end = 6.dp, bottom = 6.dp)
+            .background(if (selected) Color.Black else Color.White)
+            .border(1.dp, Color.Black)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 7.dp)
+    )
+}
+
+/** Settings → Dictation: who writes what is said, and with which offline model. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun DictationSettingsSection() {
+    val context = LocalContext.current
+    var mode by remember { mutableStateOf(Dictation.mode(context)) }
+    var service by remember { mutableStateOf(Dictation.service(context)) }
+    var fast by remember { mutableStateOf(Dictation.fast(context)) }
+    val able = remember { runCatching { com.example.reader.Transcripts.onlineProviders(context) }.getOrDefault(emptyList()) }
+    val aiLabel = remember { runCatching { com.example.reader.AiPreferences(context).load().provider.label }.getOrDefault("") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.5.dp, Color.Black, RoundedCornerShape(4.dp))
+            .padding(14.dp)
+    ) {
+        Text("Dictation", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color.Black)
+        Text("The microphone beside a title or a note: the tablet listens, and the text is written when you stop.", fontSize = 12.sp, color = Color(0xFF3F3F46))
+
+        Text("WHO WRITES THE TEXT", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+        FlowRow {
+            DictationChoice("Online when there is internet", mode == "auto") { mode = "auto"; Dictation.saveSettings(context, "auto", null, null, null) }
+            DictationChoice("Always online", mode == "online") { mode = "online"; Dictation.saveSettings(context, "online", null, null, null) }
+            DictationChoice("Always offline", mode == "offline") { mode = "offline"; Dictation.saveSettings(context, "offline", null, null, null) }
+        }
+        Text("Online is quick, but the sound of what you say is sent to the service. Offline, nothing leaves the tablet.", fontSize = 12.sp, color = Color(0xFF3F3F46))
+
+        Text("ONLINE SERVICE", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+        FlowRow {
+            DictationChoice("As under AI ($aiLabel)", service == "ai") { service = "ai"; Dictation.saveSettings(context, null, "ai", null, null) }
+            able.forEach { p -> DictationChoice(p.label, service == p.name) { service = p.name; Dictation.saveSettings(context, null, p.name, null, null) } }
+        }
+        Text(
+            if (able.isEmpty()) "No service has an API key yet (Gemini, OpenAI or Other, under AI above). Until then dictation is written offline."
+            else "Only services with a saved API key are listed. Claude cannot write speech; with Claude chosen under AI, the first of these is used.",
+            fontSize = 12.sp, color = Color(0xFF3F3F46)
+        )
+
+        Text("OFFLINE MODEL", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+        FlowRow {
+            DictationChoice("Accurate (Small, about 180 MB)", !fast) { fast = false; Dictation.saveSettings(context, null, null, false, null) }
+            DictationChoice("Fast (Base, about 60 MB)", fast) { fast = true; Dictation.saveSettings(context, null, null, true, null) }
+        }
+        Text("Fast is several times quicker and makes more mistakes. Each model is downloaded once, when you first dictate with it.", fontSize = 12.sp, color = Color(0xFF3F3F46))
     }
 }

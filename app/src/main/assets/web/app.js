@@ -1149,6 +1149,7 @@ function renderSettings(main, data) {
     g.fields.forEach(f => sec.appendChild(settingRow(f, data, main, save)));
     body.appendChild(sec);
   });
+  body.appendChild(dictationSettingsSection());
   body.appendChild(notesExportSettingsSection());
   body.appendChild(searchSettingsSection());
   body.appendChild(zoteroSettingsSection());
