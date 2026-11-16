@@ -1503,7 +1503,7 @@ function renderShelf() {
   const toolbar = document.getElementById('toolbar'), tagbar = document.getElementById('tagbar');
   const docs = filteredDocs();
 
-  clear(toolbar).append(
+  clear(toolbar).append(...[
     h('div', { class: 'label' }, `${docs.length} of ${state.docs.filter(d => !d.inFolder).length}`),
     h('button', { class: 'btn', onclick: () => newFolderBook() , title: 'One book made of several files, one per chapter' }, '+ New folder book'),
     h('div', { class: 'spacer' }),
@@ -1520,7 +1520,7 @@ function renderShelf() {
     h('button', { class: 'chip' + (state.view === 'grid' ? ' on' : ''), onclick: () => { state.view = 'grid'; localSet('ml.view', 'grid'); renderShelf(); } }, 'Covers'),
     h('button', { class: 'chip' + (state.view === 'list' ? ' on' : ''), onclick: () => { state.view = 'list'; localSet('ml.view', 'list'); renderShelf(); } }, 'List'),
     h('button', { class: 'chip' + (state.view === 'table' ? ' on' : ''), title: 'A table with columns and an item panel, as in Zotero', onclick: () => { state.view = 'table'; localSet('ml.view', 'table'); renderShelf(); } }, 'Details')
-  );
+  ].filter(Boolean));
 
   const counts = {};
   state.docs.forEach(d => splitTags(d.tags).forEach(t => { const k = t.toLowerCase(); counts[k] = counts[k] || [t, 0]; counts[k][1]++; }));

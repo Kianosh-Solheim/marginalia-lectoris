@@ -54,21 +54,32 @@ function openPalette() {
       actions.slice(0, 12).forEach(a => out.push(Object.assign({ s: 0 }, a)));
     } else {
       push(actions.map(a => Object.assign({ s: score(a.hay, a.title, terms) + 1 }, a)).map(a => { if (a.s < 1) a.s = -1; return a; }), 5);
-      push(data.books.map(d => bookItem(d, score(norm([d.title, d.author, d.tags].join(' ')), d.title, terms))), 8);
+      push(data.books.map(d => bookItem(d, score(norm([d.title, d.author, d.displayAuthor, d.tags, abstractOf(d)].join(' ')), d.title, terms))), 8);
       push(data.docs.map(d => ({ title: d.title, kind: 'Document', sub: `${d.words || 0} words`, s: score(norm(d.title), d.title, terms), run: () => { location.hash = '#/write/' + encodeURIComponent(d.id); } })), 4);
       push(data.notes.map(n => ({ title: n.title || 'Untitled', kind: 'Note', sub: n.documentTitle || '', s: score(norm([n.title, n.tags, n.documentTitle].join(' ')), n.title || '', terms),
         run: () => { location.hash = '#/notes/n/' + n.id; } })), 8);
     }
     items = out; sel = 0; draw();
   };
-  const bookItem = (d, s) => ({ title: d.title, kind: d.category === 'ARTICLE' ? 'Article' : 'Book', sub: d.author || '', s,
+  const abstractOf = d => String(d.summary || (d.bib && d.bib.fields && (d.bib.fields.ABSTRACT || d.bib.fields.abstract)) || '').replace(/\s+/g, ' ').trim();
+  const bookItem = (d, s) => ({ title: d.title, kind: d.category === 'ARTICLE' ? 'Article' : 'Book', sub: d.displayAuthor || d.author || '', s, doc: d, more: abstractOf(d),
     run: e => { location.hash = canRead(d) && !(e && e.ctrlKey) ? `#/read/${d.id}` : `#/book/${d.id}`; } });
   const draw = () => {
     clear(list);
     if (!items.length) { list.append(h('div', { class: 'palnone muted' }, 'Nothing found.')); return; }
     items.forEach((it, i) => {
-      const row = h('div', { class: 'palrow' + (i === sel ? ' on' : ''), onclick: e => { close(); it.run(e); } },
-        h('span', { class: 'palt' }, it.title), it.sub ? h('span', { class: 'pals muted' }, it.sub) : null, h('span', { class: 'palk' }, it.kind));
+      // A book or article shows its cover and the start of its abstract.
+      let cover = null;
+      if (it.doc) {
+        cover = h('span', { class: 'palcover' });
+        if (!it.doc.placeholder) { const img = h('img', { src: coverUrl(it.doc), alt: '', loading: 'lazy' }); img.addEventListener('error', () => img.remove()); cover.append(img); }
+      }
+      const row = h('div', { class: 'palrow' + (i === sel ? ' on' : '') + (it.doc ? ' book' : ''), onclick: e => { close(); it.run(e); } }, ...[
+        cover,
+        it.doc ? h('span', { class: 'palmain' }, h('span', { class: 'palline' }, h('span', { class: 'palt' }, it.title), it.sub ? h('span', { class: 'pals muted' }, it.sub) : null),
+            it.more ? h('span', { class: 'palmore muted' }, it.more.slice(0, 260)) : null)
+          : h('span', { class: 'palline' }, h('span', { class: 'palt' }, it.title), it.sub ? h('span', { class: 'pals muted' }, it.sub) : null),
+        h('span', { class: 'palk' }, it.kind)].filter(Boolean));
       row.addEventListener('mousemove', () => { if (sel !== i) { sel = i; list.querySelectorAll('.palrow').forEach((r, k) => r.classList.toggle('on', k === sel)); } });
       list.append(row);
     });
