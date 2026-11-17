@@ -15,6 +15,7 @@ const DICT_MIC = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="t
  */
 function dictApply(a, said, last) {
   const f = a.field; if (!f || !f.isConnected) return;
+  if (f.dictApply) return f.dictApply(a, said, last);   // the writing program's editor
   let text = String(said || '').replace(/\s+/g, ' ').trim();
   if (a.oneLine) text = text.replace(/[.。]$/, '');
   if (text === (a.shown || '') && !last) return;
@@ -41,6 +42,54 @@ function dictApply(a, said, last) {
   if (last || document.activeElement === f) { const pos = a.loose ? f.value.length : a.start + (a.block ? (a.lead + text).length : 0); try { if (last) f.focus(); f.setSelectionRange(pos, pos); } catch (_) {} }
 }
 
+/**
+ * The writing program's editor as a place to dictate into: the text appears at the cursor and grows
+ * while you talk. Edits elsewhere in the document meanwhile are fine; the place moves with them.
+ */
+function editorDictTarget(editor) {
+  let from = null, to = null, block = '', lead = '', hooked = false;
+  const follow = ({ transaction }) => { if (from == null || transaction.getMeta('dictation')) return; from = transaction.mapping.map(from, -1); to = transaction.mapping.map(to, 1); };
+  const t = {
+    get isConnected() { return !editor.isDestroyed && editor.view.dom.isConnected; },
+    addEventListener() {},
+    reset() { from = to = null; block = lead = ''; if (hooked) { editor.off('transaction', follow); hooked = false; } },
+    dictApply(a, said, last) {
+      const text = String(said || '').replace(/\s+/g, ' ').trim();
+      const view = editor.view;
+      if (from == null) {
+        if (!text) { if (last) t.reset(); return; }
+        const sel = editor.state.selection; from = sel.from; to = sel.to;
+        const $f = editor.state.doc.resolve(from), $t = editor.state.doc.resolve(to);
+        const before = $f.parent.textBetween(0, $f.parentOffset, '', ' '), after = $t.parent.textBetween($t.parentOffset, $t.parent.content.size, '', ' ');
+        lead = before && !/\s$/.test(before) ? ' ' : '';
+        t.trail = after && !/^[\s.,;:!?)\]]/.test(after) ? ' ' : '';
+        if (to > from) { const tr = editor.state.tr.delete(from, to).setMeta('dictation', true); view.dispatch(tr); to = from; }
+        block = ''; editor.on('transaction', follow); hooked = true;
+      }
+      if (text !== (a.shown || '')) {
+        const now = editor.state.doc.textBetween(from, to, '\n', ' ');
+        if (now === block) {
+          const next = text ? lead + text + t.trail : '';
+          const tr = editor.state.tr.setMeta('dictation', true);
+          if (next) tr.insertText(next, from, to); else tr.delete(from, to);
+          view.dispatch(tr); to = from + next.length; block = next;
+        } else if (text.startsWith(a.shown || '')) {
+          // You changed what was written so far: only what is new is added, after it.
+          const more = text.slice((a.shown || '').length).trim();
+          if (more) { const at = to; const tr = editor.state.tr.insertText(' ' + more, at).setMeta('dictation', true); view.dispatch(tr); to = at + more.length + 1; block = editor.state.doc.textBetween(from, to, '\n', ' '); }
+        }
+        a.shown = text;
+      }
+      if (last) {
+        const end = Math.min(to - (block.endsWith(t.trail) ? t.trail.length : 0), editor.state.doc.content.size);
+        try { editor.chain().focus().setTextSelection(end).run(); } catch (_) {}
+        t.reset();
+      }
+    },
+  };
+  return t;
+}
+
 /** After a dictation: where the time went. */
 function dictTiming(a, t) {
   if (!t) return;
@@ -53,7 +102,7 @@ function dictTiming(a, t) {
   toast(dictation.last, 9000);
 }
 
-function dictRelease() { const a = dictation.active; dictation.active = null; if (a && a.ui) a.ui.show(); }
+function dictRelease() { const a = dictation.active; dictation.active = null; if (a && a.ui) a.ui.show(); if (a && a.field && a.field.reset && !a.shown) a.field.reset(); }
 async function dictCancel() { try { await api('dictation/cancel', { method: 'POST', json: {} }); } catch (_) {} }
 
 async function dictPoll() {
@@ -68,8 +117,8 @@ async function dictPoll() {
     if (st.phase === 'recording') { a.phase = a.stopAt ? 'work' : 'rec'; a.level = st.level || 0; a.seconds = st.seconds || 0; if (st.text) dictApply(a, st.text, false); }
     else if (st.phase === 'transcribing') { a.phase = 'work'; a.online = !!st.writingOnline; if (st.text) dictApply(a, st.text, false); }
     else if (st.phase === 'done') { const said = st.text; dictRelease(); dictCancel(); if ((said && said.trim()) || a.shown) { dictApply(a, said, true); dictTiming(a, st.timing); } else toast('No words were heard.'); return; }
-    else if (st.phase === 'error') { dictRelease(); dictCancel(); modal((box, close) => box.append(h('h2', null, 'The dictation did not work'), h('p', null, st.error || 'Unknown fault.'), h('div', { class: 'foot' }, h('button', { class: 'btn fill', onclick: close }, 'Close')))); return; }
-    else { dictRelease(); return; }   // idle: stopped from the tablet
+    else if (st.phase === 'error') { dictRelease(); dictCancel(); if (a.field && a.field.reset) a.field.reset(); modal((box, close) => box.append(h('h2', null, 'The dictation did not work'), h('p', null, st.error || 'Unknown fault.'), h('div', { class: 'foot' }, h('button', { class: 'btn fill', onclick: close }, 'Close')))); return; }
+    else { dictRelease(); if (a.field && a.field.reset) a.field.reset(); return; }   // idle: stopped from the tablet
     if (a.ui) a.ui.show();
   }
   setTimeout(dictPoll, a.phase === 'rec' ? 180 : 150);

@@ -1260,3 +1260,6 @@ td:hover .dictctl.mini, td:focus-within .dictctl.mini, .dictctl.mini.dlive, .wcm
 .modal h2.grip { cursor: move; user-select: none; touch-action: none; }
 .scrim.moved { background: transparent; }
 .scrim.moved .modal { box-shadow: 0 8px 40px rgba(0, 0, 0, .45), 6px 6px 0 var(--ink); }
+/* Dictation in the writing program's bar */
+.wdict { padding: 0 2px; }
+.wdict .dmic { min-height: 26px; }

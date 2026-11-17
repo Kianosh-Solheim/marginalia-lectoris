@@ -584,6 +584,8 @@ async function showWriter(id, params) {
   const styleBtn = h('button', { class: 'tb wstylebtn', title: 'Citation style and language', onmousedown: e => e.preventDefault(), onclick: () => citing.pickStyle() }, '❝ Style: …');
   const linksBtn = toolbarButton('⇄ Links → citations', 'Turn the Zotero links of an imported text (from Google Docs) into live citations', () => citing.convertLinks(editor));
   linksBtn.hidden = true;
+  // Dictation: the microphone in the bar writes what you say at the cursor (Ctrl+Alt+D starts and stops it).
+  const dictTarget = editorDictTarget(editor);
   const btns = [
     toolbarButton('↶', 'Undo (Ctrl+Z)', () => chain().undo().run()),
     toolbarButton('↷', 'Redo (Ctrl+Y)', () => chain().redo().run()),
@@ -622,9 +624,10 @@ async function showWriter(id, params) {
     toolbarButton('@ Keys', 'Show the citations as citation keys ([@tilly2017, p. 275]) or in the chosen style. Only how they look here changes; exports are not affected.', () => { citing.setShowKeys(editor, !citing.showKeys); refreshBar(); }, () => citing.showKeys),
     toolbarButton('Tx', 'Clear formatting', () => chain().unsetAllMarks().clearNodes().run()),
     toolbarButton('☰ Outline', 'The headings of the document in a panel: click to go there, drag to move a section (Ctrl+Alt+O)', () => outlineP.toggle(), () => outlineP && outlineP.isOpen()),
+    dictMic(dictTarget, { key: 'writer:' + id, cls: 'wdict' }),
   ];
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
-  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 20, 22]]];
+  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 20, 22]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
@@ -715,6 +718,7 @@ async function showWriter(id, params) {
     if (e.ctrlKey && e.altKey && (e.key === 'e' || e.key === 'E' || e.code === 'KeyE')) { e.preventDefault(); mathDialog(editor, null); }
     if (e.ctrlKey && e.altKey && (e.key === 'm' || e.key === 'M' || e.code === 'KeyM')) { e.preventDefault(); commenting.add(); }
     if (e.ctrlKey && e.altKey && (e.key === 'o' || e.key === 'O' || e.code === 'KeyO')) { e.preventDefault(); outlineP.toggle(); }
+    if (e.ctrlKey && e.altKey && e.code === 'KeyD') { e.preventDefault(); const mic = bar.querySelector('.wdict .dmic'); if (mic) mic.click(); }
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }
   };
   document.addEventListener('keydown', onKey);
