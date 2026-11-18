@@ -16,6 +16,7 @@ const STYLE_SETS = [
   ['conventions', 'British conventions', 'per cent, towards, single quotation marks, 18 November 2026, Mr', '#2563eb'],
   ['register', 'Formal register', 'no contractions; no “a lot of”, “figure out”, “pretty good”', '#b45309'],
   ['own', 'Your own rules', 'pairs you add below', '#7c3aed'],
+  ['lexicon', 'Your lexicon', 'your words in place of the everyday ones they stand for (“Use instead of”)', '#0e7490'],
   ['ai', 'AI check', 'only when you press the button', '#15803d'],
 ];
 const styleColour = set => (STYLE_SETS.find(s => s[0] === set) || [])[3] || '#888';
@@ -154,6 +155,12 @@ function quotedSpans(t) {
 function styleFindings(doc, o) {
   const out = [], words = styleWords(), phrases = phraseRules(o);
   const ignoreWords = new Set((o.ignore || []).map(w => w.toLowerCase()));
+  // Your lexicon: each word's "Use instead of" list
+  const lex = [];
+  (o.lexicon || []).forEach(w => String(w.insteadOf || '').split(/[,;]/).map(x => x.trim()).filter(x => x && x.toLowerCase() !== String(w.word).toLowerCase()).forEach(x => {
+    const esc = x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    lex.push({ re: new RegExp('(?<![\\p{L}\\p{N}])' + esc + '(?![\\p{L}\\p{N}])', 'giu'), to: w.word, why: 'From your lexicon' + (w.definition ? ': ' + w.definition.slice(0, 140) : '') });
+  }));
   const own = (o.rules || []).filter(r => r && r.from && r.from.trim()).map(r => {
     const f = r.from.trim(), esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return { re: new RegExp((/^\p{L}/u.test(f) ? '(?<![\\p{L}\\p{N}])' : '') + esc + (/\p{L}$/u.test(f) ? '(?![\\p{L}\\p{N}])' : ''), 'giu'), to: r.to || '', why: r.why || 'Your own rule' };
@@ -224,6 +231,10 @@ function styleFindings(doc, o) {
         add('conventions', a, b, '‘' + inner + '’', 'British: single quotation marks (double ones inside them)', [[at[a], at[a + 1], '‘'], [at[b - 1], at[b], '’']]);
       }
     }
+    if (S.lexicon !== false) lex.forEach(r => {
+      r.re.lastIndex = 0; let m;
+      while ((m = r.re.exec(text))) { const a = m.index, b = a + m[0].length; if (!inQuote(a, b)) add('lexicon', a, b, keepCase(m[0], r.to), r.why); }
+    });
     if (S.own) own.forEach(r => {
       r.re.lastIndex = 0; let m;
       while ((m = r.re.exec(text))) { const a = m.index, b = a + m[0].length; if (!inQuote(a, b)) add('own', a, b, keepCase(m[0], r.to), r.why); }
@@ -253,7 +264,10 @@ class StyleChecker {
     const s = settings && typeof settings === 'object' ? settings : {};
     this.off = !!s.off;
     this.ignored = new Set(Array.isArray(s.ignored) ? s.ignored : []);
-    this.prefs = { sets: { spelling: true, conventions: true, register: true, own: true }, whilst: false, rules: [], ignore: [] };
+    this.prefs = { sets: { spelling: true, conventions: true, register: true, own: true, lexicon: true }, whilst: false, rules: [], ignore: [] };
+    this.lexicon = [];
+    this.onLex = () => this.loadLexicon();
+    window.addEventListener('ml-lexicon', this.onLex);
     this.found = []; this.ai = []; this.timer = 0; this.listeners = [];
     this.layer = h('div', { class: 'wstylelayer' });
     sheet.style.position = sheet.style.position || 'relative';
@@ -273,13 +287,14 @@ class StyleChecker {
   }
   async load() {
     try { const all = await api('note-pages'); const p = all && all._style; if (p) this.prefs = Object.assign(this.prefs, p, { sets: Object.assign({}, this.prefs.sets, p.sets || {}) }); } catch (_) {}
-    this.check();
+    await this.loadLexicon(true);
   }
+  async loadLexicon(quiet) { try { this.lexicon = (typeof lexWords === 'function') ? await lexWords(true) : []; } catch (_) { this.lexicon = []; } this.check(); }
   savePrefs() { api('note-pages', { method: 'PUT', json: { key: '_style', page: this.prefs } }).catch(fail); }
   settings() { return { off: this.off, ignored: [...this.ignored].slice(-600) }; }
   subscribe(fn) { this.listeners.push(fn); }
   emit() { this.listeners.forEach(fn => { try { fn(); } catch (_) {} }); }
-  destroy() { window.removeEventListener('resize', this.onResize); this.layer.remove(); this.closePop(); }
+  destroy() { window.removeEventListener('ml-lexicon', this.onLex); window.removeEventListener('resize', this.onResize); this.layer.remove(); this.closePop(); }
 
   checkSoon() {
     clearTimeout(this.timer);
@@ -292,10 +307,11 @@ class StyleChecker {
     this.layer.classList.remove('stale');
     if (this.off) { this.found = []; this.paint(); this.emit(); return; }
     const doc = this.editor.state.doc;
-    this.found = styleFindings(doc, { sets: this.prefs.sets, whilst: this.prefs.whilst, rules: this.prefs.rules, ignore: this.prefs.ignore, ignored: this.ignored });
+    this.found = styleFindings(doc, { sets: this.prefs.sets, whilst: this.prefs.whilst, rules: this.prefs.rules, ignore: this.prefs.ignore, ignored: this.ignored, lexicon: this.lexicon });
     // AI findings: still where they were, with the same words?
     this.ai = this.ai.filter(f => f.to <= doc.content.size && doc.textBetween(f.from, f.to, '\n', '￼') === f.text && !this.ignored.has(f.key));
-    if (this.prefs.sets.ai !== false) this.found = styleOverlaps(this.found.concat(this.ai));
+    const aiOn = this.ai.filter(f => (f.set === 'ai' ? this.prefs.sets.ai : this.prefs.sets.lexicon) !== false);
+    if (aiOn.length) this.found = styleOverlaps(this.found.concat(aiOn));
     this.paint(); this.emit();
   }
   paintSoon() { cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(() => this.paint()); }
@@ -380,8 +396,8 @@ class StyleChecker {
         h('button', { class: 'btn fill', onclick: () => this.accept(f) }, 'Accept'),
         same > 1 ? h('button', { class: 'btn', onclick: () => this.acceptAllLike(f), title: 'Every place with the same word and suggestion' }, `Accept all ${same}`) : null,
         h('button', { class: 'btn', onclick: () => this.ignore(f) }, 'Ignore'),
-        f.set !== 'ai' ? h('button', { class: 'btn quiet', onclick: () => this.ignoreEverywhere(f), title: 'Never mark this word again, in any document' }, 'Ignore everywhere') : null,
-        f.set !== 'ai' && f.set !== 'own' ? h('button', { class: 'btn quiet', onclick: () => { this.closePop(); styleRuleDialog(this, f.text, ''); }, title: 'Make your own rule for this word' }, 'Own rule…') : null));
+        f.set !== 'ai' && f.set !== 'lexicon' ? h('button', { class: 'btn quiet', onclick: () => this.ignoreEverywhere(f), title: 'Never mark this word again, in any document' }, 'Ignore everywhere') : null,
+        f.set !== 'ai' && f.set !== 'own' && f.set !== 'lexicon' ? h('button', { class: 'btn quiet', onclick: () => { this.closePop(); styleRuleDialog(this, f.text, ''); }, title: 'Make your own rule for this word' }, 'Own rule…') : null));
     document.body.append(pop);
     const w = pop.offsetWidth, hgt = pop.offsetHeight;
     let left = Math.min(Math.max(8, c.left - 12), innerWidth - w - 8), top = c.bottom + 8;
@@ -393,7 +409,8 @@ class StyleChecker {
   }
 
   /** The AI check of [from, to] (a selection, the section around the cursor, or the whole document). */
-  async aiCheck(scope) {
+  async aiCheck(scope, kind, only) {
+    kind = kind === 'lexicon' ? 'lexicon' : 'ai';
     const ed = this.editor, doc = ed.state.doc;
     let from = 0, to = doc.content.size;
     if (scope === 'selection') { ({ from, to } = ed.state.selection); if (to <= from) return toast('Select some text first'); }
@@ -422,24 +439,29 @@ class StyleChecker {
     if (text.length > 14000) return toast('Too much text for one check. Select a part, or check the section around the cursor.');
     this.aiBusy = true; this.emit();
     try {
-      const r = await api('style-check', { method: 'POST', json: { text: text.replace(/￼/g, '[…]'), instructions: this.prefs.aiNote || '' } });
+      const r = kind === 'lexicon'
+        ? await api('lexicon/suggest', { method: 'POST', json: { text: text.replace(/￼/g, '[…]'), only: only || '' } })
+        : await api('style-check', { method: 'POST', json: { text: text.replace(/￼/g, '[…]'), instructions: this.prefs.aiNote || '' } });
       let n = 0;
-      (r.issues || []).forEach(x => {
+      (kind === 'lexicon' ? (r.suggestions || []) : (r.issues || [])).forEach(x => {
         const orig = String(x.original || '').replace(/\[…\]/g, '￼'); if (!orig || orig === x.suggestion) return;
         let i = text.indexOf(orig), hits = 0;
         while (i >= 0 && hits < 5) {
           const a = at[i], b = at[i + orig.length - 1];
           if (a >= 0 && b >= 0) {
-            const f = { set: 'ai', from: a, to: b + 1, text: doc.textBetween(a, b + 1, '\n', '￼'), sug: String(x.suggestion || '').replace(/\[…\]/g, ''), why: String(x.reason || '') };
-            f.key = 'ai|' + f.text + '|' + f.sug; f.edits = [[f.from, f.to, f.sug]];
-            if (f.text === orig && !this.ignored.has(f.key) && !this.ai.some(y => y.from === f.from && y.to === f.to)) { this.ai.push(f); n++; }
+            const lw = kind === 'lexicon' && x.word ? (this.lexicon.find(w => w.word.toLowerCase() === String(x.word).toLowerCase()) || null) : null;
+            const why = kind === 'lexicon' ? ['Your word “' + (x.word || '') + '”' + (lw && lw.definition ? ' — ' + lw.definition.slice(0, 120) : ''), String(x.reason || '')].filter(Boolean).join('. ') : String(x.reason || '');
+            const f = { set: kind, from: a, to: b + 1, text: doc.textBetween(a, b + 1, '\n', '￼'), sug: String(x.suggestion || '').replace(/\[…\]/g, ''), why };
+            f.key = kind + '|' + f.text + '|' + f.sug; f.edits = [[f.from, f.to, f.sug]];
+            if (f.text === orig && !this.ignored.has(f.key)) { if (!this.ai.some(y => y.from === f.from && y.to === f.to)) this.ai.push(f); n++; }
           }
           hits++; i = text.indexOf(orig, i + orig.length);
         }
       });
-      this.prefs.sets.ai = true;
+      this.prefs.sets[kind] = true;
       this.check();
-      toast(n ? `The AI marked ${n} place${n === 1 ? '' : 's'} (green underline)` : 'The AI found nothing to change', 3500);
+      if (kind === 'lexicon') toast(n ? `${n} place${n === 1 ? '' : 's'} for ${only ? '“' + only + '”' : 'your words'} (teal underline)` : (only ? `The AI found no good place for “${only}”` : 'The AI found no good place for your words'), 3500);
+      else toast(n ? `The AI marked ${n} place${n === 1 ? '' : 's'} (green underline)` : 'The AI found nothing to change', 3500);
     } catch (e) { fail(e); }
     this.aiBusy = false; this.emit();
   }
@@ -492,6 +514,12 @@ function stylePanel(checker, onToggle) {
         h('button', { class: 'btn', disabled: checker.aiBusy, onclick: () => checker.aiCheck('selection') }, 'Selection'),
         h('button', { class: 'btn', disabled: checker.aiBusy, onclick: () => checker.aiCheck('section') }, 'This section'),
         h('button', { class: 'btn', disabled: checker.aiBusy, onclick: () => checker.aiCheck('all') }, 'Whole text')),
+      h('div', { class: 'label', style: { marginTop: '10px' } }, 'Use my words (AI)'),
+      h('div', { class: 'muted', style: { fontSize: '12px', marginBottom: '6px' } }, 'Finds places where a word from your lexicon would fit. For one word: “Where?” in the lexicon panel.'),
+      h('div', { class: 'row', style: { gap: '4px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn', disabled: checker.aiBusy, onclick: () => checker.aiCheck('selection', 'lexicon') }, 'Selection'),
+        h('button', { class: 'btn', disabled: checker.aiBusy, onclick: () => checker.aiCheck('section', 'lexicon') }, 'This section'),
+        h('button', { class: 'btn', disabled: checker.aiBusy, onclick: () => checker.aiCheck('all', 'lexicon') }, 'Whole text')),
       checker.aiBusy ? h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '4px' } }, 'The AI is reading…') : null].filter(Boolean));
     const note = h('input', { value: checker.prefs.aiNote || '', placeholder: 'Extra wishes for the AI (optional)', style: { width: '100%', boxSizing: 'border-box', marginTop: '6px', fontSize: '12px' } });
     note.addEventListener('change', () => { checker.prefs.aiNote = note.value.trim(); checker.savePrefs(); });

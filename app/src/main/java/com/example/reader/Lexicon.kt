@@ -26,6 +26,8 @@ object Lexicon {
         val page: String = "",
         val note: String = "",
         val tags: String = "",
+        /** Everyday words this one can stand in for (comma-separated): they are marked in the writing program. */
+        val insteadOf: String = "",
         val added: Long = System.currentTimeMillis(),
         val modified: Long = System.currentTimeMillis()
     )
@@ -40,7 +42,7 @@ object Lexicon {
     fun toJson(w: Word): JSONObject = JSONObject()
         .put("id", w.id).put("word", w.word).put("definition", w.definition).put("partOfSpeech", w.partOfSpeech)
         .put("example", w.example).put("docId", w.docId).put("source", w.source).put("page", w.page)
-        .put("note", w.note).put("tags", w.tags).put("added", w.added).put("modified", w.modified)
+        .put("note", w.note).put("tags", w.tags).put("insteadOf", w.insteadOf).put("added", w.added).put("modified", w.modified)
 
     private fun fromJson(o: JSONObject): Word? {
         val word = o.optString("word").trim()
@@ -49,7 +51,7 @@ object Lexicon {
             id = o.optString("id").ifBlank { newId() }, word = word,
             definition = o.optString("definition"), partOfSpeech = o.optString("partOfSpeech"),
             example = o.optString("example"), docId = o.optLong("docId", 0L), source = o.optString("source"),
-            page = o.optString("page"), note = o.optString("note"), tags = o.optString("tags"),
+            page = o.optString("page"), note = o.optString("note"), tags = o.optString("tags"), insteadOf = o.optString("insteadOf"),
             added = o.optLong("added", System.currentTimeMillis()), modified = o.optLong("modified", System.currentTimeMillis())
         )
     }
@@ -90,7 +92,7 @@ object Lexicon {
         made to true
     }
 
-    /** Changes the fields given in [o] (word, definition, partOfSpeech, example, page, note, tags). */
+    /** Changes the fields given in [o] (word, definition, partOfSpeech, example, page, note, tags, insteadOf). */
     fun update(ctx: Context, id: String, o: JSONObject): Word = synchronized(lock) {
         val list = load(ctx)
         val i = list.indexOfFirst { it.id == id }
@@ -102,7 +104,7 @@ object Lexicon {
         list.firstOrNull { it.id != id && it.word.equals(word, ignoreCase = true) }?.let { throw IllegalArgumentException("“$word” is already in the lexicon.") }
         w = w.copy(word = word, definition = s("definition", w.definition).trim(), partOfSpeech = s("partOfSpeech", w.partOfSpeech).trim(),
             example = s("example", w.example).trim(), page = s("page", w.page).trim(), note = s("note", w.note).trim(),
-            tags = s("tags", w.tags).trim(), modified = System.currentTimeMillis())
+            tags = s("tags", w.tags).trim(), insteadOf = s("insteadOf", w.insteadOf).trim(), modified = System.currentTimeMillis())
         val out = list.toMutableList(); out[i] = w
         store(ctx, out)
         w
@@ -114,18 +116,48 @@ object Lexicon {
      * Asks the AI chosen in Settings → AI what [word] means, as used in [example]. Returns the definition
      * and the part of speech; nothing is saved. Only ever called from a button.
      */
-    fun define(ctx: Context, word: String, example: String): Pair<String, String> {
+    data class Definition(val definition: String, val partOfSpeech: String, val insteadOf: String)
+
+    fun define(ctx: Context, word: String, example: String): Definition {
         val o = NoteAiAssistant.askJson(ctx,
             "You are a careful lexicographer. Define the word or phrase below as it is used in the example sentence " +
                 "(if there is one), in the style of a good dictionary: one or two short sentences, no examples, no etymology " +
                 "unless it is needed to understand the word. Write the definition in the language of the word itself " +
                 "(Norwegian for a Norwegian word, British English for an English word). Also give the part of speech in " +
-                "the same language (for English: noun, verb, adjective, adverb, phrase, …). " +
-                "Return only JSON: {\"definition\": string, \"partOfSpeech\": string}.",
-            "Word: ${word.trim()}\nExample: ${example.trim().take(800)}", maxTokens = 400, maxChars = 1200)
+                "the same language (for English: noun, verb, adjective, adverb, phrase, …), and two to five plainer, everyday " +
+                "words or short phrases in the same language that this word could replace in writing, in the same grammatical form " +
+                "(for 'salient': important, striking, prominent). " +
+                "Return only JSON: {\"definition\": string, \"partOfSpeech\": string, \"insteadOf\": [string]}.",
+            "Word: ${word.trim()}\nExample: ${example.trim().take(800)}", maxTokens = 500, maxChars = 1200)
         val d = o.optString("definition").trim()
         check(d.isNotBlank()) { "The AI gave no definition." }
-        return d to o.optString("partOfSpeech").trim()
+        val alt = o.optJSONArray("insteadOf")?.let { a -> (0 until a.length()).map { a.optString(it).trim() }.filter { it.isNotBlank() && !it.equals(word.trim(), true) } }.orEmpty()
+        return Definition(d, o.optString("partOfSpeech").trim(), alt.take(6).joinToString(", "))
+    }
+
+    /**
+     * Places in [text] where words from the lexicon would fit, as the AI sees it: each with the words that
+     * stand there now, what to put instead, and the lexicon word it brings in. [only]: just that word.
+     */
+    fun suggest(ctx: Context, text: String, only: String = ""): JSONArray {
+        val words = all(ctx).filter { only.isBlank() || it.word.equals(only.trim(), ignoreCase = true) }
+        check(words.isNotEmpty()) { if (only.isBlank()) "The lexicon is empty." else "“$only” is not in the lexicon." }
+        val list = words.take(400).joinToString("\n") { w ->
+            "- ${w.word}" + (if (w.partOfSpeech.isNotBlank()) " (${w.partOfSpeech})" else "") + (if (w.definition.isNotBlank()) ": ${w.definition.replace(Regex("\\s+"), " ").take(140)}" else "")
+        }
+        val o = NoteAiAssistant.askJson(ctx,
+            "You help a writer use the words they are collecting. Below are their words (with meanings) and a text they wrote. " +
+                (if (only.isBlank()) "Find places where one of these words would fit naturally and improve the sentence. "
+                else "Find the two or three best places where the word ‘${only.trim()}’ would fit naturally and improve the sentence. ") +
+                "Only suggest a word where its meaning truly fits; never force one in, and never change quotations, citations or names. " +
+                "Keep the grammar right (inflect the word as needed, and adjust a neighbouring article or preposition if you must). " +
+                "At most one suggestion per sentence, and at most twelve in all. " +
+                "For each, give the exact words of the text that would be replaced (copied character for character, as short as possible), " +
+                "the replacement, the lexicon word it uses, and a short reason. " +
+                "Return only JSON: {\"suggestions\": [{\"original\": string, \"suggestion\": string, \"word\": string, \"reason\": string}]}. " +
+                "Return {\"suggestions\": []} when nothing fits well.",
+            "WORDS:\n$list\n\nTEXT:\n${text.take(14000)}", maxTokens = 3000, maxChars = 40000)
+        return o.optJSONArray("suggestions") ?: JSONArray()
     }
 
     /** The sentence of [passage] that holds [word] (for the example). */

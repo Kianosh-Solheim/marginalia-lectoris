@@ -8,7 +8,7 @@ async function lexWords(fresh) {
   const r = await api('lexicon'); lexCache = { at: Date.now(), words: r.words || [] };
   return lexCache.words;
 }
-const lexDrop = () => { lexCache = null; };
+const lexDrop = () => { lexCache = null; try { window.dispatchEvent(new Event('ml-lexicon')); } catch (_) {} };
 const lexTags = w => splitTags(w.tags || '');
 
 /** The sentence around a selection (for the example): from the PDF text layer, an EPUB page or a field. */
@@ -39,19 +39,20 @@ function lexEditDialog(w, onSaved) {
     const word = h('input', { value: w.word || '' }), pos = h('input', { value: w.partOfSpeech || '', placeholder: 'noun, verb, …' });
     const def = h('textarea', { rows: 3, placeholder: 'Leave empty to define it later' }, w.definition || '');
     const ex = h('textarea', { rows: 2 }, w.example || ''), note = h('textarea', { rows: 2 }, w.note || ''), tags = h('input', { value: w.tags || '', placeholder: 'Separated by commas' });
+    const instead = h('input', { value: w.insteadOf || '', placeholder: 'e.g. important, striking — separated by commas' });
     const msg = h('div', { class: 'muted', style: { fontSize: '13px', minHeight: '16px' } });
     const aiBtn = h('button', { class: 'btn', onclick: async () => {
       if (!word.value.trim()) return toast('Write the word first');
       aiBtn.disabled = true; aiBtn.textContent = 'Asking the AI…'; msg.textContent = '';
       try {
         const r = await api('lexicon/define', { method: 'POST', json: { word: word.value.trim(), example: ex.value.trim() } });
-        def.value = r.definition || ''; if (!pos.value.trim()) pos.value = r.partOfSpeech || '';
+        def.value = r.definition || ''; if (!pos.value.trim()) pos.value = r.partOfSpeech || ''; if (!instead.value.trim() && r.insteadOf) instead.value = r.insteadOf;
         msg.textContent = 'The AI’s definition is filled in. Change it if you like, then save.';
       } catch (e) { msg.textContent = e.message || 'The AI could not define it.'; }
       aiBtn.disabled = false; aiBtn.textContent = '✦ Define with AI';
     } }, '✦ Define with AI');
     const save = async () => {
-      const json = { word: word.value.trim(), partOfSpeech: pos.value.trim(), definition: def.value.trim(), example: ex.value.trim(), note: note.value.trim(), tags: tags.value.trim() };
+      const json = { word: word.value.trim(), partOfSpeech: pos.value.trim(), definition: def.value.trim(), example: ex.value.trim(), note: note.value.trim(), tags: tags.value.trim(), insteadOf: instead.value.trim() };
       if (!json.word) return toast('The word is empty');
       try {
         let r;
@@ -73,6 +74,7 @@ function lexEditDialog(w, onSaved) {
           h('label', { style: { flex: 1 } }, h('span', { class: 'label' }, 'Part of speech'), pos)),
         h('div', { class: 'dfield' }, h('span', { class: 'label' }, 'Definition'), withMic(def)),
         h('div', { class: 'row', style: { flexDirection: 'row', gap: '8px', alignItems: 'center' } }, aiBtn, msg),
+        h('label', null, h('span', { class: 'label' }, 'Use instead of'), instead, h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Where you write one of these, the writing program suggests this word (Style → Your lexicon).')),
         h('label', null, h('span', { class: 'label' }, 'Example — the sentence it was found in'), ex),
         h('div', { class: 'dfield' }, h('span', { class: 'label' }, 'Your note'), withMic(note)),
         h('label', null, h('span', { class: 'label' }, 'Tags'), tags),
@@ -123,6 +125,7 @@ async function showLexicon() {
         h('div', { class: 'lxhead' }, h('b', { class: 'serif' }, w.word), w.partOfSpeech ? h('i', { class: 'serif muted' }, ' ' + w.partOfSpeech) : null),
         h('div', { class: 'lxdef serif' + (w.definition ? '' : ' none') }, w.definition || 'No definition yet — click to add one.'),
         w.example ? h('div', { class: 'lxex serif' }, '“' + w.example + '”') : null,
+        w.insteadOf ? h('div', { class: 'lxmeta muted' }, 'instead of: ' + w.insteadOf) : null,
         h('div', { class: 'lxmeta mono muted' }, ...[
           w.source ? (w.docId ? h('a', { href: '#/book/' + w.docId, onclick: e => e.stopPropagation() }, w.source) : w.source) : null,
           w.page ? ', p. ' + w.page : null,
@@ -181,7 +184,7 @@ async function lexExport(words, kind) {
 }
 
 /** The writing program's lexicon panel: your words at hand. Click to put one in at the cursor. */
-function lexiconPanel(editor, onToggle) {
+function lexiconPanel(editor, onToggle, checker) {
   const el = h('aside', { class: 'wlexicon', hidden: true });
   const q = h('input', { type: 'search', placeholder: 'Find a word or a meaning' });
   const list = h('div', { class: 'wlxlist' });
@@ -195,7 +198,8 @@ function lexiconPanel(editor, onToggle) {
     const shown = words.filter(w => terms.every(t => norm(w.word + ' ' + w.definition + ' ' + w.tags).includes(t))).sort((a, b) => a.word.localeCompare(b.word, undefined, { sensitivity: 'base' }));
     if (!words.length) list.append(h('div', { class: 'muted', style: { fontSize: '13px' } }, 'No words yet. Add them while reading (select a word → “Lexicon +”) or with + above.'));
     shown.forEach(w => {
-      const row = h('div', { class: 'wlxrow', title: 'Click to put it in at the cursor · double-click to open it' },
+      const row = h('div', { class: 'wlxrow', title: 'Click to put it in at the cursor · double-click to open it · Where? asks the AI where it would fit' },
+        h('button', { class: 'btn quiet mxmini wlxwhere', title: 'Ask the AI where in this text the word would fit', onmousedown: e => e.preventDefault(), onclick: e => { e.stopPropagation(); const c = checker && checker(); if (c) c.aiCheck('all', 'lexicon', w.word); } }, 'Where?'),
         h('b', { class: 'serif' }, w.word), w.partOfSpeech ? h('i', { class: 'muted serif' }, ' ' + w.partOfSpeech) : null,
         h('div', { class: 'wlxdef serif' + (w.definition ? '' : ' none') }, w.definition || 'No definition yet'));
       let timer = 0;

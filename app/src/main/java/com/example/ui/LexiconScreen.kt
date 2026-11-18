@@ -151,6 +151,7 @@ fun LexiconEditDialog(word: Lexicon.Word?, onDone: () -> Unit) {
     var example by remember { mutableStateOf(word?.example.orEmpty()) }
     var note by remember { mutableStateOf(word?.note.orEmpty()) }
     var tags by remember { mutableStateOf(word?.tags.orEmpty()) }
+    var insteadOf by remember { mutableStateOf(word?.insteadOf.orEmpty()) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -162,11 +163,11 @@ fun LexiconEditDialog(word: Lexicon.Word?, onDone: () -> Unit) {
                 withContext(Dispatchers.IO) {
                     if (word == null) {
                         val (_, made) = Lexicon.add(context, Lexicon.Word(id = "", word = text, definition = definition.trim(), partOfSpeech = pos.trim(),
-                            example = example.trim(), note = note.trim(), tags = tags.trim()))
+                            example = example.trim(), note = note.trim(), tags = tags.trim(), insteadOf = insteadOf.trim()))
                         check(made) { "“${text.trim()}” is already in the lexicon." }
                     } else {
                         Lexicon.update(context, word.id, JSONObject().put("word", text).put("partOfSpeech", pos).put("definition", definition)
-                            .put("example", example).put("note", note).put("tags", tags))
+                            .put("example", example).put("note", note).put("tags", tags).put("insteadOf", insteadOf))
                     }
                 }
                 onDone()
@@ -194,14 +195,15 @@ fun LexiconEditDialog(word: Lexicon.Word?, onDone: () -> Unit) {
                         busy = true; message = ""
                         scope.launch {
                             try {
-                                val (d, p) = withContext(Dispatchers.IO) { Lexicon.define(context, text, example) }
-                                definition = d; if (pos.isBlank()) pos = p
+                                val r = withContext(Dispatchers.IO) { Lexicon.define(context, text, example) }
+                                definition = r.definition; if (pos.isBlank()) pos = r.partOfSpeech; if (insteadOf.isBlank()) insteadOf = r.insteadOf
                                 message = "The AI's definition is filled in. Change it if you like, then save."
                             } catch (e: Exception) { message = e.message ?: "The AI could not define it." } finally { busy = false }
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(insteadOf, { insteadOf = it }, label = { Text("Use instead of (everyday words, separated by commas)") }, singleLine = true, shape = RoundedCornerShape(4.dp), colors = inkFieldColors, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(example, { example = it }, label = { Text("Example (the sentence it was found in)") }, minLines = 2, shape = RoundedCornerShape(4.dp), colors = inkFieldColors, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(note, { note = it }, label = { Text("Your note") }, minLines = 2, shape = RoundedCornerShape(4.dp), colors = inkFieldColors, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(tags, { tags = it }, label = { Text("Tags, separated by commas") }, singleLine = true, shape = RoundedCornerShape(4.dp), colors = inkFieldColors, modifier = Modifier.fillMaxWidth())

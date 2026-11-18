@@ -897,14 +897,23 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 val (w, made) = lx.add(context, com.example.reader.Lexicon.Word(
                     id = "", word = b.optString("word"), definition = b.optString("definition").trim(), partOfSpeech = b.optString("partOfSpeech").trim(),
                     example = b.optString("example").trim(), docId = b.optLong("docId", 0L), source = b.optString("source").trim(),
-                    page = b.optString("page").trim(), note = b.optString("note").trim(), tags = b.optString("tags").trim()))
+                    page = b.optString("page").trim(), note = b.optString("note").trim(), tags = b.optString("tags").trim(), insteadOf = b.optString("insteadOf").trim()))
                 ok(lx.toJson(w).put("existed", !made))
             }
             rest == listOf("define") && req.method == "POST" -> {
                 val b = body()
-                val (d, pos) = try { lx.define(context, b.optString("word"), b.optString("example")) }
+                val r = try { lx.define(context, b.optString("word"), b.optString("example")) }
                     catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The AI could not define the word.") }
-                ok(JSONObject().put("definition", d).put("partOfSpeech", pos))
+                ok(JSONObject().put("definition", r.definition).put("partOfSpeech", r.partOfSpeech).put("insteadOf", r.insteadOf))
+            }
+            rest == listOf("suggest") && req.method == "POST" -> {
+                val b = body()
+                val text = b.optString("text").trim()
+                require(text.isNotBlank()) { "There is no text to look through." }
+                require(text.length <= 14000) { "Too much text at once. Select a part, or one section at a time." }
+                val arr = try { lx.suggest(context, text, b.optString("only")) }
+                    catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The AI could not make suggestions.") }
+                ok(JSONObject().put("suggestions", arr))
             }
             rest.size == 1 && req.method == "PATCH" -> ok(lx.toJson(lx.update(context, rest[0], body())))
             rest.size == 1 && req.method == "DELETE" -> { lx.delete(context, rest[0]); ok(JSONObject().put("ok", true)) }

@@ -638,7 +638,7 @@ async function showWriter(id, params) {
   wbody.append(notesP.el);
   outlineP = outlinePanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
   wbody.prepend(outlineP.el);
-  lexP = lexiconPanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
+  lexP = lexiconPanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); }, () => { if (!styleP.isOpen()) styleP.open(); return styleC; });
   wbody.append(lexP.el);
   styleC = new StyleChecker(editor, wbody.querySelector('.wsheet'), (d.settings || {}).style, () => { dirty = true; scheduleSave(); });
   styleP = stylePanel(styleC, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
