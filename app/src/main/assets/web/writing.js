@@ -488,6 +488,7 @@ async function showWriter(id, params) {
   let notesP = null;   // the notes panel (wnotes.js)
   let outlineP = null; // the outline (woutline.js)
   let lexP = null;     // the lexicon panel (lexicon.js)
+  let styleC = null, styleP = null; // style corrections (wstyle.js)
   app.append(
     h('div', { class: 'wtop' },
       h('a', { class: 'btn quiet', href: '#/writing', title: 'All documents' }, '← Writing'),
@@ -626,23 +627,29 @@ async function showWriter(id, params) {
     toolbarButton('Tx', 'Clear formatting', () => chain().unsetAllMarks().clearNodes().run()),
     toolbarButton('☰ Outline', 'The headings of the document in a panel: click to go there, drag to move a section (Ctrl+Alt+O)', () => outlineP.toggle(), () => outlineP && outlineP.isOpen()),
     dictMic(dictTarget, { key: 'writer:' + id, cls: 'wdict' }),
+    toolbarButton('✓ Style', 'British style: Oxford spelling, conventions, formal register, your own rules, and an AI check (Ctrl+Alt+S)', () => styleP.toggle(), () => styleP && styleP.isOpen()),
     toolbarButton('Aa Lexicon', 'Your words and their meanings beside the text: click one to put it in (Ctrl+Alt+L)', () => lexP.toggle(), () => lexP && lexP.isOpen()),
   ];
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
-  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 20, 22]]];
+  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
   wbody.append(notesP.el);
   outlineP = outlinePanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
   wbody.prepend(outlineP.el);
-  lexP = lexiconPanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
+  lexP = lexiconPanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
   wbody.append(lexP.el);
-  const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } if (lexP) { lexP.el.style.top = t + 'px'; lexP.el.style.height = `calc(100vh - ${t}px)`; } };
+  styleC = new StyleChecker(editor, wbody.querySelector('.wsheet'), (d.settings || {}).style, () => { dirty = true; scheduleSave(); });
+  styleP = stylePanel(styleC, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
+  wbody.append(styleP.el);
+  try { new ResizeObserver(() => styleC.paintSoon()).observe(wbody.querySelector('.wsheet')); } catch (_) {}
+  const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } if (lexP) { lexP.el.style.top = t + 'px'; lexP.el.style.height = `calc(100vh - ${t}px)`; } if (styleP) { styleP.el.style.top = t + 'px'; styleP.el.style.height = `calc(100vh - ${t}px)`; } };
   window.addEventListener('resize', placeNotes);
   if (localGet('ml.wnotesOpen', '')) notesP.open();
   if (localGet('ml.woutlineOpen', '')) outlineP.open();
   if (localGet('ml.wlexOpen', '')) lexP.open();
+  if (localGet('ml.wstyleOpen', '')) styleP.open();
   document.addEventListener('click', () => { tableMenu.hidden = true; });
   function refreshBar() {
     btns.forEach(b => { if (b._on) b.classList.toggle('on', !!b._on()); });
@@ -669,7 +676,7 @@ async function showWriter(id, params) {
   imgIn.addEventListener('change', () => { const fs = [...imgIn.files]; imgIn.value = ''; insertImages(fs); });
 
   // ----- saving
-  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified, settings: Object.assign({}, citing.settings(), { comments: commenting.settings() }) }, extra);
+  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified, settings: Object.assign({}, citing.settings(), { comments: commenting.settings(), style: styleC ? styleC.settings() : ((d.settings || {}).style || {}) }) }, extra);
   async function save(extra) {
     if (saving) { scheduleSave(); return; }
     saving = true; clearTimeout(saveTimer);
@@ -718,11 +725,12 @@ async function showWriter(id, params) {
     try { await save(); const r = await api(`writing/${encodeURIComponent(docId)}/rename`, { method: 'POST', json: { title } }); if (r.id && r.id !== docId) { docId = r.id; baseModified = r.modified; history.replaceState(null, '', '#/write/' + encodeURIComponent(docId)); } } catch (e) { fail(e); }
   });
   const onKey = e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save().then(() => writeDocx(true)); toast('Saved', 1000); }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === 's') { e.preventDefault(); save().then(() => writeDocx(true)); toast('Saved', 1000); }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'C' || e.key === 'c')) { e.preventDefault(); citing.insert(editor); }
     if (e.ctrlKey && e.altKey && (e.key === 'e' || e.key === 'E' || e.code === 'KeyE')) { e.preventDefault(); mathDialog(editor, null); }
     if (e.ctrlKey && e.altKey && (e.key === 'm' || e.key === 'M' || e.code === 'KeyM')) { e.preventDefault(); commenting.add(); }
     if (e.ctrlKey && e.altKey && (e.key === 'o' || e.key === 'O' || e.code === 'KeyO')) { e.preventDefault(); outlineP.toggle(); }
+    if (e.ctrlKey && e.altKey && e.code === 'KeyS') { e.preventDefault(); styleP.toggle(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyL') { e.preventDefault(); lexP.toggle(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyD') { e.preventDefault(); const mic = bar.querySelector('.wdict .dmic'); if (mic) mic.click(); }
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }
@@ -735,6 +743,7 @@ async function showWriter(id, params) {
   window.writingLeave = () => {
     document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onHide); window.removeEventListener('beforeunload', onUnload); window.removeEventListener('resize', placeNotes); commenting.destroy();
     clearTimeout(saveTimer); clearTimeout(exportTimer);
+    if (styleC) styleC.destroy();
     const p = dirty ? save() : Promise.resolve();
     p.then(() => writeDocx(false)).finally(() => editor.destroy());
   };

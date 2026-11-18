@@ -110,6 +110,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s == listOf("library") && m == "GET" -> return HttpResponse.json(library().toString())
             s.firstOrNull() == "dictation" -> return dictationRoute(req, s.drop(1))
             s.firstOrNull() == "lexicon" -> return lexiconRoute(req, s.drop(1))
+            s == listOf("style-check") && m == "POST" -> return styleCheck(req)
             s == listOf("highlights") && m == "GET" -> return HttpResponse.json(allHighlights().toString())
             s == listOf("tags") && m == "GET" -> {
                 val t = com.example.ui.TagIndex.load(context)
@@ -854,6 +855,35 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
     }
 
     // ------------------------------------------------------------------------------- recordings
+
+    /**
+     * The writing program's AI style check: the text goes to the AI chosen in Settings → AI, which lists
+     * what does not suit strict, traditional British academic prose. Only ever run from its button.
+     */
+    private fun styleCheck(req: HttpRequest): HttpResponse {
+        val b = runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject())
+        val text = b.optString("text").trim()
+        require(text.isNotBlank()) { "There is no text to check." }
+        require(text.length <= 14000) { "Too much text at once. Select a part, or check one section at a time." }
+        val spelling = if (b.optString("spelling") == "ise") "British -ise spelling (organise, realise; analyse)" else
+            "Oxford spelling: -ize where Oxford uses it (organize, realize, recognize) but analyse, colour, centre, travelled, defence"
+        val extra = b.optString("instructions").trim().take(600)
+        val o = try {
+            com.example.reader.NoteAiAssistant.askJson(context,
+                "You are a strict, traditional British copy-editor in the manner of Fowler and the Oxford Guide to Style, editing academic prose. " +
+                    "Use $spelling. Find what does not suit formal British academic writing: American spellings and usages, grammar mistakes, " +
+                    "contractions, informal or colloquial words, imprecise or wordy phrasing, punctuation against British convention " +
+                    "(single quotation marks; 'per cent'; full stops outside closing quotation marks unless part of the quotation), " +
+                    "and dangling or ambiguous constructions. Do not touch quoted material, citations, names, or technical terms. " +
+                    "Do not rewrite for taste: report only clear improvements. " +
+                    (if (extra.isNotBlank()) "The writer also asks: $extra. " else "") +
+                    "For each finding give the exact original wording as it stands in the text (a short stretch, at most a sentence, copied character for character), " +
+                    "the replacement for exactly that stretch, and a short reason in English. " +
+                    "Return only JSON: {\"issues\": [{\"original\": string, \"suggestion\": string, \"reason\": string}]}. Return {\"issues\": []} if there is nothing to change.",
+                text, maxTokens = 4000, maxChars = 14000)
+        } catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The AI check failed.") }
+        return HttpResponse.json(JSONObject().put("issues", o.optJSONArray("issues") ?: JSONArray()).toString()).header("Cache-Control", "no-store")
+    }
 
     /** The lexicon: GET the words; POST one; PATCH or DELETE /<id>; POST define → the AI's suggestion. */
     private fun lexiconRoute(req: HttpRequest, rest: List<String>): HttpResponse {
