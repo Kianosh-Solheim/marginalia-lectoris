@@ -487,6 +487,7 @@ async function showWriter(id, params) {
   let commenting = null;   // the comments (wcomments.js)
   let notesP = null;   // the notes panel (wnotes.js)
   let outlineP = null; // the outline (woutline.js)
+  let lexP = null;     // the lexicon panel (lexicon.js)
   app.append(
     h('div', { class: 'wtop' },
       h('a', { class: 'btn quiet', href: '#/writing', title: 'All documents' }, '← Writing'),
@@ -625,19 +626,23 @@ async function showWriter(id, params) {
     toolbarButton('Tx', 'Clear formatting', () => chain().unsetAllMarks().clearNodes().run()),
     toolbarButton('☰ Outline', 'The headings of the document in a panel: click to go there, drag to move a section (Ctrl+Alt+O)', () => outlineP.toggle(), () => outlineP && outlineP.isOpen()),
     dictMic(dictTarget, { key: 'writer:' + id, cls: 'wdict' }),
+    toolbarButton('Aa Lexicon', 'Your words and their meanings beside the text: click one to put it in (Ctrl+Alt+L)', () => lexP.toggle(), () => lexP && lexP.isOpen()),
   ];
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
-  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 20, 22]]];
+  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 20, 22]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
   wbody.append(notesP.el);
   outlineP = outlinePanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
   wbody.prepend(outlineP.el);
-  const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } };
+  lexP = lexiconPanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
+  wbody.append(lexP.el);
+  const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } if (lexP) { lexP.el.style.top = t + 'px'; lexP.el.style.height = `calc(100vh - ${t}px)`; } };
   window.addEventListener('resize', placeNotes);
   if (localGet('ml.wnotesOpen', '')) notesP.open();
   if (localGet('ml.woutlineOpen', '')) outlineP.open();
+  if (localGet('ml.wlexOpen', '')) lexP.open();
   document.addEventListener('click', () => { tableMenu.hidden = true; });
   function refreshBar() {
     btns.forEach(b => { if (b._on) b.classList.toggle('on', !!b._on()); });
@@ -718,6 +723,7 @@ async function showWriter(id, params) {
     if (e.ctrlKey && e.altKey && (e.key === 'e' || e.key === 'E' || e.code === 'KeyE')) { e.preventDefault(); mathDialog(editor, null); }
     if (e.ctrlKey && e.altKey && (e.key === 'm' || e.key === 'M' || e.code === 'KeyM')) { e.preventDefault(); commenting.add(); }
     if (e.ctrlKey && e.altKey && (e.key === 'o' || e.key === 'O' || e.code === 'KeyO')) { e.preventDefault(); outlineP.toggle(); }
+    if (e.ctrlKey && e.altKey && e.code === 'KeyL') { e.preventDefault(); lexP.toggle(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyD') { e.preventDefault(); const mic = bar.querySelector('.wdict .dmic'); if (mic) mic.click(); }
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }
   };

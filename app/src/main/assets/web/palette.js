@@ -20,7 +20,7 @@ function paletteActions() {
   const theme = t => () => { try { localStorage.setItem('ml.theme', t); } catch (_) {} applyTheme(); if (typeof route === 'function' && !workspace && document.querySelector('header.top')) route(); };
   const list = [
     ['Library', 'Go to', go('#/'), 'home all books articles'], ['Books', 'Go to', go('#/books'), ''], ['Articles', 'Go to', go('#/articles'), ''],
-    ['Notes', 'Go to', go('#/notes'), 'vault highlights'], ['Writing', 'Go to', go('#/writing'), 'documents editor'], ['Literature matrices', 'Go to', go('#/matrix'), 'matrix table compare sources synthesis'], ['Search in the texts', 'Go to', go('#/search'), 'full text find'],
+    ['Notes', 'Go to', go('#/notes'), 'vault highlights'], ['Writing', 'Go to', go('#/writing'), 'documents editor'], ['Lexicon', 'Go to', go('#/lexicon'), 'words vocabulary definitions dictionary glossary'], ['Literature matrices', 'Go to', go('#/matrix'), 'matrix table compare sources synthesis'], ['Search in the texts', 'Go to', go('#/search'), 'full text find'],
     ['Zotero', 'Go to', go('#/zotero'), ''], ['Presentations', 'Go to', go('#/presentations'), 'slides'], ['Settings', 'Go to', go('#/settings'), 'preferences backup ai'],
     ['New writing document', 'Do', async () => { try { const d = await api('writing', { method: 'POST', json: { title: 'Untitled' } }); location.hash = '#/write/' + encodeURIComponent(d.id) + '?new=1'; } catch (e) { fail(e); } }, 'create write'],
     ['Colours: dark', 'Do', theme('dark'), 'theme night mode'], ['Colours: light', 'Do', theme('light'), 'theme day mode'], ['Colours: follow the computer', 'Do', theme('auto'), 'theme auto'],
@@ -210,7 +210,7 @@ function shortcutsDialog() {
     ['In the command palette, on a book or article', [['Enter', 'Open in the reader'], ['Ctrl+Enter', 'Open its book page'], ['Tab', 'List everything that can be done with it'], ['Ctrl+G', 'Go to its notes'], ['Ctrl+I', 'Show or hide the preview with the whole abstract'], ['Ctrl+D', 'Copy the in-text citation'], ['Ctrl+B', 'Copy the full reference'], ['Ctrl+Y', 'Copy the citekey'], ['Ctrl+Shift+Enter', 'Open in a new tab'], ['Alt+Enter', 'Open in the other pane']]],
     ['Notes', [['/', 'Search the notes'], ['[[', 'In a note: link to another note']]],
     ['Reader', [['← →', 'Previous and next page'], ['Ctrl+F', 'Search in the book']]],
-    ['Writing', [['Ctrl+Shift+C', 'Insert a citation'], ['Ctrl+Alt+N', 'Notes panel'], ['Ctrl+Alt+M', 'Comment on the selection'], ['Ctrl+Alt+E', 'Formula'], ['Ctrl+Alt+D', 'Dictate at the cursor (again to stop)'], ['Ctrl+S', 'Save now']]],
+    ['Writing', [['Ctrl+Shift+C', 'Insert a citation'], ['Ctrl+Alt+N', 'Notes panel'], ['Ctrl+Alt+M', 'Comment on the selection'], ['Ctrl+Alt+E', 'Formula'], ['Ctrl+Alt+D', 'Dictate at the cursor (again to stop)'], ['Ctrl+Alt+L', 'Lexicon panel'], ['Ctrl+S', 'Save now']]],
     ['Tabs', [['Ctrl+click', 'Open in a new tab'], ['Ctrl+Alt+click', 'Open in the other pane'], ['Middle click on a tab', 'Close it']]],
   ];
   modal((box, close) => {

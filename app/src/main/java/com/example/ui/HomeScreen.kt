@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FormatQuote
+import androidx.compose.material.icons.filled.Spellcheck
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -204,6 +205,7 @@ fun HomeScreen(
     ZoteroHost()
     TextSearchHost(onOpenDocument = onOpenDocument, onOpenDocumentAtPage = onOpenDocumentAtPage)
     SpeechHost()
+    LexiconHost()
     PlaceholderHost()
     var tileScalePref by remember { mutableStateOf(TileScalePreference.AUTO) }
     var libraryViewMode by remember {
@@ -403,6 +405,24 @@ fun HomeScreen(
                     onClick = {
                         coroutineScope.launch { drawerState.close() }
                         onOpenAllHighlights()
+                    },
+                    shape = RoundedCornerShape(0.dp),
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.White,
+                        unselectedTextColor = Color.Black
+                    ),
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 3.dp)
+                        .border(1.dp, Color.Black)
+                )
+
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.Spellcheck, contentDescription = null, tint = Color.Black) },
+                    label = { Text("Lexicon", fontWeight = FontWeight.Medium) },
+                    selected = false,
+                    onClick = {
+                        coroutineScope.launch { drawerState.close() }
+                        lexiconOpen.value = true
                     },
                     shape = RoundedCornerShape(0.dp),
                     colors = NavigationDrawerItemDefaults.colors(

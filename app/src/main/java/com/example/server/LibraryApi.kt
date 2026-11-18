@@ -109,6 +109,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             }
             s == listOf("library") && m == "GET" -> return HttpResponse.json(library().toString())
             s.firstOrNull() == "dictation" -> return dictationRoute(req, s.drop(1))
+            s.firstOrNull() == "lexicon" -> return lexiconRoute(req, s.drop(1))
             s == listOf("highlights") && m == "GET" -> return HttpResponse.json(allHighlights().toString())
             s == listOf("tags") && m == "GET" -> {
                 val t = com.example.ui.TagIndex.load(context)
@@ -853,6 +854,33 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
     }
 
     // ------------------------------------------------------------------------------- recordings
+
+    /** The lexicon: GET the words; POST one; PATCH or DELETE /<id>; POST define → the AI's suggestion. */
+    private fun lexiconRoute(req: HttpRequest, rest: List<String>): HttpResponse {
+        val lx = com.example.reader.Lexicon
+        val body = { runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject()) }
+        val ok = { o: JSONObject -> HttpResponse.json(o.toString()).header("Cache-Control", "no-store") }
+        return when {
+            rest.isEmpty() && req.method == "GET" -> ok(JSONObject().put("words", JSONArray().apply { lx.all(context).forEach { put(lx.toJson(it)) } }))
+            rest.isEmpty() && req.method == "POST" -> {
+                val b = body()
+                val (w, made) = lx.add(context, com.example.reader.Lexicon.Word(
+                    id = "", word = b.optString("word"), definition = b.optString("definition").trim(), partOfSpeech = b.optString("partOfSpeech").trim(),
+                    example = b.optString("example").trim(), docId = b.optLong("docId", 0L), source = b.optString("source").trim(),
+                    page = b.optString("page").trim(), note = b.optString("note").trim(), tags = b.optString("tags").trim()))
+                ok(lx.toJson(w).put("existed", !made))
+            }
+            rest == listOf("define") && req.method == "POST" -> {
+                val b = body()
+                val (d, pos) = try { lx.define(context, b.optString("word"), b.optString("example")) }
+                    catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The AI could not define the word.") }
+                ok(JSONObject().put("definition", d).put("partOfSpeech", pos))
+            }
+            rest.size == 1 && req.method == "PATCH" -> ok(lx.toJson(lx.update(context, rest[0], body())))
+            rest.size == 1 && req.method == "DELETE" -> { lx.delete(context, rest[0]); ok(JSONObject().put("ok", true)) }
+            else -> throw NoSuchElementException("No such lexicon route.")
+        }
+    }
 
     /** Dictation with the tablet's microphone: the browser starts and stops it and fetches the text. */
     private fun dictationRoute(req: HttpRequest, rest: List<String>): HttpResponse {

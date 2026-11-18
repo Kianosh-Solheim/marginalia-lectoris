@@ -134,6 +134,10 @@ fun DictionaryLookupDialog(passage: String, language: String, contextPassage: St
     var resultSource by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val aiEnabled = remember { AiPreferences(context).load().dictionaryAi }
+    // The lexicon: the word can be kept, with the definition found here (if any) and the sentence it stands in.
+    var resultOk by remember { mutableStateOf(false) }
+    var lexState by remember { mutableStateOf("") }
+    val readerDoc = LocalReaderDocument.current
 
     AlertDialog(
         onDismissRequest = dismiss,
@@ -149,7 +153,7 @@ fun DictionaryLookupDialog(passage: String, language: String, contextPassage: St
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = word,
-                    onValueChange = { word = it; result = "" },
+                    onValueChange = { word = it; result = ""; resultOk = false; lexState = "" },
                     label = { Text("Word") },
                     singleLine = true,
                     shape = RoundedCornerShape(4.dp),
@@ -171,8 +175,8 @@ fun DictionaryLookupDialog(passage: String, language: String, contextPassage: St
                         scope.launch {
                             try {
                                 OfflineDictionary.lookup(context, word.trim())
-                                    .onSuccess { result = it }
-                                    .onFailure { result = it.message ?: "Offline lookup failed." }
+                                    .onSuccess { result = it; resultOk = true }
+                                    .onFailure { result = it.message ?: "Offline lookup failed."; resultOk = false }
                             } finally { busy = false }
                         }
                     },
@@ -212,8 +216,8 @@ fun DictionaryLookupDialog(passage: String, language: String, contextPassage: St
                             scope.launch {
                                 try {
                                     NoteAiAssistant.explain(context, word.trim(), contextPassage, if (norwegian) "nb" else "en")
-                                        .onSuccess { result = it }
-                                        .onFailure { result = it.message ?: "AI explanation failed." }
+                                        .onSuccess { result = it; resultOk = true }
+                                        .onFailure { result = it.message ?: "AI explanation failed."; resultOk = false }
                                 } finally { busy = false }
                             }
                         },
@@ -225,6 +229,33 @@ fun DictionaryLookupDialog(passage: String, language: String, contextPassage: St
                     HorizontalDivider(thickness = 1.dp, color = Color.Black)
                     Text(result, fontFamily = FontFamily.Serif, fontSize = 15.sp, lineHeight = 21.sp, color = Color.Black)
                 }
+
+                Text("LEXICON", fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = InkGrey)
+                InkButton(
+                    label = when {
+                        lexState.isNotBlank() -> lexState
+                        resultOk && result.isNotBlank() -> "Save to lexicon, with this definition"
+                        else -> "Save to lexicon (define it later)"
+                    },
+                    icon = Icons.Default.MenuBook,
+                    enabled = word.isNotBlank() && lexState.isBlank(),
+                    onClick = {
+                        val w = word.trim()
+                        scope.launch {
+                            lexState = try {
+                                val (_, made) = withContext(Dispatchers.IO) {
+                                    Lexicon.add(context, Lexicon.Word(
+                                        id = "", word = w,
+                                        definition = if (resultOk) result.trim().take(2000) else "",
+                                        example = Lexicon.sentenceWith(contextPassage, w),
+                                        docId = readerDoc?.id ?: 0L, source = readerDoc?.title.orEmpty()))
+                                }
+                                if (made) "Saved to the lexicon" else "Already in the lexicon"
+                            } catch (e: Exception) { e.message ?: "Could not save it." }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     )

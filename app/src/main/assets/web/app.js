@@ -227,6 +227,7 @@ function route() {
   if (parts[0] === 'presentations') { state.tab = 'presentations'; return showPresentations(); }
   if (parts[0] === 'zotero') { state.tab = 'zotero'; return showZotero(); }
   if (parts[0] === 'search') { state.tab = 'search'; return showTextSearch(params); }
+  if (parts[0] === 'lexicon') { state.tab = 'lexicon'; return showLexicon(); }
   if (parts[0] === 'matrix') { state.tab = 'matrix'; return parts[1] ? showMatrix(parts[1]) : showMatrices(); }
   if (parts[0] === 'writing') { state.tab = 'writing'; return showWriting(params); }
   if (parts[0] === 'write' && parts[1]) { state.tab = 'writing'; return showWriter(decodeURIComponent(parts[1]), params); }
@@ -290,7 +291,7 @@ function themeButton() {
 }
 function header() {
   // The main places first; the kinds of library item sit in a second row when you are in the library.
-  const places = [['library', 'Library', '#/'], ['notes', 'Notes', '#/notes'], ['writing', 'Writing', '#/writing'], ['matrix', 'Matrix', '#/matrix'], ['search', 'Search', '#/search']];
+  const places = [['library', 'Library', '#/'], ['notes', 'Notes', '#/notes'], ['writing', 'Writing', '#/writing'], ['matrix', 'Matrix', '#/matrix'], ['lexicon', 'Lexicon', '#/lexicon'], ['search', 'Search', '#/search']];
   const shelves = [['all', 'Everything', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero']];
   const inLibrary = shelves.some(s => s[0] === state.tab);
   const place = inLibrary ? 'library' : state.tab;
@@ -3306,6 +3307,7 @@ function selectionBar(ctx, sel, onDone) {
     h('button', { class: 'btn fill', onmousedown: e => e.preventDefault(), onclick: () => noteDialog(ctx, sel, color, onDone) }, 'Note…'),
     sel.pdf && ctx.goToPage ? h('button', { class: 'btn', title: 'The quotation continues on the next page: turn the page and select the rest there', onmousedown: e => e.preventDefault(), onclick: () => continueOnNextPage(ctx, sel, color, onDone, sel.text, sel.draft || {}) }, 'Continue on next page ›') : null,
     h('button', { class: 'btn', onmousedown: e => e.preventDefault(), onclick: () => copyText(sel.text, 'Copied') }, 'Copy'),
+    sel.text.trim().split(/\s+/).length <= 6 ? h('button', { class: 'btn', title: 'Keep this word in your lexicon, with the sentence it stands in', onmousedown: e => e.preventDefault(), onclick: () => lexAddFromReader(ctx, sel) }, 'Lexicon +') : null,
     setAsButton(ctx, sel, onDone),
     h('button', { class: 'btn quiet', onmousedown: e => e.preventDefault(), onclick: () => { onDone(true); } }, '×'));
   ctx.mainArea.append(bar);

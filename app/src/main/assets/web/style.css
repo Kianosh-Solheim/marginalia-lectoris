@@ -1263,3 +1263,24 @@ td:hover .dictctl.mini, td:focus-within .dictctl.mini, .dictctl.mini.dlive, .wcm
 /* Dictation in the writing program's bar */
 .wdict { padding: 0 2px; }
 .wdict .dmic { min-height: 26px; }
+
+/* Lexicon */
+main.lxpage { max-width: 860px; margin: 0 auto; padding: 22px 16px 60px; }
+.lxletter { font-size: 22px; font-weight: 700; border-bottom: 1.5px solid var(--ink); margin: 18px 0 4px; padding-bottom: 2px; }
+.lxrow { padding: 10px 6px; border-bottom: 1px solid var(--rule); cursor: pointer; }
+.lxrow:hover { background: var(--wash); }
+.lxhead b { font-size: 18px; }
+.lxhead i { font-size: 14px; }
+.lxdef { font-size: 15px; line-height: 1.45; margin-top: 2px; }
+.lxdef.none, .wlxdef.none { color: var(--grey); font-style: italic; }
+.lxex { font-size: 13.5px; color: var(--grey); margin-top: 4px; font-style: italic; }
+.lxmeta { font-size: 11px; margin-top: 4px; }
+.lxmeta a { color: inherit; }
+.wlexicon { position: sticky; width: 270px; flex: none; overflow-y: auto; background: var(--paper); border-left: 1.5px solid var(--ink); padding: 10px 10px 40px; align-self: flex-start; box-sizing: border-box; font-size: 13px; }
+.wlexicon[hidden] { display: none; }
+.wlexicon input[type=search] { width: 100%; box-sizing: border-box; margin: 8px 0; }
+.wlxrow { padding: 6px 4px; border-bottom: 1px solid var(--rule); cursor: pointer; }
+.wlxrow:hover { background: var(--wash); }
+.wlxrow b { font-size: 15px; }
+.wlxdef { font-size: 12.5px; line-height: 1.35; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 1000px) { .wlexicon { position: fixed; right: 0; bottom: 0; z-index: 30; box-shadow: -4px 0 16px rgba(0,0,0,.18); } }
