@@ -897,14 +897,20 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 val (w, made) = lx.add(context, com.example.reader.Lexicon.Word(
                     id = "", word = b.optString("word"), definition = b.optString("definition").trim(), partOfSpeech = b.optString("partOfSpeech").trim(),
                     example = b.optString("example").trim(), docId = b.optLong("docId", 0L), source = b.optString("source").trim(),
-                    page = b.optString("page").trim(), note = b.optString("note").trim(), tags = b.optString("tags").trim(), insteadOf = b.optString("insteadOf").trim()))
+                    page = b.optString("page").trim(), note = b.optString("note").trim(), tags = b.optString("tags").trim(), insteadOf = b.optString("insteadOf").trim(), forms = b.optString("forms").trim()))
                 ok(lx.toJson(w).put("existed", !made))
             }
             rest == listOf("define") && req.method == "POST" -> {
                 val b = body()
                 val r = try { lx.define(context, b.optString("word"), b.optString("example")) }
                     catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The AI could not define the word.") }
-                ok(JSONObject().put("definition", r.definition).put("partOfSpeech", r.partOfSpeech).put("insteadOf", r.insteadOf))
+                ok(JSONObject().put("definition", r.definition).put("partOfSpeech", r.partOfSpeech).put("insteadOf", r.insteadOf).put("forms", r.forms))
+            }
+            rest == listOf("family") && req.method == "POST" -> {
+                val b = body()
+                val f = try { lx.family(context, b.optString("word"), b.optString("partOfSpeech"), b.optString("definition")) }
+                    catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The AI could not find the word family.") }
+                ok(JSONObject().put("forms", f))
             }
             rest == listOf("suggest") && req.method == "POST" -> {
                 val b = body()

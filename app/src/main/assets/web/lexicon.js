@@ -40,19 +40,20 @@ function lexEditDialog(w, onSaved) {
     const def = h('textarea', { rows: 3, placeholder: 'Leave empty to define it later' }, w.definition || '');
     const ex = h('textarea', { rows: 2 }, w.example || ''), note = h('textarea', { rows: 2 }, w.note || ''), tags = h('input', { value: w.tags || '', placeholder: 'Separated by commas' });
     const instead = h('input', { value: w.insteadOf || '', placeholder: 'e.g. important, striking — separated by commas' });
+    const forms = h('textarea', { rows: 2, placeholder: 'One form per line, e.g.\nsalience: importance, prominence' }, w.forms || '');
     const msg = h('div', { class: 'muted', style: { fontSize: '13px', minHeight: '16px' } });
     const aiBtn = h('button', { class: 'btn', onclick: async () => {
       if (!word.value.trim()) return toast('Write the word first');
       aiBtn.disabled = true; aiBtn.textContent = 'Asking the AI…'; msg.textContent = '';
       try {
         const r = await api('lexicon/define', { method: 'POST', json: { word: word.value.trim(), example: ex.value.trim() } });
-        def.value = r.definition || ''; if (!pos.value.trim()) pos.value = r.partOfSpeech || ''; if (!instead.value.trim() && r.insteadOf) instead.value = r.insteadOf;
+        def.value = r.definition || ''; if (!pos.value.trim()) pos.value = r.partOfSpeech || ''; if (!instead.value.trim() && r.insteadOf) instead.value = r.insteadOf; if (!forms.value.trim() && r.forms) forms.value = r.forms;
         msg.textContent = 'The AI’s definition is filled in. Change it if you like, then save.';
       } catch (e) { msg.textContent = e.message || 'The AI could not define it.'; }
       aiBtn.disabled = false; aiBtn.textContent = '✦ Define with AI';
     } }, '✦ Define with AI');
     const save = async () => {
-      const json = { word: word.value.trim(), partOfSpeech: pos.value.trim(), definition: def.value.trim(), example: ex.value.trim(), note: note.value.trim(), tags: tags.value.trim(), insteadOf: instead.value.trim() };
+      const json = { word: word.value.trim(), partOfSpeech: pos.value.trim(), definition: def.value.trim(), example: ex.value.trim(), note: note.value.trim(), tags: tags.value.trim(), insteadOf: instead.value.trim(), forms: forms.value.trim() };
       if (!json.word) return toast('The word is empty');
       try {
         let r;
@@ -75,6 +76,7 @@ function lexEditDialog(w, onSaved) {
         h('div', { class: 'dfield' }, h('span', { class: 'label' }, 'Definition'), withMic(def)),
         h('div', { class: 'row', style: { flexDirection: 'row', gap: '8px', alignItems: 'center' } }, aiBtn, msg),
         h('label', null, h('span', { class: 'label' }, 'Use instead of'), instead, h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Where you write one of these, the writing program suggests this word (Style → Your lexicon).')),
+        h('label', null, h('span', { class: 'label' }, 'Word family'), forms, h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Other forms of the word and what each can replace. Regular endings (-s, -ed, -ing, -ly, -ance) are found by themselves.')),
         h('label', null, h('span', { class: 'label' }, 'Example — the sentence it was found in'), ex),
         h('div', { class: 'dfield' }, h('span', { class: 'label' }, 'Your note'), withMic(note)),
         h('label', null, h('span', { class: 'label' }, 'Tags'), tags),
@@ -126,6 +128,7 @@ async function showLexicon() {
         h('div', { class: 'lxdef serif' + (w.definition ? '' : ' none') }, w.definition || 'No definition yet — click to add one.'),
         w.example ? h('div', { class: 'lxex serif' }, '“' + w.example + '”') : null,
         w.insteadOf ? h('div', { class: 'lxmeta muted' }, 'instead of: ' + w.insteadOf) : null,
+        w.forms ? h('div', { class: 'lxmeta muted' }, 'family: ' + w.forms.split('\n').map(l => l.split(':')[0].trim()).filter(Boolean).join(', ')) : null,
         h('div', { class: 'lxmeta mono muted' }, ...[
           w.source ? (w.docId ? h('a', { href: '#/book/' + w.docId, onclick: e => e.stopPropagation() }, w.source) : w.source) : null,
           w.page ? ', p. ' + w.page : null,
@@ -137,6 +140,7 @@ async function showLexicon() {
   const seg = (key, opts, get, set) => h('div', { class: 'mxtabs', style: { margin: 0 } }, opts.map(([v, label]) => h('button', { class: get() === v ? 'on' : '', onclick: e => { set(v); localSet(key, v); e.target.parentNode.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === e.target)); draw(); } }, label)));
   main.append(
     h('div', { class: 'row', style: { marginBottom: '10px', alignItems: 'baseline' } }, h('h1', { style: { margin: 0 } }, 'Lexicon'), count, h('span', { style: { flex: 1 } }),
+      h('button', { class: 'btn', title: 'Ask the AI for the word family of every word that has none yet', onclick: () => lexFamilies(words, reload) }, 'Add word families'),
       menuButton('Export ▾', [['Obsidian', 'One note per word and a .base table (zip)', () => lexExport(words, 'base')], ['Markdown', 'All words in one note', () => lexExport(words, 'md')], ['CSV', 'For a spreadsheet', () => lexExport(words, 'csv')]]),
       h('button', { class: 'btn fill', onclick: () => lexEditDialog({ word: '' }, reload) }, '+ Add word')),
     h('div', { class: 'row', style: { gap: '8px', marginBottom: '12px', flexWrap: 'wrap' } }, search, tagSel,
@@ -145,6 +149,40 @@ async function showLexicon() {
     list);
   draw();
   search.focus();
+}
+
+/** The word family of every word that has none, from the AI, one word at a time; then a list to look over. */
+function lexFamilies(words, reload) {
+  const todo = words.filter(w => !String(w.forms || '').trim());
+  if (!todo.length) return toast('Every word already has a word family');
+  confirmBox(`Add word families to ${todo.length} word${todo.length === 1 ? '' : 's'}?`, 'The AI gives the other forms of each word (salient → salience) and what each can replace. They are saved on the words, and you see them all afterwards to correct. One request per word; this takes a while for many words.', 'Add', () => {
+    modal((box, close) => {
+      let stop = false;
+      const line = h('div', { class: 'muted' }), bar = h('div', { class: 'dictbar' }, h('i')), list = h('div', { class: 'lxfam' });
+      const foot = h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: () => { stop = true; } }, 'Stop'));
+      box.style.width = '640px';
+      box.append(h('h2', null, 'Word families'), line, bar, list, foot);
+      (async () => {
+        await new Promise(r => setTimeout(r, 0));   // the window is on the page first
+        let done = 0, got = 0;
+        for (const w of todo) {
+          if (stop || !box.isConnected) break;
+          line.textContent = `${done + 1} of ${todo.length}: ${w.word}`;
+          try {
+            const r = await api('lexicon/family', { method: 'POST', json: { word: w.word, partOfSpeech: w.partOfSpeech || '', definition: w.definition || '' } });
+            if (r.forms && r.forms.trim()) {
+              const saved = await api('lexicon/' + encodeURIComponent(w.id), { method: 'PATCH', json: { forms: r.forms.trim() } }); got++;
+              list.append(h('div', { class: 'lxrow', onclick: () => lexEditDialog(saved, reload) }, h('b', { class: 'serif' }, w.word), h('div', { class: 'lxmeta', style: { whiteSpace: 'pre-wrap' } }, r.forms.trim())));
+            } else list.append(h('div', { class: 'lxrow muted' }, h('b', { class: 'serif' }, w.word), ' — no other forms'));
+          } catch (e) { list.append(h('div', { class: 'lxrow' }, h('b', { class: 'serif' }, w.word), h('span', { style: { color: 'var(--red)' } }, ' — ' + (e.message || 'failed')))); if (/API key|Settings/.test(e.message || '')) break; }
+          done++; bar.firstChild.style.width = Math.round(done / todo.length * 100) + '%';
+        }
+        lexDrop();
+        line.textContent = `${got} word famil${got === 1 ? 'y' : 'ies'} added${done < todo.length ? ` (stopped after ${done} of ${todo.length})` : ''}. Click a word to correct it.`;
+        clear(foot).append(h('button', { class: 'btn fill', onclick: () => { close(); reload(); } }, 'Done'));
+      })();
+    });
+  });
 }
 
 async function lexExport(words, kind) {

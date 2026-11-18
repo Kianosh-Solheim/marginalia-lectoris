@@ -132,6 +132,61 @@ const CONTRACTIONS = {
 };
 const CONTRACTION_WHY = { "it's": 'No contractions in formal prose (or “it has”)', "he's": 'No contractions (or “he has”)', "she's": 'No contractions (or “she has”)', "i'll": 'No contractions; traditional “shall” for I and we', "we'll": 'No contractions; traditional “shall” for I and we' };
 
+// ---------------------------------------------------------------- word forms (for the lexicon)
+
+const VOWEL = /[aeiou]/;
+/** One syllable ending consonant–vowel–consonant (stop → stopped), not w, x or y. */
+const cvc = w => /^[^aeiou]*[aeiou][^aeiouwxy]$/.test(w);
+/** The regular English forms of [w]: s, ed, ing, er, est, ly, ness, and -ant/-ent → -ance/-ence. */
+function wordForm(w, t) {
+  if (!/^[a-z]+$/.test(w) || w.length < 2) return null;
+  const last = w.slice(-1), consY = /[^aeiou]y$/.test(w);
+  switch (t) {
+    case 's': return /(s|x|z|ch|sh)$/.test(w) ? w + 'es' : consY ? w.slice(0, -1) + 'ies' : w + 's';
+    case 'ed': return last === 'e' ? w + 'd' : consY ? w.slice(0, -1) + 'ied' : cvc(w) ? w + last + 'ed' : w + 'ed';
+    case 'ing': return /ie$/.test(w) ? w.slice(0, -2) + 'ying' : /[^eoy]e$/.test(w) ? w.slice(0, -1) + 'ing' : cvc(w) ? w + last + 'ing' : w + 'ing';
+    case 'er': return last === 'e' ? w + 'r' : consY ? w.slice(0, -1) + 'ier' : cvc(w) ? w + last + 'er' : w + 'er';
+    case 'est': return last === 'e' ? w + 'st' : consY ? w.slice(0, -1) + 'iest' : cvc(w) ? w + last + 'est' : w + 'est';
+    case 'ly': return /ic$/.test(w) ? w + 'ally' : consY ? w.slice(0, -1) + 'ily' : /[^aeiou]le$/.test(w) ? w.slice(0, -1) + 'y' : /ll$/.test(w) ? w + 'y' : w + 'ly';
+    case 'ness': return consY ? w.slice(0, -1) + 'iness' : w + 'ness';
+    case 'ance': return /ant$/.test(w) ? w.slice(0, -1) + 'ce' : /ent$/.test(w) ? w.slice(0, -1) + 'ce' : null;
+    case 'ancy': return /[ae]nt$/.test(w) ? w.slice(0, -1) + 'cy' : null;
+  }
+  return null;
+}
+const FORM_TAGS = { noun: ['s'], verb: ['s', 'ed', 'ing'], adjective: ['er', 'est', 'ly', 'ness', 'ance', 'ancy'], adverb: [] };
+function formTags(pos) {
+  const p = String(pos || '').toLowerCase();
+  for (const k of Object.keys(FORM_TAGS)) if (p.startsWith(k.slice(0, 3))) return FORM_TAGS[k];
+  return ['s', 'ed', 'ing', 'er', 'est', 'ly', 'ness', 'ance', 'ancy'];
+}
+/** The lexicon's "use instead of" pairs and word families, each with its regular forms, as matchers. */
+function lexiconMatchers(words) {
+  const seen = new Set(), out = [];
+  const add = (from, to, why) => {
+    const k = from.toLowerCase(); if (!from || seen.has(k) || k === to.toLowerCase()) return; seen.add(k);
+    const esc = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    out.push({ re: new RegExp('(?<![\\p{L}\\p{N}])' + esc + '(?![\\p{L}\\p{N}])', 'giu'), to, why });
+  };
+  const pairs = [];
+  words.forEach(w => {
+    const why = 'From your lexicon' + (w.definition ? ': ' + w.definition.slice(0, 140) : '');
+    String(w.insteadOf || '').split(/[,;]/).map(x => x.trim()).filter(Boolean).forEach(x => pairs.push([x, w.word, why, w.partOfSpeech]));
+    // the word family: one form per line, "salience: importance, prominence"
+    String(w.forms || '').split(/\n/).forEach(line => {
+      const m = line.match(/^\s*([^:]+?)\s*:\s*(.+)$/); if (!m) return;
+      m[2].split(/[,;]/).map(x => x.trim()).filter(Boolean).forEach(x => pairs.push([x, m[1].trim(), why + ' (form of “' + w.word + '”)', '']));
+    });
+  });
+  pairs.forEach(([x, to, why]) => add(x, to, why));              // as written first
+  pairs.forEach(([x, to, why, pos]) => {                           // then their regular forms
+    if (/\s/.test(x) || /\s/.test(to)) return;
+    const a = x.toLowerCase(), b = to.toLowerCase();
+    formTags(pos).forEach(t => { const fa = wordForm(a, t), fb = wordForm(b, t); if (fa && fb) add(fa, fb, why); });
+  });
+  return out;
+}
+
 /** Keeps the capitals of the original: Color → Colour, COLOR → COLOUR. */
 function keepCase(orig, sug) {
   if (!sug) return sug;
@@ -155,12 +210,8 @@ function quotedSpans(t) {
 function styleFindings(doc, o) {
   const out = [], words = styleWords(), phrases = phraseRules(o);
   const ignoreWords = new Set((o.ignore || []).map(w => w.toLowerCase()));
-  // Your lexicon: each word's "Use instead of" list
-  const lex = [];
-  (o.lexicon || []).forEach(w => String(w.insteadOf || '').split(/[,;]/).map(x => x.trim()).filter(x => x && x.toLowerCase() !== String(w.word).toLowerCase()).forEach(x => {
-    const esc = x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    lex.push({ re: new RegExp('(?<![\\p{L}\\p{N}])' + esc + '(?![\\p{L}\\p{N}])', 'giu'), to: w.word, why: 'From your lexicon' + (w.definition ? ': ' + w.definition.slice(0, 140) : '') });
-  }));
+  // Your lexicon: each word's "Use instead of" list and its word family, with their regular forms
+  const lex = lexiconMatchers(o.lexicon || []);
   const own = (o.rules || []).filter(r => r && r.from && r.from.trim()).map(r => {
     const f = r.from.trim(), esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return { re: new RegExp((/^\p{L}/u.test(f) ? '(?<![\\p{L}\\p{N}])' : '') + esc + (/\p{L}$/u.test(f) ? '(?![\\p{L}\\p{N}])' : ''), 'giu'), to: r.to || '', why: r.why || 'Your own rule' };

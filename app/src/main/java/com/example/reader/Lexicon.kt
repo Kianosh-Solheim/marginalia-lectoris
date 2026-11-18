@@ -28,6 +28,8 @@ object Lexicon {
         val tags: String = "",
         /** Everyday words this one can stand in for (comma-separated): they are marked in the writing program. */
         val insteadOf: String = "",
+        /** The word family, one form per line with what it can replace: "salience: importance, prominence". */
+        val forms: String = "",
         val added: Long = System.currentTimeMillis(),
         val modified: Long = System.currentTimeMillis()
     )
@@ -42,7 +44,7 @@ object Lexicon {
     fun toJson(w: Word): JSONObject = JSONObject()
         .put("id", w.id).put("word", w.word).put("definition", w.definition).put("partOfSpeech", w.partOfSpeech)
         .put("example", w.example).put("docId", w.docId).put("source", w.source).put("page", w.page)
-        .put("note", w.note).put("tags", w.tags).put("insteadOf", w.insteadOf).put("added", w.added).put("modified", w.modified)
+        .put("note", w.note).put("tags", w.tags).put("insteadOf", w.insteadOf).put("forms", w.forms).put("added", w.added).put("modified", w.modified)
 
     private fun fromJson(o: JSONObject): Word? {
         val word = o.optString("word").trim()
@@ -51,7 +53,7 @@ object Lexicon {
             id = o.optString("id").ifBlank { newId() }, word = word,
             definition = o.optString("definition"), partOfSpeech = o.optString("partOfSpeech"),
             example = o.optString("example"), docId = o.optLong("docId", 0L), source = o.optString("source"),
-            page = o.optString("page"), note = o.optString("note"), tags = o.optString("tags"), insteadOf = o.optString("insteadOf"),
+            page = o.optString("page"), note = o.optString("note"), tags = o.optString("tags"), insteadOf = o.optString("insteadOf"), forms = o.optString("forms"),
             added = o.optLong("added", System.currentTimeMillis()), modified = o.optLong("modified", System.currentTimeMillis())
         )
     }
@@ -104,7 +106,7 @@ object Lexicon {
         list.firstOrNull { it.id != id && it.word.equals(word, ignoreCase = true) }?.let { throw IllegalArgumentException("“$word” is already in the lexicon.") }
         w = w.copy(word = word, definition = s("definition", w.definition).trim(), partOfSpeech = s("partOfSpeech", w.partOfSpeech).trim(),
             example = s("example", w.example).trim(), page = s("page", w.page).trim(), note = s("note", w.note).trim(),
-            tags = s("tags", w.tags).trim(), insteadOf = s("insteadOf", w.insteadOf).trim(), modified = System.currentTimeMillis())
+            tags = s("tags", w.tags).trim(), insteadOf = s("insteadOf", w.insteadOf).trim(), forms = s("forms", w.forms).trim(), modified = System.currentTimeMillis())
         val out = list.toMutableList(); out[i] = w
         store(ctx, out)
         w
@@ -116,7 +118,31 @@ object Lexicon {
      * Asks the AI chosen in Settings → AI what [word] means, as used in [example]. Returns the definition
      * and the part of speech; nothing is saved. Only ever called from a button.
      */
-    data class Definition(val definition: String, val partOfSpeech: String, val insteadOf: String)
+    data class Definition(val definition: String, val partOfSpeech: String, val insteadOf: String, val forms: String = "")
+
+    private const val FAMILY_ASK = "Also give the word's family: the other forms of it that are used in writing (other parts of speech, " +
+        "and irregular forms; not the plain plural, past tense, -ing or -ly forms that follow the usual rules), each with two to four " +
+        "plainer everyday words or phrases, in the same grammatical form, that it could replace. For 'salient': salience → importance, " +
+        "prominence. Leave it empty when the word has no such forms. "
+
+    private fun formsText(o: JSONObject): String {
+        val a = o.optJSONArray("forms") ?: return ""
+        return (0 until a.length()).mapNotNull { a.optJSONObject(it) }.mapNotNull { f ->
+            val form = f.optString("form").trim().replace(":", "")
+            val alt = f.optJSONArray("insteadOf")?.let { x -> (0 until x.length()).map { x.optString(it).trim() }.filter { it.isNotBlank() } }.orEmpty()
+            if (form.isBlank() || alt.isEmpty()) null else "$form: ${alt.take(5).joinToString(", ")}"
+        }.take(8).joinToString("\n")
+    }
+
+    /** The word family alone, for a word that is already saved. Only ever run from a button. */
+    fun family(ctx: Context, word: String, partOfSpeech: String, definition: String): String {
+        val o = NoteAiAssistant.askJson(ctx,
+            "You are a careful lexicographer. For the word below (as defined), " + FAMILY_ASK.replaceFirst("Also give", "give") +
+                "Write in the language of the word. Return only JSON: {\"forms\": [{\"form\": string, \"insteadOf\": [string]}]}.",
+            "Word: ${word.trim()}" + (if (partOfSpeech.isNotBlank()) " ($partOfSpeech)" else "") + "\nMeaning: ${definition.trim().take(400)}",
+            maxTokens = 500, maxChars = 1000)
+        return formsText(o)
+    }
 
     fun define(ctx: Context, word: String, example: String): Definition {
         val o = NoteAiAssistant.askJson(ctx,
@@ -126,13 +152,13 @@ object Lexicon {
                 "(Norwegian for a Norwegian word, British English for an English word). Also give the part of speech in " +
                 "the same language (for English: noun, verb, adjective, adverb, phrase, …), and two to five plainer, everyday " +
                 "words or short phrases in the same language that this word could replace in writing, in the same grammatical form " +
-                "(for 'salient': important, striking, prominent). " +
-                "Return only JSON: {\"definition\": string, \"partOfSpeech\": string, \"insteadOf\": [string]}.",
-            "Word: ${word.trim()}\nExample: ${example.trim().take(800)}", maxTokens = 500, maxChars = 1200)
+                "(for 'salient': important, striking, prominent). " + FAMILY_ASK +
+                "Return only JSON: {\"definition\": string, \"partOfSpeech\": string, \"insteadOf\": [string], \"forms\": [{\"form\": string, \"insteadOf\": [string]}]}.",
+            "Word: ${word.trim()}\nExample: ${example.trim().take(800)}", maxTokens = 800, maxChars = 1200)
         val d = o.optString("definition").trim()
         check(d.isNotBlank()) { "The AI gave no definition." }
         val alt = o.optJSONArray("insteadOf")?.let { a -> (0 until a.length()).map { a.optString(it).trim() }.filter { it.isNotBlank() && !it.equals(word.trim(), true) } }.orEmpty()
-        return Definition(d, o.optString("partOfSpeech").trim(), alt.take(6).joinToString(", "))
+        return Definition(d, o.optString("partOfSpeech").trim(), alt.take(6).joinToString(", "), formsText(o))
     }
 
     /**
