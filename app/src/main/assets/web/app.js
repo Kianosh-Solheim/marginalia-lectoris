@@ -227,6 +227,7 @@ function route() {
   if (parts[0] === 'presentations') { state.tab = 'presentations'; return showPresentations(); }
   if (parts[0] === 'zotero') { state.tab = 'zotero'; return showZotero(); }
   if (parts[0] === 'search') { state.tab = 'search'; return showTextSearch(params); }
+  if (parts[0] === 'screen') { state.tab = 'screen'; return showScreen(); }
   if (parts[0] === 'lexicon') { state.tab = 'lexicon'; return showLexicon(); }
   if (parts[0] === 'matrix') { state.tab = 'matrix'; return parts[1] ? showMatrix(parts[1]) : showMatrices(); }
   if (parts[0] === 'writing') { state.tab = 'writing'; return showWriting(params); }
@@ -307,6 +308,7 @@ function header() {
     ['Convert web pages', 'Saved chapters (HTML) → EPUB or PDF, with the printed page numbers', () => convertDialog()],
     ['Colours', 'Light, dark, or as the computer has it', () => themeDialog()],
     ['Settings', 'Search, AI, backups, notes export…', () => { location.hash = '#/settings'; }],
+    ['Tablet screen', 'See and control the tablet from here', () => { location.hash = '#/screen'; }],
     ['Keyboard shortcuts', 'What the keys do', () => shortcutsDialog()],
     ['Sign out', 'Sign this browser out', async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); }],
   ].filter(Boolean), 'btn quiet morebtn');

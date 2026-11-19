@@ -12,7 +12,7 @@ let workspace = null;
 const tabsOn = () => !EMBEDDED && localGet('ml.tabs', '') === '1';
 function tabLabelFor(hash) {
   const p = hash.replace(/^#\/?/, '').split('?')[0].split('/');
-  return p[0] === 'notes' ? 'Notes' : p[0] === 'writing' ? 'Writing' : p[0] === 'matrix' ? 'Matrix' : p[0] === 'lexicon' ? 'Lexicon' : p[0] === 'write' ? 'Document' : p[0] === 'read' ? 'Reading' : p[0] === 'book' ? 'Book'
+  return p[0] === 'notes' ? 'Notes' : p[0] === 'writing' ? 'Writing' : p[0] === 'matrix' ? 'Matrix' : p[0] === 'lexicon' ? 'Lexicon' : p[0] === 'screen' ? 'Tablet screen' : p[0] === 'write' ? 'Document' : p[0] === 'read' ? 'Reading' : p[0] === 'book' ? 'Book'
     : p[0] === 'search' ? 'Search' : p[0] === 'settings' ? 'Settings' : p[0] === 'zotero' ? 'Zotero' : 'Library';
 }
 

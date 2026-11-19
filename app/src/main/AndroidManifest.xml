@@ -12,6 +12,7 @@
     <!-- "Library in the browser": local web server run as a foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -149,6 +150,32 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Local network server so the user can open their own library from a browser on the same Wi-Fi" />
+        </service>
+
+        <!-- The tablet's screen in the browser: Android's own question each time, then a service while it lasts -->
+        <activity
+            android:name=".server.ScreenConsentActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <service
+            android:name=".server.ScreenShareService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- Taps and typing from the browser; switched on by the user under Settings → Accessibility -->
+        <service
+            android:name=".server.ScreenControlService"
+            android:exported="true"
+            android:label="Marginalia remote control"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/screen_control_service" />
         </service>
 
         <provider

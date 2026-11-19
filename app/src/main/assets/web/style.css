@@ -1373,3 +1373,17 @@ main.lxpage { max-width: 860px; margin: 0 auto; padding: 22px 16px 60px; }
 .ivnav.prev { left: 10px; } .ivnav.next { right: 10px; }
 .ivnav:hover { background: #3f3f46; }
 .imgview:focus { outline: none; }
+
+/* The tablet's screen */
+main.scrpage { padding: 10px 14px 0; max-width: none; }
+.scrbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.scrwrap { display: flex; gap: 16px; align-items: flex-start; }
+.scrstage { position: relative; flex: 1; min-width: 0; height: calc(100vh - 150px); display: flex; align-items: center; justify-content: center; background: var(--wash); border: 1.5px solid var(--ink); outline: none; touch-action: none; user-select: none; }
+.scrstage:focus { box-shadow: 0 0 0 3px var(--indigo, #3730a3); }
+.scrimg { max-width: 100%; max-height: 100%; display: block; background: #fff; cursor: pointer; }
+.scrimg:not([src]) { display: none; }
+.scrside { width: 280px; flex: none; font-size: 13.5px; }
+.scrside p { margin: 0 0 8px; }
+.scrtap { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; border: 2px solid var(--red, #b91c1c); pointer-events: none; animation: scrtap .45s ease-out forwards; }
+@keyframes scrtap { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+@media (max-width: 900px) { .scrwrap { flex-direction: column; } .scrside { width: auto; } }

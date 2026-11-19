@@ -20,6 +20,7 @@ function paletteActions() {
   const theme = t => () => { try { localStorage.setItem('ml.theme', t); } catch (_) {} applyTheme(); if (typeof route === 'function' && !workspace && document.querySelector('header.top')) route(); };
   const list = [
     ['Library', 'Go to', go('#/'), 'home all books articles'], ['Books', 'Go to', go('#/books'), ''], ['Articles', 'Go to', go('#/articles'), ''],
+    ['Tablet screen', 'Go to', go('#/screen'), 'remote control mirror see tablet display'],
     ['Search in the texts', 'Search', () => { if (window.paletteTextMode) window.paletteTextMode(); }, 'find full text words inside books articles pdf ctrl+f', true],
     ['Notes', 'Go to', go('#/notes'), 'vault highlights'], ['Writing', 'Go to', go('#/writing'), 'documents editor'], ['Lexicon', 'Go to', go('#/lexicon'), 'words vocabulary definitions dictionary glossary'], ['Literature matrices', 'Go to', go('#/matrix'), 'matrix table compare sources synthesis'], ['Search in the texts', 'Go to', go('#/search'), 'full text find'],
     ['Zotero', 'Go to', go('#/zotero'), ''], ['Presentations', 'Go to', go('#/presentations'), 'slides'], ['Settings', 'Go to', go('#/settings'), 'preferences backup ai'],

@@ -146,6 +146,20 @@ fun WebServerSettingsSection() {
                 style = MaterialTheme.typography.bodySmall, color = grey
             )
             if (note.isNotBlank()) Text(note, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.Black)
+
+            // The tablet's screen in the browser (☰ → Tablet screen in the web view)
+            var controlOn by remember { mutableStateOf(com.example.server.ScreenShare.controlOn()) }
+            LaunchedEffect(Unit) { while (true) { controlOn = com.example.server.ScreenShare.controlOn(); kotlinx.coroutines.delay(1500) } }
+            Text("Screen in the browser", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = Color.Black)
+            Text(
+                "In the web view, ☰ → Tablet screen shows this screen. Android asks here each time before it is shared. " +
+                    "To also tap and type from the browser, switch on “Marginalia remote control” under Accessibility. " +
+                    "Anyone with the PIN on the same network can then control the tablet while it is shared.",
+                style = MaterialTheme.typography.bodySmall, color = grey
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                InkChip(if (controlOn) "Remote control is on — change" else "Switch on remote control…", controlOn, { com.example.server.openAccessibilitySettings(context) })
+            }
         }
     }
 }

@@ -110,6 +110,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s == listOf("library") && m == "GET" -> return HttpResponse.json(library().toString())
             s.firstOrNull() == "dictation" -> return dictationRoute(req, s.drop(1))
             s.firstOrNull() == "lexicon" -> return lexiconRoute(req, s.drop(1))
+            s.firstOrNull() == "screen" -> return screenRoute(req, s.drop(1))
             s == listOf("style-check") && m == "POST" -> return styleCheck(req)
             s == listOf("highlights") && m == "GET" -> return HttpResponse.json(allHighlights().toString())
             s == listOf("tags") && m == "GET" -> {
@@ -883,6 +884,29 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 text, maxTokens = 4000, maxChars = 14000)
         } catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The AI check failed.") }
         return HttpResponse.json(JSONObject().put("issues", o.optJSONArray("issues") ?: JSONArray()).toString()).header("Cache-Control", "no-store")
+    }
+
+    /** The tablet's screen in the browser: status, start/stop, the newest picture, and input. */
+    private fun screenRoute(req: HttpRequest, rest: List<String>): HttpResponse {
+        val ok = { o: JSONObject -> HttpResponse.json(o.toString()).header("Cache-Control", "no-store") }
+        return when {
+            rest.isEmpty() && req.method == "GET" -> ok(ScreenShare.json())
+            rest == listOf("start") && req.method == "POST" -> { ScreenShare.request(context); ok(ScreenShare.json()) }
+            rest == listOf("stop") && req.method == "POST" -> { ScreenShare.stop(context); ok(ScreenShare.json()) }
+            rest == listOf("accessibility") && req.method == "POST" -> { openAccessibilitySettings(context); ok(ScreenShare.json()) }
+            rest == listOf("frame") && req.method == "GET" -> {
+                val after = req.query["after"]?.toLongOrNull() ?: -1L
+                val f = ScreenShare.frameAfter(after) ?: return HttpResponse.json(ScreenShare.json().toString(), 409).header("Cache-Control", "no-store")
+                HttpResponse.Bytes(200, "image/jpeg", f.second).header("Cache-Control", "no-store")
+                    .header("X-Seq", f.first.toString()).header("X-Width", ScreenShare.frameW.toString()).header("X-Height", ScreenShare.frameH.toString())
+            }
+            rest == listOf("input") && req.method == "POST" -> {
+                try { ScreenShare.input(context, runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject())) }
+                catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The tablet did not take it.") }
+                ok(JSONObject().put("ok", true))
+            }
+            else -> throw NoSuchElementException("No such screen route.")
+        }
     }
 
     /** The lexicon: GET the words; POST one; PATCH or DELETE /<id>; POST define → the AI's suggestion. */
