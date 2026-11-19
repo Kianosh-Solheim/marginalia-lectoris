@@ -511,7 +511,11 @@ function wcTypst(chs, meta, opts) {
     c.root.querySelectorAll('a[href^="#"]').forEach(a => wanted.add(a.getAttribute('href').slice(1)));
   });
   const [pw, ph] = opts.pageSize;
-  const textW = (pw - 26) * 2.835, maxH = (ph - 36) * 2.835 * 0.82;   // pt
+  const book = !!opts.bookPages && chs.some(c => c.pages.length);
+  // margins (mm): a little narrower when each sheet must hold a whole printed page
+  const [mt, mb, mx] = book ? [13, 11, 9] : [17, 15, 13];
+  const textW = (pw - 2 * mx) * 2.835, maxH = (ph - mt - mb - 4) * 2.835 * 0.82;   // pt
+
 
   const inl = (node, ctx) => {
     let out = '';
@@ -582,22 +586,28 @@ function wcTypst(chs, meta, opts) {
       case 'p':
         if (cls === 'bibl') return lab + `#align(right, emph[${inl(n).trim()}])\n\n`;
         if (cls === 'box-head') return lab + `#block(below: 0.6em, strong[${inl(n).trim()}])\n\n`;
+        if (n.getAttribute('data-indent')) return lab + para('#h(1.2em)' + inl(n));
         return lab + para(inl(n));
       case 'blockquote': return lab + `#bq[\n${blocks(n)}]\n\n`;
       case 'ul': case 'ol': {
-        const items = [...n.children].filter(li => li.tagName === 'LI').map(li => {
+        let lis = [...n.children].filter(li => li.tagName === 'LI'), pre = '';
+        // an item that began on the page before goes on without a new bullet or number
+        if (lis.length && lis[0].getAttribute('data-cont')) { pre = `#pad(left: 1.2em)[${blocks(lis[0]).trim()}]\n\n`; lis = lis.slice(1); }
+        const items = lis.map(li => {
           const l = li.id && wanted.has(li.id) ? `#metadata(none)<${li.id}>` : '';
           return `[${l}${blocks(li).trim()}]`;
         });
-        if (!items.length) return '';
-        const start = t === 'ol' && n.getAttribute('start') ? `start: ${parseInt(n.getAttribute('start'), 10) || 1}, ` : '';
-        return lab + `#${t === 'ol' ? 'enum' : 'list'}(${start}${items.join(', ')})\n\n`;
+        if (!items.length) return lab + pre;
+        const n0 = (lis[0] && lis[0].getAttribute('data-n')) || n.getAttribute('start');
+        const start = t === 'ol' && n0 ? `start: ${parseInt(n0, 10) || 1}, ` : '';
+        return lab + pre + `#${t === 'ol' ? 'enum' : 'list'}(${start}${items.join(', ')})\n\n`;
       }
       case 'figure': {
         const imgs = [...n.querySelectorAll('img')].map(im => {
           const w = +im.dataset.w || 600, h0 = +im.dataset.h || 400;
           const natW = w * 0.75, hAtW = Math.min(natW, textW) * h0 / w;
-          const size = hAtW > maxH ? `height: ${Math.round(maxH)}pt` : natW < textW ? `width: ${Math.round(natW)}pt` : 'width: 100%';
+          const em = pt => (pt / opts.fontSize).toFixed(2) + 'em';   // in em: a picture shrinks with the text of a crowded page
+          const size = hAtW > maxH ? `height: ${em(maxH)}` : natW < textW ? `width: ${em(natW)}` : `width: ${em(textW)}`;
           return `image(${wcTyStr(im.getAttribute('src'))}, ${size})`;
         });
         const cap = n.querySelector('figcaption');
@@ -652,7 +662,17 @@ function wcTypst(chs, meta, opts) {
 #let notes(body) = { v(1.4em); line(length: 100%, stroke: 0.4pt + luma(160)); set text(size: 0.88em); set par(first-line-indent: 0pt, justify: false); body }
 #let tcap(body) = block(below: 0.5em, sticky: true, text(size: 0.85em, weight: "bold", body))
 #let fig(imgs, cap) = block(width: 100%, breakable: false, above: 1.1em, below: 1.1em, { set align(center); for i in imgs { i; v(0.2em) }; if cap != [] { set align(left); text(size: 0.85em, weight: "bold", cap) } })
-#set page(width: ${pw}mm, height: ${ph}mm, margin: (top: 17mm, bottom: 15mm, x: 13mm),
+${book ? `#let fitpage(sheets, body) = context {
+  // the text of one printed page, a little smaller when it would not fit; past ${WC_MIN_PT} pt it goes on to another sheet
+  // pictures (in em) shrink with the text, and up to 40 % more by the time the text is at its smallest
+  let k(sz) = 1 - 0.4 * (${opts.fontSize}pt - sz) / ${(opts.fontSize - WC_MIN_PT).toFixed(2)}pt
+  let set-in(sz, b) = { set text(size: sz); show image: it => scale(k(sz) * 100%, reflow: true, it); b }
+  let room = if sheets > 1 { sheets * ${(ph - mt - mb) * 0.86}mm } else { ${(ph - mt - mb) * 0.94}mm }   // some room for what measuring cannot see (widows, figures that move on)
+  let s = ${opts.fontSize}pt
+  while s > ${WC_MIN_PT}pt and measure(width: ${pw - 2 * mx}mm, set-in(s, body)).height > room { s -= 0.25pt }
+  set-in(s, body)
+}
+` : ''}#set page(width: ${pw}mm, height: ${ph}mm, margin: (top: ${mt}mm, bottom: ${mb}mm, x: ${mx}mm),
   header: context {
     let p = here().page()
     let chs = query(heading.where(level: 1).before(here())).filter(x => x.outlined)
@@ -660,10 +680,21 @@ function wcTypst(chs, meta, opts) {
     if chs.len() > 0 and not opening {
       let ms = query(selector(<origpage>).before(here()))
       set text(size: 7.5pt, fill: luma(110))
-      grid(columns: (1fr, auto), column-gutter: 1em, chs.last().body, if ms.len() > 0 { lbl + ms.last().value })
+      grid(columns: (1fr, auto), column-gutter: 1em, chs.last().body, if ms.len() > 0 and ${book ? 'false' : 'true'} { lbl + ms.last().value })
     }
   },
-  footer: context { if here().page() > 1 { align(center, text(size: 8pt, fill: luma(90), counter(page).display())) } })
+  footer: context {${book ? `
+    // the printed page this sheet shows; a sheet that only carries on the page before says so
+    let p = here().page()
+    let st = query(<bpstart>).filter(m => m.location().page() == p)
+    let b = query(selector(<bpstart>).before(here()))
+    let n = counter(page).get().first()
+    let lab = if st.len() > 0 { st.first().value.label } else if b.len() > 0 {
+      let v = b.last().value
+      if v.last != none and n <= v.last { str(n) } else { (if v.last != none { str(v.last) } else { v.label }) + " (cont.)" }
+    } else if p > 1 { counter(page).display() } else { none }
+    if lab != none { align(center, text(size: 8pt, fill: luma(90), lab)) }
+  })` : ` if here().page() > 1 { align(center, text(size: 8pt, fill: luma(90), counter(page).display())) } })`}
 #set text(font: "Libertinus Serif", size: ${opts.fontSize}pt, lang: ${wcTyStr(lang)}, hyphenate: true)
 #set par(justify: true, first-line-indent: 1.2em, leading: 0.62em, spacing: 0.62em)
 #set table(stroke: (x: none, y: 0.4pt + luma(170)), inset: 4pt, fill: (_, y) => if calc.even(y) and y > 0 { luma(246) })
@@ -685,13 +716,77 @@ function wcTypst(chs, meta, opts) {
     #v(1.2em)
     #text(size: 9pt, fill: luma(80))[${wcTyText([meta.publisher, meta.date].filter(Boolean).join(' · '))}]
     ${meta.isbn ? `#linebreak() #text(size: 9pt, fill: luma(80))[ISBN ${wcTyText(meta.isbn)}]` : ''}
-    ${chs.some(c => c.pages.length) ? `#v(3em) #text(size: 8pt, fill: luma(110))[The page markers in the text and the page in the running head are those of the printed edition.]` : ''}
+    ${chs.some(c => c.pages.length) ? `#v(3em) #text(size: 8pt, fill: luma(110))[${book ? 'Each page of this PDF is a page of the printed edition, with its number.' : 'The page markers in the text and the page in the running head are those of the printed edition.'}]` : ''}
   ]
 ]
-#outline(title: [Contents], depth: 2, indent: auto)
+${book ? '#page(numbering: "i")[#counter(page).update(1)#outline(title: [Contents], depth: 2, indent: auto)]' : '#outline(title: [Contents], depth: 2, indent: auto)'}
 `;
-  chs.forEach(c => { src += `\n#pagebreak(weak: true)\n#metadata(none)<${c.anchor}>\n` + blocks(c.root); });
+  chs.forEach(c => {
+    const chunks = book ? wcPageChunks(c.root) : null;
+    if (!chunks) { src += `\n#pagebreak(weak: true)\n#metadata(none)<${c.anchor}>\n` + blocks(c.root); return; }
+    chunks.forEach((k, i) => {
+      const num = /^\d+$/.test(k.label) ? parseInt(k.label, 10) : wcRoman(k.label);
+      const numbering = /^\d+$/.test(k.label) ? '"1"' : num ? '"i"' : 'none';
+      const meta = `(label: ${wcTyStr(k.label)}, last: ${k.last || 'none'})`;
+      src += `\n#page(numbering: ${numbering})[${num ? `#counter(page).update(${num})` : ''}#metadata(${meta})<bpstart>${i === 0 ? `#metadata(none)<${c.anchor}>` : ''}\n#fitpage(${k.last ? k.last - num + 1 : 1})[\n${blocks(k.root)}]]\n`;
+    });
+  });
   return src;
+}
+
+const WC_MIN_PT = 8.5;   // the smallest the text of a crowded printed page is set, before it goes on to another sheet
+function wcRoman(s) {
+  const v = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 }; let n = 0;
+  s = String(s).toLowerCase(); if (!/^[ivxlcdm]+$/.test(s)) return 0;
+  for (let i = 0; i < s.length; i++) n += v[s[i]] < (v[s[i + 1]] || 0) ? -v[s[i]] : v[s[i]];
+  return n;
+}
+/** A chapter cut at its page markers: one piece per printed page (null when it has none).
+    Elements cut in two (a paragraph running over the page) are marked data-cont where they go on. */
+function wcPageChunks(root) {
+  const doc = root.ownerDocument;
+  root.querySelectorAll('ol').forEach(ol => { let k = parseInt(ol.getAttribute('start'), 10) || 1; [...ol.children].forEach(li => { if (li.tagName === 'LI') li.setAttribute('data-n', k++); }); });
+  const marks = [...root.querySelectorAll('span.pagenum')];
+  if (!marks.length) return null;
+  const take = (after, before) => {
+    const r = doc.createRange();
+    if (after) r.setStartAfter(after); else r.setStart(root, 0);
+    if (before) r.setEndBefore(before); else r.setEnd(root, root.childNodes.length);
+    const div = doc.createElement('div'); div.append(r.cloneContents());
+    // the empty shells a cut leaves (a box whose text starts on the next page)
+    // (their ids stay, as bare anchors, so links to them still land)
+    [...div.querySelectorAll('*')].reverse().forEach(e => {
+      if (!e.isConnected && !div.contains(e)) return;
+      if (/^(IMG|BR|HR|TD|TH)$/.test(e.tagName) || e.textContent.trim() || e.querySelector('img, table, hr')) return;
+      const ids = [e, ...e.querySelectorAll('[id]')].filter(x => x.id).map(x => x.id);
+      e.replaceWith(...ids.map(id => { const a = doc.createElement('span'); a.id = id; return a; }));
+    });
+    if (after) {
+      let depth = 0; for (let p = after.parentNode; p && p !== root; p = p.parentNode) depth++;
+      let n = div;
+      for (let i = 0; i < depth; i++) { n = n.firstChild; if (!n || n.nodeType !== 1) break; n.setAttribute('data-cont', '1'); n.removeAttribute('id'); }   // the id stays with the first part
+    }
+    return div;
+  };
+  const has = d => d.textContent.trim() || d.querySelector('img, table');
+  const pre = take(null, marks[0]);
+  const out = [];
+  marks.forEach((m, i) => {
+    const div = take(m, marks[i + 1] || null);
+    if (i === 0 && has(pre)) div.prepend(...pre.childNodes);
+    if (!has(div)) return;
+    // a paragraph that begins the page has the indent it has in the book
+    let f = div.firstElementChild;
+    while (f && /^(DIV|SECTION|ARTICLE)$/.test(f.tagName) && !f.className) f = f.firstElementChild;
+    if (f && f.tagName === 'P' && !f.getAttribute('data-cont') && !f.className) {
+      const lead = div.textContent.trimStart().slice(0, 30), own = f.textContent.trimStart().slice(0, 30);
+      if (lead === own) f.setAttribute('data-indent', '1');
+    }
+    out.push({ label: m.getAttribute('data-page'), root: div, next: marks[i + 1] ? marks[i + 1].getAttribute('data-page') : null });
+  });
+  // a printed page the web page has no marker for (often a full-page figure): the piece before covers it too
+  out.forEach(k => { const a = parseInt(k.label, 10), b = parseInt(k.next, 10); k.last = /^\d+$/.test(k.label) && b > a + 1 && b - a <= 4 ? b - 1 : null; });
+  return out.length ? out : null;
 }
 
 // ------------------------------------------------------------------ the whole job
@@ -734,7 +829,7 @@ function wcRecopy(c) { const root = c.root.cloneNode(true); return Object.assign
 var wcDropTarget = null;   // while the dialog is open, files dropped anywhere come to it (see the drop handler in app.js)
 function convertDialog() {
   const opts = {
-    epub: localGet('ml.wc.epub', '1') === '1', pdf: localGet('ml.wc.pdf', '1') === '1',
+    epub: localGet('ml.wc.epub', '1') === '1', pdf: localGet('ml.wc.pdf', '1') === '1', bookPages: localGet('ml.wc.book', '1') === '1',
     separate: false, showPages: localGet('ml.wc.pages', '1') === '1',
     label: localGet('ml.wc.label', 'p. '), pageSize: [158, 210], fontSize: 10.5,
     toLibrary: localGet('ml.wc.lib', '1') === '1', download: localGet('ml.wc.dl', '0') === '1',
@@ -763,7 +858,10 @@ function convertDialog() {
           chip('Show in the text', () => opts.showPages, () => { opts.showPages = !opts.showPages; localSet('ml.wc.pages', opts.showPages ? '1' : '0'); }, 'Off: no markers in the text; “go to page” and the PDF\'s running head still have them'),
           (() => { const i = h('input', { value: opts.label, style: { width: '60px' }, title: 'Before the number: “p. ”, “s. ”, or nothing' }); i.addEventListener('input', () => { opts.label = i.value; localSet('ml.wc.label', i.value); }); return i; })(),
           h('span', { class: 'muted', style: { fontSize: '12px' } }, 'before the number')),
-        opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF page'),
+        opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF pages'),
+          chip('As in the book', () => opts.bookPages, () => { opts.bookPages = true; localSet('ml.wc.book', '1'); }, 'Each printed page on a page of its own, with its number; a crowded page is set a little smaller'),
+          chip('Flowing', () => !opts.bookPages, () => { opts.bookPages = false; localSet('ml.wc.book', '0'); }, 'The text runs on from page to page; the printed pages are marked in the text')) : null,
+        opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF size'),
           sizes.map(([l, s]) => chip(l, () => opts.pageSize[0] === s[0] && opts.pageSize[1] === s[1], () => { opts.pageSize = s; })),
           h('span', { class: 'spacer' }),
           chip('Smaller', () => false, () => { opts.fontSize = Math.max(8, opts.fontSize - 0.5); }), h('span', { class: 'mono', style: { fontSize: '12px' } }, opts.fontSize + ' pt'),
