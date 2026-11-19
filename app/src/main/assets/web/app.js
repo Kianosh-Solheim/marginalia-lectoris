@@ -3862,8 +3862,50 @@ async function openEpub(ctx, params) {
   };
   rendition.on('rendered', watchStrip);
   rendition.on('relocated', () => { watchStrip(); clearTimeout(snapT); snapT = setTimeout(snap, 160); });
+  // Pictures: a click on one opens it larger, with the book's other pictures a step away.
+  let picList = null, picLoading = null;
+  const picPath = (src, secPath) => { try { return decodeURIComponent(new URL(src, 'http://epub' + (secPath.startsWith('/') ? '' : '/') + secPath).pathname); } catch (_) { return null; } };
+  const picCaption = el => {
+    const fig = el.closest('figure');
+    const fc = fig && fig.querySelector('figcaption');
+    const t = (fc && fc.textContent) || el.getAttribute('alt') || el.getAttribute('title') || '';
+    return t.replace(/\s+/g, ' ').trim();
+  };
+  const bookPictures = () => picLoading || (picLoading = (async () => {
+    const out = [];
+    for (const sec of (book.spine.spineItems || [])) {
+      let doc; try { doc = await sec.load(book.load.bind(book)); } catch (_) { continue; }
+      const secPath = sec.url || book.resolve(sec.href) || sec.href;
+      [...doc.querySelectorAll('img, image')].forEach((el, n) => {
+        const src = el.getAttribute('src') || el.getAttribute('href') || el.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '';
+        const path = src && !/^data:/.test(src) ? picPath(src, String(secPath).replace(/^\w+:\/\/[^/]+/, '')) : null;
+        if (!path && !/^data:/.test(src)) return;
+        out.push({ key: sec.index + ':' + n, caption: picCaption(el), name: (d.title || 'Picture').slice(0, 50) + ' - ' + (path ? path.split('/').pop() : 'picture ' + (out.length + 1)),
+          url: path ? () => book.archive.createUrl(path) : src });
+      });
+      try { sec.unload(); } catch (_) {}
+    }
+    picList = out; return out;
+  })());
   rendition.hooks.content.register(contents => {
     const doc = contents.document; if (!doc) return;
+    try { const st = doc.createElement('style'); st.textContent = 'img, svg image { cursor: zoom-in; }'; doc.head && doc.head.append(st); } catch (_) {}
+    // Where a picture lives in the book's file (for pictures whose address the reader did not rewrite, e.g. names with spaces).
+    const secOf = () => { try { const sec = book.spine.get(contents.sectionIndex); return String((sec && (sec.url || book.resolve(sec.href))) || '').replace(/^\w+:\/\/[^/]+/, ''); } catch (_) { return ''; } };
+    const archivePath = el => { const src = el.getAttribute('src') || el.getAttribute('href') || el.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || ''; return src && !/^(blob|data):/.test(src) ? picPath(src, secOf()) : null; };
+    const mend = el => { if (el.tagName.toLowerCase() !== 'img' || el._mended || (el.complete && el.naturalWidth)) return; const path = archivePath(el); if (!path) return; el._mended = true; book.archive.createUrl(path).then(u => { el.src = u; }).catch(() => {}); };
+    doc.querySelectorAll('img').forEach(el => { if (el.complete && !el.naturalWidth) mend(el); else el.addEventListener('error', () => mend(el), { once: true }); });
+    doc.addEventListener('click', e => {
+      const el = e.target && e.target.closest && e.target.closest('img, image'); if (!el) return;
+      const sel = doc.getSelection && doc.getSelection(); if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+      e.preventDefault(); e.stopPropagation();
+      const key = contents.sectionIndex + ':' + [...doc.querySelectorAll('img, image')].indexOf(el);
+      const ap = archivePath(el), shown = el.currentSrc || el.getAttribute('src') || '';
+      const here = { key, caption: picCaption(el), name: (d.title || 'Picture').slice(0, 50) + (ap ? ' - ' + ap.split('/').pop() : ''), url: /^(blob|data):/.test(shown) ? shown : ap ? () => book.archive.createUrl(ap) : shown };
+      if (picList) { const i = picList.findIndex(p => p.key === key); return openImageViewer(i >= 0 ? picList : [here], Math.max(0, i)); }
+      const v = openImageViewer([here], 0);
+      bookPictures().then(list => { if (v && list.some(p => p.key === key)) v.update(list); }).catch(() => {});
+    }, true);
     doc.addEventListener('mousedown', () => { dragging = true; });
     doc.addEventListener('mouseup', () => { dragging = false; clearTimeout(snapT); snapT = setTimeout(snap, 120); });
   });

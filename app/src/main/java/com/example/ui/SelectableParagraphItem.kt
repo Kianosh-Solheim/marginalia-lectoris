@@ -1325,6 +1325,8 @@ fun SelectableParagraphItem(
     semanticBlock: com.example.reader.EpubSemanticBlock? = null,
     footnoteEntries: Map<String, com.example.reader.EpubFootnoteEntry> = emptyMap(),
     embeddedImageBitmap: android.graphics.Bitmap? = null,
+    /** A tap on the picture: opens it larger. */
+    onImageClick: (() -> Unit)? = null,
     onInternalLinkClick: ((href: String, targetFileKey: String, targetAnchorId: String) -> Unit)? = null,
     onFootnoteEntryClick: ((com.example.reader.EpubFootnoteEntry) -> Unit)? = null,
     onJumpBackFromFootnote: ((com.example.reader.EpubFootnoteEntry) -> Unit)? = null,
@@ -1891,6 +1893,7 @@ fun SelectableParagraphItem(
                     .padding(bottom = 6.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .border(1.dp, activeTheme.dividerColor, RoundedCornerShape(8.dp))
+                    .then(if (onImageClick != null) Modifier.clickable { onImageClick() } else Modifier)
             )
         }
 

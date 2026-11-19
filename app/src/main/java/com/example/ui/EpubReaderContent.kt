@@ -49,6 +49,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -1334,6 +1336,7 @@ fun EpubReaderPagerContent(
                                                         semanticBlock = item.semanticBlock,
                                                         footnoteEntries = item.footnoteEntries,
                                                         embeddedImageBitmap = embeddedImg,
+                                                        onImageClick = embeddedImg?.let { bmp -> { zoomedFigureBitmap = bmp; zoomedFigureCaption = item.semanticBlock?.let { b -> b.captionText.ifBlank { b.imageAlt } }.orEmpty() } },
                                                         onInternalLinkClick = jumpToInternalTarget,
                                                         onFootnoteEntryClick = { entry ->
                                                             popupNoteReturnPageIdx = item.pageIndex
@@ -2047,6 +2050,7 @@ fun EpubReaderPagerContent(
                                                                 semanticBlock = item.semanticBlock,
                                                                 footnoteEntries = item.footnoteEntries,
                                                                 embeddedImageBitmap = embeddedImg,
+                                                                onImageClick = embeddedImg?.let { bmp -> { zoomedFigureBitmap = bmp; zoomedFigureCaption = item.semanticBlock?.let { b -> b.captionText.ifBlank { b.imageAlt } }.orEmpty() } },
                                                                 onInternalLinkClick = jumpToInternalTargetPaginated,
                                                                 onFootnoteEntryClick = { entry ->
                                                                     popupNoteReturnPageIdx = pageIndex
@@ -2362,7 +2366,8 @@ fun EpubReaderPagerContent(
                         onDismiss = {
                             zoomedFigureBitmap = null
                             zoomedFigureCaption = ""
-                        }
+                        },
+                        book = epubBook
                     )
                 }
             }
@@ -4056,105 +4061,131 @@ internal fun EpubPopupNoteBottomCard(
     }
 }
 
+/**
+ * A picture of the book at full size: pinch or double-tap to zoom, drag to move, swipe (or the arrows)
+ * for the book's other pictures, with the caption below and Save.
+ */
 @Composable
 internal fun EpubFigureZoomModal(
     bitmap: Bitmap,
     caption: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    book: com.example.reader.EpubBook? = null
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    val pictures = remember(book) { book?.let { com.example.reader.EpubImages.list(it) }.orEmpty() }
+    val startPath = remember(book, bitmap) { book?.let { com.example.reader.EpubImages.pathOf(it, bitmap) } }
+    var index by remember { mutableIntStateOf(pictures.indexOfFirst { p -> startPath != null && (p.path == startPath || p.path.substringAfterLast('/') == startPath.substringAfterLast('/')) }) }
+    val cur = pictures.getOrNull(index)
+    val shownCaption = cur?.caption ?: caption
+    var big by remember { mutableStateOf<Bitmap?>(null) }
+    var message by remember { mutableStateOf("") }
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
+    var swipe by remember { mutableFloatStateOf(0f) }
+
+    // The full-size picture from the book's file (the reader holds a small copy).
+    LaunchedEffect(index) {
+        big = null; scale = 1f; offsetX = 0f; offsetY = 0f; message = ""
+        val b = book; val p = cur?.path ?: startPath
+        if (b != null && p != null) big = withContext(Dispatchers.IO) { com.example.reader.EpubImages.full(b, p) }
+    }
+    val small: Bitmap? = if (cur == null) bitmap else book?.embeddedImages?.get(cur.path) ?: book?.embeddedImages?.get(cur.path.substringAfterLast('/'))
+    val shown = big ?: small ?: bitmap
+    fun go(by: Int) { if (pictures.isNotEmpty()) index = (index + by).mod(pictures.size) }
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("epub_figure_zoom_modal"),
+            modifier = Modifier.fillMaxSize().testTag("epub_figure_zoom_modal"),
             color = Color.White,
             shape = RoundedCornerShape(0.dp)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.5.dp, Color.Black)
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth().border(1.5.dp, Color.Black).padding(horizontal = 14.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "FIGURE ZOOM (${(scale * 100).toInt()}%)",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
-                        color = Color.Black
+                        text = (if (pictures.size > 1 && index >= 0) "PICTURE ${index + 1} OF ${pictures.size}" else "PICTURE") + "  ·  ${(scale * 100).toInt()}%",
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.Black,
+                        modifier = Modifier.weight(1f)
                     )
+                    if (pictures.size > 1 && index >= 0) {
+                        IconButton(onClick = { go(-1) }) { Icon(Icons.Default.ChevronLeft, contentDescription = "Previous picture", tint = Color.Black) }
+                        IconButton(onClick = { go(1) }) { Icon(Icons.Default.ChevronRight, contentDescription = "Next picture", tint = Color.Black) }
+                    }
+                    if (book != null) {
+                        OutlinedButton(
+                            onClick = {
+                                val b = book; val p = cur?.path ?: startPath
+                                if (p == null) { message = "This picture cannot be saved."; return@OutlinedButton }
+                                scope.launch {
+                                    message = try { "Saved in " + withContext(Dispatchers.IO) { com.example.reader.EpubImages.save(context, b, p, shown) } }
+                                    catch (e: Exception) { e.message ?: "Could not save it." }
+                                }
+                            },
+                            shape = RoundedCornerShape(0.dp), border = BorderStroke(1.dp, Color.Black),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        ) { Text("Save", fontFamily = FontFamily.Monospace, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black) }
+                    }
                     OutlinedButton(
                         onClick = onDismiss,
-                        shape = RoundedCornerShape(0.dp),
-                        border = BorderStroke(1.dp, Color.Black),
+                        shape = RoundedCornerShape(0.dp), border = BorderStroke(1.dp, Color.Black),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         modifier = Modifier.testTag("epub_figure_zoom_close_button")
-                    ) {
-                        Text(
-                            text = "Close",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.Black
-                        )
-                    }
+                    ) { Text("Close", fontFamily = FontFamily.Monospace, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black) }
                 }
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .pointerInput(Unit) {
+                        .pointerInput(index) {
+                            detectTapGestures(onDoubleTap = { tap ->
+                                if (scale > 1.05f) { scale = 1f; offsetX = 0f; offsetY = 0f }
+                                else { scale = 2.5f; offsetX = (size.width / 2f - tap.x) * 1.5f; offsetY = (size.height / 2f - tap.y) * 1.5f }
+                            })
+                        }
+                        .pointerInput(index) {
                             detectTransformGestures { _, pan, zoom, _ ->
-                                val newScale = (scale * zoom).coerceIn(1f, 5f)
+                                val newScale = (scale * zoom).coerceIn(1f, 6f)
                                 scale = newScale
-                                if (newScale > 1f) {
-                                    offsetX += pan.x
-                                    offsetY += pan.y
-                                } else {
-                                    offsetX = 0f
-                                    offsetY = 0f
+                                if (newScale > 1.02f) { offsetX += pan.x; offsetY += pan.y; swipe = 0f }
+                                else {
+                                    offsetX = 0f; offsetY = 0f
+                                    // Not zoomed in: a sideways swipe goes to the next or previous picture.
+                                    swipe += pan.x
+                                    if (swipe > 160f) { swipe = 0f; go(-1) } else if (swipe < -160f) { swipe = 0f; go(1) }
                                 }
                             }
                         },
                     contentAlignment = Alignment.Center
                 ) {
                     Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = caption.ifBlank { "Zoomed Figure" },
+                        bitmap = shown.asImageBitmap(),
+                        contentDescription = shownCaption.ifBlank { "Picture" },
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(16.dp)
-                            .graphicsLayer(
-                                scaleX = scale,
-                                scaleY = scale,
-                                translationX = offsetX,
-                                translationY = offsetY
-                            )
+                            .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offsetX, translationY = offsetY)
                     )
                 }
-                if (caption.isNotBlank()) {
+                if (message.isNotBlank()) {
+                    Text(message, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(4.dp))
+                }
+                if (shownCaption.isNotBlank()) {
                     HorizontalDivider(thickness = 1.5.dp, color = Color.Black)
                     Text(
-                        text = caption,
-                        fontFamily = FontFamily.Serif,
-                        fontStyle = FontStyle.Italic,
-                        fontSize = 13.sp,
-                        color = Color.Black,
+                        text = shownCaption,
+                        fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 14.sp, color = Color.Black,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp)
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState()).padding(12.dp)
                     )
                 }
             }
