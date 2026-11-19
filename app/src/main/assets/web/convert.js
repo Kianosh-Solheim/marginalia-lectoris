@@ -55,6 +55,7 @@ function wcParse(html, fileName) {
   const url = (saved && saved[1]) || (canon && canon.getAttribute('href')) || one('og:url') || '';
   const site = WC_SITES.find(s => s.host.test(url)) || WC_SITES.find(s => s.sniff && doc.querySelector(s.sniff)) || null;
   const journal = one('citation_journal_title');
+  const cm = /\/(?:chpt|chapter|ch)\/(\d+)[-\/]/i.exec(url) || /[\/_-]chapter[-_]?(\d+)\b/i.exec(url);
   const chapter = one('citation_title', 'dc.title', 'DC.title', 'og:title') || (doc.title || fileName).trim();
   const authors = meta('citation_author').length ? meta('citation_author') : meta('dc.creator').length ? meta('dc.creator') : meta('author');
   return {
@@ -69,6 +70,7 @@ function wcParse(html, fileName) {
     isbn: one('citation_isbn'), doi: one('citation_doi', 'dc.identifier'),
     lang: (one('citation_language', 'dc.language') || doc.documentElement.getAttribute('lang') || 'en').slice(0, 5),
     firstPage: parseInt(one('citation_firstpage'), 10) || null,
+    chapNum: cm ? parseInt(cm[1], 10) : null,
   };
 }
 function wcNormUrl(u) { return String(u || '').split('#')[0].split('?')[0].replace(/\/+$/, ''); }
@@ -386,6 +388,7 @@ th, td { border-top: 1px solid #c7c7c7; border-bottom: 1px solid #c7c7c7; paddin
 th { background: #eee; } tr:nth-child(even) td { background: #f7f7f7; } td p, th p { text-indent: 0; }
 section.endnotes { margin-top: 2em; font-size: .88em; border-top: 1px solid #bbb; padding-top: .3em; }
 aside.note { margin: .45em 0; } aside.note p { text-indent: 0; } .note-label { font-weight: 700; margin-right: .35em; }
+p.chapter-label { font-family: "Helvetica Neue", Arial, sans-serif; font-size: .85em; letter-spacing: .12em; text-transform: uppercase; color: #555; text-indent: 0; margin: 1em 0 -.4em; }
 .titlepage { text-align: center; margin-top: 20%; } .titlepage h1 { text-align: center; font-size: 2em; }
 .titlepage p { text-indent: 0; text-align: center; } .titlepage .author { font-size: 1.25em; margin: 1.2em 0; } .titlepage .small { font-size: .85em; color: #555; }
 nav ol { list-style: none; margin-left: 0; } nav ol ol { margin-left: 1.3em; } nav li { margin: .35em 0; }
@@ -439,11 +442,12 @@ async function wcEpub(chs, meta, store, opts) {
   O.file('style.css', WC_CSS);
   const manifest = ['<item id="css" href="style.css" media-type="text/css"/>', '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'];
   const spine = [];
-  const cover = await wcCover(meta, chs.length);
+  const cover = opts.cover;
   if (cover) {
-    O.file('images/cover.jpg', cover);
-    manifest.push('<item id="cover-img" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>', '<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>');
-    O.file('cover.xhtml', wcXhtml('Cover', '<section epub:type="cover"><img class="cover" src="images/cover.jpg" alt="Cover"/></section>', lang));
+    const cf = 'images/cover.' + cover.ext;
+    O.file(cf, cover.blob);
+    manifest.push(`<item id="cover-img" href="${cf}" media-type="${cover.type}" properties="cover-image"/>`, '<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>');
+    O.file('cover.xhtml', wcXhtml('Cover', `<section epub:type="cover"><img class="cover" src="${cf}" alt="Cover"/></section>`, lang));
     spine.push('cover');
   }
   for (const im of store.list) { O.file('images/' + im.name, im.blob); manifest.push(`<item id="i_${im.name.replace(/\W/g, '_')}" href="images/${im.name}" media-type="${im.type}"/>`); }
@@ -456,24 +460,25 @@ async function wcEpub(chs, meta, store, opts) {
   const bodyClass = opts.showPages ? '' : 'no-pagenums';
   chs.forEach((c, i) => {
     const id = 'chap' + String(i + 1).padStart(2, '0');
-    O.file(c.file, wcXhtml(c.title, `<section epub:type="chapter" role="doc-chapter" id="${c.anchor}">\n${wcSerialize(c.root)}\n</section>`, lang, bodyClass));
+    const sem = wcSemantics(c);
+    O.file(c.file, wcXhtml(c.title, `<section epub:type="${sem.type}"${sem.role ? ` role="${sem.role}"` : ''} id="${c.anchor}">\n${wcSerialize(c.root)}\n</section>`, lang, bodyClass));
     manifest.push(`<item id="${id}" href="${c.file}" media-type="application/xhtml+xml"/>`); spine.push(id);
   });
   const toc = chs.map(c => {
     const subs = c.toc.filter(t => t[0] === 2).map(t => `<li><a href="${c.file}#${t[2]}">${wcEsc(t[1])}</a></li>`).join('');
-    return `<li><a href="${c.file}">${wcEsc(c.title)}</a>${subs ? `<ol>${subs}</ol>` : ''}</li>`;
+    return `<li><a href="${c.file}">${wcEsc(c.tocTitle || c.title)}</a>${subs ? `<ol>${subs}</ol>` : ''}</li>`;
   }).join('');
   const pageList = chs.flatMap(c => c.pages.map(([num, pid]) => `<li><a href="${c.file}#${pid}">${wcEsc(num)}</a></li>`)).join('');
   O.file('nav.xhtml', wcXhtml('Contents', `<nav epub:type="toc" id="toc" role="doc-toc"><h1>Contents</h1><ol>${toc}</ol></nav>\n`
     + (pageList ? `<nav epub:type="page-list" id="page-list" hidden=""><h2>Pages</h2><ol>${pageList}</ol></nav>\n` : '')
     + `<nav epub:type="landmarks" id="landmarks" hidden=""><h2>Landmarks</h2><ol>${cover ? '<li><a epub:type="cover" href="cover.xhtml">Cover</a></li>' : ''}`
-    + `<li><a epub:type="toc" href="nav.xhtml">Contents</a></li><li><a epub:type="bodymatter" href="${chs[0].file}">Start</a></li></ol></nav>`, lang));
+    + `<li><a epub:type="toc" href="nav.xhtml">Contents</a></li><li><a epub:type="bodymatter" href="${(chs.find(c => c.kind === 'chapter') || chs[0]).file}">Start</a></li></ol></nav>`, lang));
   // NCX, for older readers
   let po = 0;
   const points = chs.map(c => {
     const cp = ++po;
     const kids = c.toc.filter(t => t[0] === 2).map(t => { const p = ++po; return `<navPoint id="np${p}" playOrder="${p}"><navLabel><text>${wcEsc(t[1])}</text></navLabel><content src="${c.file}#${t[2]}"/></navPoint>`; }).join('');
-    return `<navPoint id="np${cp}" playOrder="${cp}"><navLabel><text>${wcEsc(c.title)}</text></navLabel><content src="${c.file}"/>${kids}</navPoint>`;
+    return `<navPoint id="np${cp}" playOrder="${cp}"><navLabel><text>${wcEsc(c.tocTitle || c.title)}</text></navLabel><content src="${c.file}"/>${kids}</navPoint>`;
   }).join('');
   const uid = 'urn:uuid:' + wcUuid(meta.title + '|' + chs.map(c => c.title).join('|'));
   O.file('toc.ncx', `<?xml version="1.0" encoding="utf-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="${uid}"/><meta name="dtb:depth" content="2"/><meta name="dtb:totalPageCount" content="0"/><meta name="dtb:maxPageNumber" content="0"/></head><docTitle><text>${wcEsc(meta.title)}</text></docTitle><navMap>${points}</navMap></ncx>`);
@@ -509,9 +514,14 @@ function wcTypst(chs, meta, opts) {
     labels.add(c.anchor);
     c.root.querySelectorAll('[id]').forEach(e => labels.add(e.id));
     c.root.querySelectorAll('a[href^="#"]').forEach(a => wanted.add(a.getAttribute('href').slice(1)));
+    c.toc.forEach(t => wanted.add(t[2]));   // the contents link to every heading in it
   });
   const [pw, ph] = opts.pageSize;
-  const textW = (pw - 26) * 2.835, maxH = (ph - 36) * 2.835 * 0.82;   // pt
+  const book = !!opts.bookPages && chs.some(c => c.pages.length);
+  // margins (mm): a little narrower when each sheet must hold a whole printed page
+  const [mt, mb, mx] = book ? [13, 11, 9] : [17, 15, 13];
+  const textW = (pw - 2 * mx) * 2.835, maxH = (ph - mt - mb - 4) * 2.835 * 0.82;   // pt
+
 
   const inl = (node, ctx) => {
     let out = '';
@@ -582,22 +592,29 @@ function wcTypst(chs, meta, opts) {
       case 'p':
         if (cls === 'bibl') return lab + `#align(right, emph[${inl(n).trim()}])\n\n`;
         if (cls === 'box-head') return lab + `#block(below: 0.6em, strong[${inl(n).trim()}])\n\n`;
+        if (cls === 'chapter-label') return lab + `#chaplabel[${inl(n).trim()}]\n\n`;
+        if (n.getAttribute('data-indent')) return lab + para('#h(1.2em)' + inl(n));
         return lab + para(inl(n));
       case 'blockquote': return lab + `#bq[\n${blocks(n)}]\n\n`;
       case 'ul': case 'ol': {
-        const items = [...n.children].filter(li => li.tagName === 'LI').map(li => {
+        let lis = [...n.children].filter(li => li.tagName === 'LI'), pre = '';
+        // an item that began on the page before goes on without a new bullet or number
+        if (lis.length && lis[0].getAttribute('data-cont')) { pre = `#pad(left: 1.2em)[${blocks(lis[0]).trim()}]\n\n`; lis = lis.slice(1); }
+        const items = lis.map(li => {
           const l = li.id && wanted.has(li.id) ? `#metadata(none)<${li.id}>` : '';
           return `[${l}${blocks(li).trim()}]`;
         });
-        if (!items.length) return '';
-        const start = t === 'ol' && n.getAttribute('start') ? `start: ${parseInt(n.getAttribute('start'), 10) || 1}, ` : '';
-        return lab + `#${t === 'ol' ? 'enum' : 'list'}(${start}${items.join(', ')})\n\n`;
+        if (!items.length) return lab + pre;
+        const n0 = (lis[0] && lis[0].getAttribute('data-n')) || n.getAttribute('start');
+        const start = t === 'ol' && n0 ? `start: ${parseInt(n0, 10) || 1}, ` : '';
+        return lab + pre + `#${t === 'ol' ? 'enum' : 'list'}(${start}${items.join(', ')})\n\n`;
       }
       case 'figure': {
         const imgs = [...n.querySelectorAll('img')].map(im => {
           const w = +im.dataset.w || 600, h0 = +im.dataset.h || 400;
           const natW = w * 0.75, hAtW = Math.min(natW, textW) * h0 / w;
-          const size = hAtW > maxH ? `height: ${Math.round(maxH)}pt` : natW < textW ? `width: ${Math.round(natW)}pt` : 'width: 100%';
+          const em = pt => (pt / opts.fontSize).toFixed(2) + 'em';   // in em: a picture shrinks with the text of a crowded page
+          const size = hAtW > maxH ? `height: ${em(maxH)}` : natW < textW ? `width: ${em(natW)}` : `width: ${em(textW)}`;
           return `image(${wcTyStr(im.getAttribute('src'))}, ${size})`;
         });
         const cap = n.querySelector('figcaption');
@@ -650,9 +667,27 @@ function wcTypst(chs, meta, opts) {
 #let boxed(body) = block(width: 100%, inset: (x: 9pt, y: 8pt), stroke: 0.6pt + rgb("#08a5a1"), fill: rgb("#e6f9f9"), breakable: true, { set par(first-line-indent: 0pt); body })
 #let note(body) = block(above: 0.5em, below: 0.5em, body)
 #let notes(body) = { v(1.4em); line(length: 100%, stroke: 0.4pt + luma(160)); set text(size: 0.88em); set par(first-line-indent: 0pt, justify: false); body }
+#let chaplabel(body) = block(above: 0.4em, below: 0.7em, sticky: true, text(size: 0.92em, tracking: 0.12em, fill: luma(90), upper(body)))
+#let tocline(lvl, dest, body) = context {
+  let loc = locate(dest)
+  let n = counter(page).at(dest).first()
+  let num = if loc.page-numbering() != none { numbering(loc.page-numbering(), n) } else { str(n) }
+  block(above: if lvl == 1 { 0.95em } else { 0.4em }, below: 0em, pad(left: (lvl - 1) * 1.3em,
+    link(dest, if lvl == 1 { strong(body) } else { body } + box(width: 1fr, repeat(text(fill: luma(150))[.#h(0.25em)])) + h(0.3em) + num)))
+}
 #let tcap(body) = block(below: 0.5em, sticky: true, text(size: 0.85em, weight: "bold", body))
 #let fig(imgs, cap) = block(width: 100%, breakable: false, above: 1.1em, below: 1.1em, { set align(center); for i in imgs { i; v(0.2em) }; if cap != [] { set align(left); text(size: 0.85em, weight: "bold", cap) } })
-#set page(width: ${pw}mm, height: ${ph}mm, margin: (top: 17mm, bottom: 15mm, x: 13mm),
+${book ? `#let fitpage(sheets, body) = context {
+  // the text of one printed page, a little smaller when it would not fit; past ${WC_MIN_PT} pt it goes on to another sheet
+  // pictures (in em) shrink with the text, and up to 40 % more by the time the text is at its smallest
+  let k(sz) = 1 - 0.4 * (${opts.fontSize}pt - sz) / ${(opts.fontSize - WC_MIN_PT).toFixed(2)}pt
+  let set-in(sz, b) = { set text(size: sz); show image: it => scale(k(sz) * 100%, reflow: true, it); b }
+  let room = if sheets > 1 { sheets * ${(ph - mt - mb) * 0.86}mm } else { ${(ph - mt - mb) * 0.94}mm }   // some room for what measuring cannot see (widows, figures that move on)
+  let s = ${opts.fontSize}pt
+  while s > ${WC_MIN_PT}pt and measure(width: ${pw - 2 * mx}mm, set-in(s, body)).height > room { s -= 0.25pt }
+  set-in(s, body)
+}
+` : ''}#set page(width: ${pw}mm, height: ${ph}mm, margin: (top: ${mt}mm, bottom: ${mb}mm, x: ${mx}mm),
   header: context {
     let p = here().page()
     let chs = query(heading.where(level: 1).before(here())).filter(x => x.outlined)
@@ -660,10 +695,21 @@ function wcTypst(chs, meta, opts) {
     if chs.len() > 0 and not opening {
       let ms = query(selector(<origpage>).before(here()))
       set text(size: 7.5pt, fill: luma(110))
-      grid(columns: (1fr, auto), column-gutter: 1em, chs.last().body, if ms.len() > 0 { lbl + ms.last().value })
+      grid(columns: (1fr, auto), column-gutter: 1em, chs.last().body, if ms.len() > 0 and ${book ? 'false' : 'true'} { lbl + ms.last().value })
     }
   },
-  footer: context { if here().page() > 1 { align(center, text(size: 8pt, fill: luma(90), counter(page).display())) } })
+  footer: context {${book ? `
+    // the printed page this sheet shows; a sheet that only carries on the page before says so
+    let p = here().page()
+    let st = query(<bpstart>).filter(m => m.location().page() == p)
+    let b = query(selector(<bpstart>).before(here()))
+    let n = counter(page).get().first()
+    let lab = if st.len() > 0 { st.first().value.label } else if b.len() > 0 {
+      let v = b.last().value
+      if v.last != none and n <= v.last { str(n) } else { (if v.last != none { str(v.last) } else { v.label }) + " (cont.)" }
+    } else if p > 1 { counter(page).display() } else { none }
+    if lab != none { align(center, text(size: 8pt, fill: luma(90), lab)) }
+  })` : ` if here().page() > 1 { align(center, text(size: 8pt, fill: luma(90), counter(page).display())) } })`}
 #set text(font: "Libertinus Serif", size: ${opts.fontSize}pt, lang: ${wcTyStr(lang)}, hyphenate: true)
 #set par(justify: true, first-line-indent: 1.2em, leading: 0.62em, spacing: 0.62em)
 #set table(stroke: (x: none, y: 0.4pt + luma(170)), inset: 4pt, fill: (_, y) => if calc.even(y) and y > 0 { luma(246) })
@@ -676,7 +722,7 @@ function wcTypst(chs, meta, opts) {
 #show heading: it => if it.level > 3 { block(above: 1.1em, below: 0.4em, sticky: true, emph(it.body)) } else { it }
 #show link: it => if type(it.dest) == str { text(fill: rgb("#0b5a8c"), it) } else { it }
 
-#page(header: none, footer: none)[
+${opts.cover ? `#page(margin: 0pt, header: none, footer: none, numbering: none, fill: luma(245))[#align(center + horizon, image("images/cover.${opts.cover.ext}", width: 100%, height: 100%, fit: "contain"))]\n` : ''}#page(header: none, footer: none)[
   #v(22%)
   #align(center)[
     #text(size: 21pt, weight: "bold")[${wcTyText(meta.title)}]
@@ -685,13 +731,134 @@ function wcTypst(chs, meta, opts) {
     #v(1.2em)
     #text(size: 9pt, fill: luma(80))[${wcTyText([meta.publisher, meta.date].filter(Boolean).join(' · '))}]
     ${meta.isbn ? `#linebreak() #text(size: 9pt, fill: luma(80))[ISBN ${wcTyText(meta.isbn)}]` : ''}
-    ${chs.some(c => c.pages.length) ? `#v(3em) #text(size: 8pt, fill: luma(110))[The page markers in the text and the page in the running head are those of the printed edition.]` : ''}
+    ${chs.some(c => c.pages.length) ? `#v(3em) #text(size: 8pt, fill: luma(110))[${book ? 'Each page of this PDF is a page of the printed edition, with its number.' : 'The page markers in the text and the page in the running head are those of the printed edition.'}]` : ''}
   ]
 ]
-#outline(title: [Contents], depth: 2, indent: auto)
+${book ? '#page(numbering: "i")[#counter(page).update(1)' : '#pagebreak(weak: true)\n'}#heading(level: 1, outlined: false, bookmarked: false)[Contents]
+${chs.map(c => c.toc.map(t => `#tocline(${t[0]}, <${t[2]}>, [${wcTyText(t[0] === 1 ? (c.tocTitle || c.title) : t[1]).replace(/^[(.]/, '\\$&')}])`).join('\n')).join('\n')}
+${book ? ']' : ''}
 `;
-  chs.forEach(c => { src += `\n#pagebreak(weak: true)\n#metadata(none)<${c.anchor}>\n` + blocks(c.root); });
+  chs.forEach(c => {
+    const chunks = book ? wcPageChunks(c.root) : null;
+    if (!chunks) { src += `\n#pagebreak(weak: true)\n#metadata(none)<${c.anchor}>\n` + blocks(c.root); return; }
+    chunks.forEach((k, i) => {
+      const num = /^\d+$/.test(k.label) ? parseInt(k.label, 10) : wcRoman(k.label);
+      const numbering = /^\d+$/.test(k.label) ? '"1"' : num ? '"i"' : 'none';
+      const meta = `(label: ${wcTyStr(k.label)}, last: ${k.last || 'none'})`;
+      src += `\n#page(numbering: ${numbering})[${num ? `#counter(page).update(${num})` : ''}#metadata(${meta})<bpstart>${i === 0 ? `#metadata(none)<${c.anchor}>` : ''}\n#fitpage(${k.last ? k.last - num + 1 : 1})[\n${blocks(k.root)}]]\n`;
+    });
+  });
   return src;
+}
+
+const WC_MIN_PT = 8.5;   // the smallest the text of a crowded printed page is set, before it goes on to another sheet
+function wcRoman(s) {
+  const v = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 }; let n = 0;
+  s = String(s).toLowerCase(); if (!/^[ivxlcdm]+$/.test(s)) return 0;
+  for (let i = 0; i < s.length; i++) n += v[s[i]] < (v[s[i + 1]] || 0) ? -v[s[i]] : v[s[i]];
+  return n;
+}
+/** A chapter cut at its page markers: one piece per printed page (null when it has none).
+    Elements cut in two (a paragraph running over the page) are marked data-cont where they go on. */
+function wcPageChunks(root) {
+  const doc = root.ownerDocument;
+  root.querySelectorAll('ol').forEach(ol => { let k = parseInt(ol.getAttribute('start'), 10) || 1; [...ol.children].forEach(li => { if (li.tagName === 'LI') li.setAttribute('data-n', k++); }); });
+  const marks = [...root.querySelectorAll('span.pagenum')];
+  if (!marks.length) return null;
+  const take = (after, before) => {
+    const r = doc.createRange();
+    if (after) r.setStartAfter(after); else r.setStart(root, 0);
+    if (before) r.setEndBefore(before); else r.setEnd(root, root.childNodes.length);
+    const div = doc.createElement('div'); div.append(r.cloneContents());
+    // the empty shells a cut leaves (a box whose text starts on the next page)
+    // (their ids stay, as bare anchors, so links to them still land)
+    [...div.querySelectorAll('*')].reverse().forEach(e => {
+      if (!e.isConnected && !div.contains(e)) return;
+      if (/^(IMG|BR|HR|TD|TH)$/.test(e.tagName) || e.textContent.trim() || e.querySelector('img, table, hr')) return;
+      const ids = [e, ...e.querySelectorAll('[id]')].filter(x => x.id).map(x => x.id);
+      e.replaceWith(...ids.map(id => { const a = doc.createElement('span'); a.id = id; return a; }));
+    });
+    if (after) {
+      let depth = 0; for (let p = after.parentNode; p && p !== root; p = p.parentNode) depth++;
+      let n = div;
+      for (let i = 0; i < depth; i++) { n = n.firstChild; if (!n || n.nodeType !== 1) break; n.setAttribute('data-cont', '1'); n.removeAttribute('id'); }   // the id stays with the first part
+    }
+    return div;
+  };
+  const has = d => d.textContent.trim() || d.querySelector('img, table');
+  const pre = take(null, marks[0]);
+  const out = [];
+  marks.forEach((m, i) => {
+    const div = take(m, marks[i + 1] || null);
+    if (i === 0 && has(pre)) div.prepend(...pre.childNodes);
+    if (!has(div)) return;
+    // a paragraph that begins the page has the indent it has in the book
+    let f = div.firstElementChild;
+    while (f && /^(DIV|SECTION|ARTICLE)$/.test(f.tagName) && !f.className) f = f.firstElementChild;
+    if (f && f.tagName === 'P' && !f.getAttribute('data-cont') && !f.className) {
+      const lead = div.textContent.trimStart().slice(0, 30), own = f.textContent.trimStart().slice(0, 30);
+      if (lead === own) f.setAttribute('data-indent', '1');
+    }
+    out.push({ label: m.getAttribute('data-page'), root: div, next: marks[i + 1] ? marks[i + 1].getAttribute('data-page') : null });
+  });
+  // a printed page the web page has no marker for (often a full-page figure): the piece before covers it too
+  out.forEach(k => { const a = parseInt(k.label, 10), b = parseInt(k.next, 10); k.last = /^\d+$/.test(k.label) && b > a + 1 && b - a <= 4 ? b - 1 : null; });
+  return out.length ? out : null;
+}
+
+const WC_FRONT = /^\s*(preface|foreword|prologue|acknowledge?ments?|introduction|dedication|abbreviations|list of (figures|tables|illustrations|abbreviations|boxes)|(table of )?contents|about (the|this) (authors?|book|editors?|contributors)|notes on (the )?contributors|series (editor|preface)|copyright|epigraph|forord|innledning|introduksjon|takk|fortale|forkortelser)\b/i;
+const WC_BACK = /^\s*(references|bibliography|works cited|sources|further reading|(subject |author |name )?index|glossary|appendix|appendices|afterword|epilogue|postscript|end ?notes|notes|litteratur(liste)?|referanser|kilder|register|stikkord(register)?|ordliste|vedlegg|etterord)\b/i;
+/** What a saved page is: 'chapter', or front or back matter (preface, references, index…) that gets no chapter number. */
+function wcKind(info) {
+  if (info.chapNum != null) return 'chapter';
+  const t = info.chapter || '';
+  if (WC_FRONT.test(t)) return 'front';
+  if (WC_BACK.test(t)) return 'back';
+  return 'chapter';
+}
+/** The EPUB semantics of a part of the book, by its kind and title. */
+function wcSemantics(c) {
+  if (c.kind === 'chapter') return { type: 'bodymatter chapter', role: 'doc-chapter' };
+  const t = c.info.chapter || '';
+  const pairs = [[/preface|forord|fortale/i, 'preface'], [/foreword/i, 'foreword'], [/prologue/i, 'prologue'], [/acknowledge?ments?|takk/i, 'acknowledgments'], [/introduction|innledning|introduksjon/i, 'introduction'],
+    [/dedication/i, 'dedication'], [/epigraph/i, 'epigraph'], [/references|bibliography|works cited|litteratur|referanser|kilder/i, 'bibliography'], [/index|register|stikkord/i, 'index'],
+    [/glossary|ordliste/i, 'glossary'], [/appendix|appendices|vedlegg/i, 'appendix'], [/afterword|etterord/i, 'afterword'], [/epilogue/i, 'epilogue'], [/notes/i, 'endnotes']];
+  const hit = pairs.find(([re]) => re.test(t));
+  const roles = { preface: 'doc-preface', foreword: 'doc-foreword', prologue: 'doc-prologue', acknowledgments: 'doc-acknowledgments', introduction: 'doc-introduction', dedication: 'doc-dedication', bibliography: 'doc-bibliography', index: 'doc-index', glossary: 'doc-glossary', appendix: 'doc-appendix', afterword: 'doc-afterword', epilogue: 'doc-epilogue' };
+  return { type: (c.kind === 'front' ? 'frontmatter' : 'backmatter') + (hit ? ' ' + hit[1] : ''), role: hit ? roles[hit[1]] || '' : '' };
+}
+/** Order of the parts: by printed page (roman numerals before arabic); without pages, front · chapters · back. */
+function wcPageKey(c) {
+  const p = c.pages.length ? c.pages[0][0] : (c.info.firstPage != null ? String(c.info.firstPage) : null);
+  if (p == null) return null;
+  if (/^\d+$/.test(p)) return parseInt(p, 10);
+  const r = wcRoman(p); return r ? r - 100000 : null;
+}
+
+// ------------------------------------------------------------------ cover
+
+/** The cover, as the dialog chose it: none, generated, an image, or a library item's cover. → { blob, ext, type } */
+async function wcCoverImage(opts, meta, n) {
+  if (opts.coverKind === 'none') return null;
+  let blob = opts.coverBlob || null;
+  if (!blob && opts.coverKind === 'library' && opts.coverDoc) {
+    try { const r = await fetch(`/api/doc/${opts.coverDoc}/cover`, { credentials: 'same-origin' }); if (r.ok) blob = await r.blob(); } catch (_) {}
+  }
+  if (!blob) blob = await wcCover(meta, n);
+  if (!blob) return null;
+  if (!/^image\/(jpeg|png)$/.test(blob.type)) {   // e-readers and Typst want JPEG or PNG
+    const bmp = await createImageBitmap(blob); const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height;
+    const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(bmp, 0, 0);
+    blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.9));
+  }
+  return { blob, ext: blob.type === 'image/png' ? 'png' : 'jpg', type: blob.type };
+}
+/** A book in the library that looks like the one being made (same main title), for its cover. */
+function wcLibraryMatch(title) {
+  const norm = t => String(t || '').toLowerCase().split(':')[0].replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const want = norm(title);
+  if (!want || typeof state === 'undefined' || !Array.isArray(state.docs)) return null;
+  return state.docs.find(d => !d.folder && !d.placeholder && norm(d.title) === want) || null;
 }
 
 // ------------------------------------------------------------------ the whole job
@@ -699,14 +866,26 @@ function wcTypst(chs, meta, opts) {
 /** Saved pages (File objects) → { epub?: Blob, pdf?: Blob, name, meta }. */
 async function wcConvert(files, opts, progress = () => {}) {
   const infos = [];
-  for (const f of files) { progress(`Reading ${f.name}…`); infos.push(wcParse(await f.text(), f.name)); }
+  for (const [i, f] of files.entries()) {
+    progress(`Reading ${f.name}…`);
+    const info = wcParse(await f.text(), f.name);
+    info.kind = (opts.kinds && opts.kinds[i]) || wcKind(info);
+    infos.push(info);
+  }
   const groups = opts.separate ? infos.map(i => [i]) : [infos];
   const results = [];
   for (const group of groups) {
     const store = { list: [], bySrc: new Map() };
     let chs = [];
     for (let i = 0; i < group.length; i++) { progress(`Chapter ${i + 1} of ${group.length}: ${group[i].chapter}`); chs.push(await wcChapter(group[i], i + 1, opts, store)); }
-    chs = chs.map((c, i) => [c, i]).sort((a, b) => ((a[0].firstPage == null) - (b[0].firstPage == null)) || ((a[0].firstPage || 0) - (b[0].firstPage || 0)) || a[1] - b[1]).map(x => x[0]);
+    const rank = { front: 0, chapter: 1, back: 2 };
+    chs.forEach(c => { c.kind = c.info.kind || 'chapter'; c.key = wcPageKey(c); });
+    if (!opts.manualOrder) chs = chs.map((c, i) => [c, i]).sort(([a, i], [b, j]) => (a.key != null && b.key != null ? a.key - b.key : rank[a.kind] - rank[b.kind]) || i - j).map(x => x[0]);
+    // chapter numbers: from the addresses when every chapter has one, else counted; front and back matter get none
+    const body = chs.filter(c => c.kind === 'chapter');
+    const known = body.length && body.every(c => c.info.chapNum != null);
+    body.forEach((c, i) => { c.number = known ? c.info.chapNum : i + 1; });
+    chs.forEach(c => wcChapterLabel(c, opts));
     const m0 = chs[0].info;
     const meta = {
       title: opts.title || (group.length === 1 && opts.separate ? `${m0.book ? m0.book + ' — ' : ''}${m0.chapter}` : (m0.book || m0.chapter)),
@@ -714,17 +893,37 @@ async function wcConvert(files, opts, progress = () => {}) {
       publisher: m0.publisher, date: m0.date, isbn: m0.isbn, doi: m0.doi, lang: m0.lang,
     };
     const name = wcSlug(opts.separate && group.length === 1 ? `${m0.book ? wcSlug(m0.book, 40) + ' - ' : ''}${m0.chapter}` : meta.title, 90);
+    const cover = await wcCoverImage(opts, meta, chs.length);
+    opts = Object.assign({}, opts, { cover });
     const res = { name, meta, chapters: chs.length, pages: chs.reduce((n, c) => n + c.pages.length, 0), images: store.list.length };
     if (opts.epub) { progress('Making the EPUB…'); res.epub = await wcEpub(chs.map(c => wcRecopy(c)), meta, store, opts); }
     if (opts.pdf) {
       progress('Setting the PDF…');
       const files2 = {}; store.list.forEach(im => { files2['images/' + im.name] = im.blob; });
+      if (cover) files2['images/cover.' + cover.ext] = cover.blob;
       res.typst = wcTypst(chs.map(c => wcRecopy(c)), meta, opts);
       res.pdf = await typstPdf(res.typst, files2);
     }
     results.push(res);
   }
   return results;
+}
+/** "Chapter 3" above the chapter's title, or "Chapter 3: " before it; the contents show it either way. */
+function wcChapterLabel(c, opts) {
+  c.tocTitle = c.title;
+  if (c.kind && c.kind !== 'chapter') return;
+  const word = (opts.chapterWord == null ? 'Chapter' : opts.chapterWord).trim();
+  if (!opts.chapterLabel || opts.chapterLabel === 'none') return;
+  if (/^\s*(chapter|kapittel|kapitel|chapitre|capitolo|cap[ií]tulo|ch\.|kap\.)\s*[0-9ivxlc]+\b/i.test(c.title)) return;   // numbered already
+  const lab = (word ? word + ' ' : '') + c.number;
+  const h1 = c.root.querySelector('h1');
+  c.tocTitle = `${lab}: ${c.title}`;
+  if (opts.chapterLabel === 'inline') {
+    c.title = c.tocTitle;
+    if (h1) h1.prepend(h1.ownerDocument.createTextNode(lab + ': '));
+  } else if (h1) {
+    const p = h1.ownerDocument.createElement('p'); p.className = 'chapter-label'; p.textContent = lab; h1.before(p);
+  }
 }
 /** Each format rewrites links its own way, so each works on its own copy of a chapter. */
 function wcRecopy(c) { const root = c.root.cloneNode(true); return Object.assign({}, c, { root }); }
@@ -734,22 +933,39 @@ function wcRecopy(c) { const root = c.root.cloneNode(true); return Object.assign
 var wcDropTarget = null;   // while the dialog is open, files dropped anywhere come to it (see the drop handler in app.js)
 function convertDialog() {
   const opts = {
-    epub: localGet('ml.wc.epub', '1') === '1', pdf: localGet('ml.wc.pdf', '1') === '1',
+    epub: localGet('ml.wc.epub', '1') === '1', pdf: localGet('ml.wc.pdf', '1') === '1', bookPages: localGet('ml.wc.book', '1') === '1',
     separate: false, showPages: localGet('ml.wc.pages', '1') === '1',
-    label: localGet('ml.wc.label', 'p. '), pageSize: [158, 210], fontSize: 10.5,
+    label: localGet('ml.wc.label', 'p. '), chapterLabel: localGet('ml.wc.chap', 'none'), chapterWord: localGet('ml.wc.chapword', 'Chapter'), pageSize: [158, 210], fontSize: 10.5,
     toLibrary: localGet('ml.wc.lib', '1') === '1', download: localGet('ml.wc.dl', '0') === '1',
     category: state.category === 'ARTICLE' ? 'ARTICLE' : 'BOOK',
+    coverKind: localGet('ml.wc.cover', 'auto'), coverBlob: null, coverDoc: null,
   };
-  let files = [], infos = [];
+  let files = [], infos = [], libMatch = null, coverName = '';
+  // The order of the book: by printed page until the person moves a file, then theirs.
+  let manual = false, dragFrom = -1;
+  const infoKey = x => {
+    const p = x.firstLabel;
+    if (p == null) return x.firstPage != null ? x.firstPage : null;
+    if (/^\d+$/.test(p)) return parseInt(p, 10);
+    const r = wcRoman(p); return r ? r - 100000 : null;
+  };
+  const autoSort = () => {
+    const rank = { front: 0, chapter: 1, back: 2 };
+    const t = infos.map((x, i) => [x, files[i], i]).sort(([a, , i], [b, , j]) => { const ka = infoKey(a), kb = infoKey(b); return (ka != null && kb != null ? ka - kb : rank[a.kind] - rank[b.kind]) || i - j; });
+    infos = t.map(x => x[0]); files = t.map(x => x[1]);
+  };
   modal((box, close) => {
     box.style.width = '720px';
     const pick = h('input', { type: 'file', multiple: true, accept: '.html,.htm,.xhtml', hidden: true });
     const list = h('div', { class: 'wc-list' });
     const title = h('input', { placeholder: 'From the pages' }), authors = h('input', { placeholder: 'From the pages' });
+    title.addEventListener('change', () => { const i0 = infos[0]; libMatch = wcLibraryMatch(title.value.trim() || (i0 && (i0.book || i0.chapter))); draw(); });
     const status = h('div', { class: 'muted wc-status' });
     const go = h('button', { class: 'btn fill', disabled: true }, 'Convert');
     const chip = (label, on, fn, tip) => h('button', { class: 'chip' + (on() ? ' on' : ''), title: tip || null, onclick: e => { fn(); e.currentTarget.classList.toggle('on', on()); draw(); } }, label);
     const optsBox = h('div');
+    const coverPick = h('input', { type: 'file', accept: 'image/*', hidden: true });
+    coverPick.addEventListener('change', () => { const f = coverPick.files[0]; coverPick.value = ''; if (!f) return; opts.coverBlob = f; coverName = f.name; opts.coverKind = 'image'; draw(); });
     const sizes = [['E-ink 10.3″', [158, 210]], ['E-ink 7.8″', [120, 160]], ['A5', [148, 210]], ['A4', [210, 297]]];
     const draw = () => {
       clear(optsBox).append(
@@ -763,7 +979,29 @@ function convertDialog() {
           chip('Show in the text', () => opts.showPages, () => { opts.showPages = !opts.showPages; localSet('ml.wc.pages', opts.showPages ? '1' : '0'); }, 'Off: no markers in the text; “go to page” and the PDF\'s running head still have them'),
           (() => { const i = h('input', { value: opts.label, style: { width: '60px' }, title: 'Before the number: “p. ”, “s. ”, or nothing' }); i.addEventListener('input', () => { opts.label = i.value; localSet('ml.wc.label', i.value); }); return i; })(),
           h('span', { class: 'muted', style: { fontSize: '12px' } }, 'before the number')),
-        opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF page'),
+        h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'Front cover'),
+          (() => {
+            // "auto": the library's cover of this book when there is one, else a generated one
+            const kind = opts.coverKind === 'auto' ? (libMatch ? 'library' : 'generated') : opts.coverKind;
+            const set = k => () => { opts.coverKind = k; if (k !== 'image') { opts.coverBlob = null; coverName = ''; localSet('ml.wc.cover', k === 'library' ? 'auto' : k); } };
+            return [
+              libMatch ? chip('From the library', () => kind === 'library', set('library'), `The cover of “${libMatch.title}” in your library`) : null,
+              chip('Generated', () => kind === 'generated', set('generated'), 'Title and author on a plain cover'),
+              chip(coverName ? 'Image: ' + coverName.slice(0, 18) : 'Image…', () => kind === 'image', () => { coverPick.click(); }, 'An image file of your own: a photo or scan of the cover, or one from the publisher'),
+              chip('None', () => kind === 'none', set('none')),
+              kind === 'library' && libMatch ? h('img', { src: coverUrl(libMatch), alt: '', class: 'wc-cover' }) : null,
+              kind === 'image' && opts.coverBlob ? h('img', { src: URL.createObjectURL(opts.coverBlob), alt: '', class: 'wc-cover' }) : null,
+            ];
+          })(), coverPick),
+        h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'Chapter titles'),
+          [['none', 'As they are', 'The title alone'], ['above', 'Number above', '“Chapter 3” on a line of its own above the title'], ['inline', 'Number before', '“Chapter 3: ” in front of the title']].map(([k, l, tip]) =>
+            chip(l, () => opts.chapterLabel === k, () => { opts.chapterLabel = k; localSet('ml.wc.chap', k); }, tip)),
+          opts.chapterLabel !== 'none' ? (() => { const i = h('input', { value: opts.chapterWord, style: { width: '90px' }, title: 'The word before the number: Chapter, Kapittel… (empty: the number alone)' }); i.addEventListener('input', () => { opts.chapterWord = i.value; localSet('ml.wc.chapword', i.value); }); return i; })() : null,
+          opts.chapterLabel !== 'none' ? h('span', { class: 'muted', style: { fontSize: '12px' } }, 'then the number') : null),
+        opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF pages'),
+          chip('As in the book', () => opts.bookPages, () => { opts.bookPages = true; localSet('ml.wc.book', '1'); }, 'Each printed page on a page of its own, with its number; a crowded page is set a little smaller'),
+          chip('Flowing', () => !opts.bookPages, () => { opts.bookPages = false; localSet('ml.wc.book', '0'); }, 'The text runs on from page to page; the printed pages are marked in the text')) : null,
+        opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF size'),
           sizes.map(([l, s]) => chip(l, () => opts.pageSize[0] === s[0] && opts.pageSize[1] === s[1], () => { opts.pageSize = s; })),
           h('span', { class: 'spacer' }),
           chip('Smaller', () => false, () => { opts.fontSize = Math.max(8, opts.fontSize - 0.5); }), h('span', { class: 'mono', style: { fontSize: '12px' } }, opts.fontSize + ' pt'),
@@ -781,29 +1019,63 @@ function convertDialog() {
         list.append(h('div', { class: 'wc-drop', onclick: () => pick.click() }, h('b', null, 'Choose the saved pages'), h('span', null, 'or drop them here — one HTML file per chapter, saved with SingleFile or “Save page as… → Web page, complete”')));
         return;
       }
-      const order = infos.map((x, i) => [x, i]);
-      list.append(h('div', { class: 'wc-files' }, order.map(([x]) => {
-        const pages = x.doc ? (() => { const pm = wcPageEls(wcFindContent(x.doc, x.site), x.site).length; return pm ? `${pm} printed pages marked` : 'no page numbers found'; })() : '';
-        return h('div', { class: 'wc-file' }, h('b', null, x.chapter), h('span', { class: 'muted' }, [x.book && x.book !== x.chapter ? x.book : null, x.site ? x.site.name : 'other site (general rules)', pages].filter(Boolean).join(' · ')));
+      const move = (i, j) => {
+        if (j < 0 || j >= infos.length || i === j) return;
+        const [x] = infos.splice(i, 1); infos.splice(j, 0, x);
+        const [f] = files.splice(i, 1); files.splice(j, 0, f);
+        manual = true; drawList();
+      };
+      list.append(h('div', { class: 'wc-orderline muted' }, manual
+        ? ['In your order. ', h('button', { class: 'btn quiet', onclick: () => { manual = false; autoSort(); drawList(); } }, 'Sort by printed page')]
+        : 'In the order of the printed pages. Drag a file, or use ↑ ↓, to set your own.'));
+      list.append(h('div', { class: 'wc-files' }, infos.map((x, i) => {
+        const pages = x.doc ? (x.pageCount ? `pp. ${x.firstLabel}–${x.lastLabel}` : 'no page numbers found') : '';
+        // what the page is: a chapter (numbered), or front or back matter (preface, references, index… not numbered)
+        const kind = h('select', { class: 'wc-kind', title: 'Chapters are numbered; front and back matter are not, and go before or after the chapters' },
+          [['chapter', 'Chapter'], ['front', 'Front matter'], ['back', 'Back matter']].map(([k, l]) => h('option', { value: k, selected: x.kind === k }, l)));
+        kind.addEventListener('change', () => { x.kind = kind.value; if (!manual) { autoSort(); drawList(); } });
+        const row = h('div', { class: 'wc-file', draggable: 'true' },
+          h('div', { class: 'wc-fhead' }, h('span', { class: 'wc-grip', title: 'Drag to move' }, '⋮⋮'), h('b', null, x.chapter), kind,
+            h('button', { class: 'chip', title: 'Move up', disabled: i === 0, onclick: () => move(i, i - 1) }, '↑'),
+            h('button', { class: 'chip', title: 'Move down', disabled: i === infos.length - 1, onclick: () => move(i, i + 1) }, '↓'),
+            h('button', { class: 'chip', title: 'Leave this page out', onclick: () => { infos.splice(i, 1); files.splice(i, 1); drawList(); draw(); } }, '×')),
+          h('span', { class: 'muted' }, [x.book && x.book !== x.chapter ? x.book : null, x.site ? x.site.name : 'other site (general rules)', pages].filter(Boolean).join(' · ')));
+        row.addEventListener('dragstart', e => { dragFrom = i; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'wc-row'); row.classList.add('dragging'); });
+        row.addEventListener('dragend', () => { row.classList.remove('dragging'); dragFrom = -1; });
+        row.addEventListener('dragover', e => { if (dragFrom < 0) return; e.preventDefault(); e.stopPropagation(); row.classList.add('dropat'); });
+        row.addEventListener('dragleave', () => row.classList.remove('dropat'));
+        row.addEventListener('drop', e => { if (dragFrom < 0) return; e.preventDefault(); e.stopPropagation(); row.classList.remove('dropat'); move(dragFrom, i); });
+        return row;
       })), h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } }, h('button', { class: 'chip', onclick: () => pick.click() }, '+ More pages'), h('button', { class: 'chip', onclick: () => { files = []; infos = []; drawList(); draw(); } }, 'Clear')));
       const i0 = infos[0];
       title.placeholder = (opts.separate || !i0 ? '' : (i0.book || i0.chapter)) || 'From the pages';
       authors.placeholder = (i0 && i0.authors.join(', ')) || 'From the pages';
+      libMatch = wcLibraryMatch(title.value.trim() || (i0 && (i0.book || i0.chapter)));
     };
     const addFiles = async fs => {
       fs = fs.filter(f => /\.(x?html?)$/i.test(f.name));
       if (!fs.length) { toast('Choose HTML files: the saved pages.'); return; }
       status.textContent = 'Reading…';
-      for (const f of fs) { files.push(f); try { infos.push(wcParse(await f.text(), f.name)); } catch (e) { infos.push({ chapter: f.name, authors: [], site: null }); } }
+      for (const f of fs) {
+        files.push(f);
+        try {
+          const x = wcParse(await f.text(), f.name); x.kind = wcKind(x);
+          const els = wcPageEls(wcFindContent(x.doc, x.site), x.site);
+          const num = e => { const raw = e.getAttribute('data-page') || e.getAttribute('data-page-number') || e.getAttribute('title') || e.textContent; const m = WC_PAGE_RE.exec(raw || '') || /([0-9]{1,4})\s*\]?\s*$/.exec(raw || ''); return m ? m[1] : null; };
+          x.pageCount = els.length; x.firstLabel = els.length ? num(els[0]) : null; x.lastLabel = els.length ? num(els[els.length - 1]) : null;
+          infos.push(x);
+        } catch (e) { infos.push({ chapter: f.name, authors: [], site: null, kind: 'chapter' }); }
+      }
+      if (!manual) autoSort();
       status.textContent = ''; drawList(); draw();
     };
     pick.addEventListener('change', () => { addFiles([...pick.files]); pick.value = ''; });
     list.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); list.classList.add('over'); });
     list.addEventListener('dragleave', () => list.classList.remove('over'));
-    list.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); list.classList.remove('over'); addFiles([...e.dataTransfer.files]); });
+    list.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); list.classList.remove('over'); if (e.dataTransfer.files.length) addFiles([...e.dataTransfer.files]); });
     go.addEventListener('click', async () => {
       go.disabled = true;
-      const o = Object.assign({}, opts, { title: title.value.trim(), authors: authors.value.split(/\s*;\s*|\s*,\s*(?=\S+\s+\S)/).map(s => s.trim()).filter(Boolean) });
+      const o = Object.assign({}, opts, { kinds: infos.map(x => x.kind), manualOrder: manual, coverKind: opts.coverKind === 'auto' ? (libMatch ? 'library' : 'generated') : opts.coverKind, coverDoc: libMatch ? libMatch.id : null, title: title.value.trim(), authors: authors.value.split(/\s*;\s*|\s*,\s*(?=\S+\s+\S)/).map(s => s.trim()).filter(Boolean) });
       try {
         const results = await wcConvert(files, o, msg => { status.textContent = msg; });
         for (const r of results) {

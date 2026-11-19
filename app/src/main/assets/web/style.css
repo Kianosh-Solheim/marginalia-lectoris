@@ -1344,3 +1344,15 @@ main.lxpage { max-width: 860px; margin: 0 auto; padding: 22px 16px 60px; }
 .wc-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 0; border-top: 1px solid var(--rule); }
 .wc-row > .label { width: 96px; }
 .wc-status { min-height: 18px; font-size: 13px; margin-top: 8px; }
+.wc-fhead { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.wc-kind { font-size: 12px; padding: 1px 4px; flex: none; width: auto !important; min-width: 0; }
+.wc-fhead b { flex: 1; min-width: 0; }
+.wc-cover { height: 40px; width: auto; border: 1px solid var(--rule); margin-left: 4px; }
+.wc-orderline { font-size: 12px; margin-bottom: 4px; }
+.wc-orderline .btn { padding: 0 4px; font-size: 12px; text-decoration: underline; }
+.wc-file[draggable="true"] { cursor: grab; }
+.wc-file.dragging { opacity: .4; }
+.wc-file.dropat { box-shadow: inset 0 2px 0 var(--ink); }
+.wc-grip { color: var(--soft); font-size: 12px; letter-spacing: -2px; flex: none; }
+.wc-fhead .chip { padding: 1px 6px; flex: none; }
+.wc-fhead .chip:disabled { opacity: .3; cursor: default; }
