@@ -880,7 +880,7 @@ async function wcConvert(files, opts, progress = () => {}) {
     for (let i = 0; i < group.length; i++) { progress(`Chapter ${i + 1} of ${group.length}: ${group[i].chapter}`); chs.push(await wcChapter(group[i], i + 1, opts, store)); }
     const rank = { front: 0, chapter: 1, back: 2 };
     chs.forEach(c => { c.kind = c.info.kind || 'chapter'; c.key = wcPageKey(c); });
-    chs = chs.map((c, i) => [c, i]).sort(([a, i], [b, j]) => (a.key != null && b.key != null ? a.key - b.key : rank[a.kind] - rank[b.kind]) || i - j).map(x => x[0]);
+    if (!opts.manualOrder) chs = chs.map((c, i) => [c, i]).sort(([a, i], [b, j]) => (a.key != null && b.key != null ? a.key - b.key : rank[a.kind] - rank[b.kind]) || i - j).map(x => x[0]);
     // chapter numbers: from the addresses when every chapter has one, else counted; front and back matter get none
     const body = chs.filter(c => c.kind === 'chapter');
     const known = body.length && body.every(c => c.info.chapNum != null);
@@ -941,6 +941,19 @@ function convertDialog() {
     coverKind: localGet('ml.wc.cover', 'auto'), coverBlob: null, coverDoc: null,
   };
   let files = [], infos = [], libMatch = null, coverName = '';
+  // The order of the book: by printed page until the person moves a file, then theirs.
+  let manual = false, dragFrom = -1;
+  const infoKey = x => {
+    const p = x.firstLabel;
+    if (p == null) return x.firstPage != null ? x.firstPage : null;
+    if (/^\d+$/.test(p)) return parseInt(p, 10);
+    const r = wcRoman(p); return r ? r - 100000 : null;
+  };
+  const autoSort = () => {
+    const rank = { front: 0, chapter: 1, back: 2 };
+    const t = infos.map((x, i) => [x, files[i], i]).sort(([a, , i], [b, , j]) => { const ka = infoKey(a), kb = infoKey(b); return (ka != null && kb != null ? ka - kb : rank[a.kind] - rank[b.kind]) || i - j; });
+    infos = t.map(x => x[0]); files = t.map(x => x[1]);
+  };
   modal((box, close) => {
     box.style.width = '720px';
     const pick = h('input', { type: 'file', multiple: true, accept: '.html,.htm,.xhtml', hidden: true });
@@ -1006,14 +1019,33 @@ function convertDialog() {
         list.append(h('div', { class: 'wc-drop', onclick: () => pick.click() }, h('b', null, 'Choose the saved pages'), h('span', null, 'or drop them here — one HTML file per chapter, saved with SingleFile or “Save page as… → Web page, complete”')));
         return;
       }
-      const order = infos.map((x, i) => [x, i]);
-      list.append(h('div', { class: 'wc-files' }, order.map(([x]) => {
-        const pages = x.doc ? (() => { const pm = wcPageEls(wcFindContent(x.doc, x.site), x.site).length; return pm ? `${pm} printed pages marked` : 'no page numbers found'; })() : '';
+      const move = (i, j) => {
+        if (j < 0 || j >= infos.length || i === j) return;
+        const [x] = infos.splice(i, 1); infos.splice(j, 0, x);
+        const [f] = files.splice(i, 1); files.splice(j, 0, f);
+        manual = true; drawList();
+      };
+      list.append(h('div', { class: 'wc-orderline muted' }, manual
+        ? ['In your order. ', h('button', { class: 'btn quiet', onclick: () => { manual = false; autoSort(); drawList(); } }, 'Sort by printed page')]
+        : 'In the order of the printed pages. Drag a file, or use ↑ ↓, to set your own.'));
+      list.append(h('div', { class: 'wc-files' }, infos.map((x, i) => {
+        const pages = x.doc ? (x.pageCount ? `pp. ${x.firstLabel}–${x.lastLabel}` : 'no page numbers found') : '';
         // what the page is: a chapter (numbered), or front or back matter (preface, references, index… not numbered)
         const kind = h('select', { class: 'wc-kind', title: 'Chapters are numbered; front and back matter are not, and go before or after the chapters' },
           [['chapter', 'Chapter'], ['front', 'Front matter'], ['back', 'Back matter']].map(([k, l]) => h('option', { value: k, selected: x.kind === k }, l)));
-        kind.addEventListener('change', () => { x.kind = kind.value; });
-        return h('div', { class: 'wc-file' }, h('div', { class: 'wc-fhead' }, h('b', null, x.chapter), kind), h('span', { class: 'muted' }, [x.book && x.book !== x.chapter ? x.book : null, x.site ? x.site.name : 'other site (general rules)', pages].filter(Boolean).join(' · ')));
+        kind.addEventListener('change', () => { x.kind = kind.value; if (!manual) { autoSort(); drawList(); } });
+        const row = h('div', { class: 'wc-file', draggable: 'true' },
+          h('div', { class: 'wc-fhead' }, h('span', { class: 'wc-grip', title: 'Drag to move' }, '⋮⋮'), h('b', null, x.chapter), kind,
+            h('button', { class: 'chip', title: 'Move up', disabled: i === 0, onclick: () => move(i, i - 1) }, '↑'),
+            h('button', { class: 'chip', title: 'Move down', disabled: i === infos.length - 1, onclick: () => move(i, i + 1) }, '↓'),
+            h('button', { class: 'chip', title: 'Leave this page out', onclick: () => { infos.splice(i, 1); files.splice(i, 1); drawList(); draw(); } }, '×')),
+          h('span', { class: 'muted' }, [x.book && x.book !== x.chapter ? x.book : null, x.site ? x.site.name : 'other site (general rules)', pages].filter(Boolean).join(' · ')));
+        row.addEventListener('dragstart', e => { dragFrom = i; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'wc-row'); row.classList.add('dragging'); });
+        row.addEventListener('dragend', () => { row.classList.remove('dragging'); dragFrom = -1; });
+        row.addEventListener('dragover', e => { if (dragFrom < 0) return; e.preventDefault(); e.stopPropagation(); row.classList.add('dropat'); });
+        row.addEventListener('dragleave', () => row.classList.remove('dropat'));
+        row.addEventListener('drop', e => { if (dragFrom < 0) return; e.preventDefault(); e.stopPropagation(); row.classList.remove('dropat'); move(dragFrom, i); });
+        return row;
       })), h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } }, h('button', { class: 'chip', onclick: () => pick.click() }, '+ More pages'), h('button', { class: 'chip', onclick: () => { files = []; infos = []; drawList(); draw(); } }, 'Clear')));
       const i0 = infos[0];
       title.placeholder = (opts.separate || !i0 ? '' : (i0.book || i0.chapter)) || 'From the pages';
@@ -1024,16 +1056,26 @@ function convertDialog() {
       fs = fs.filter(f => /\.(x?html?)$/i.test(f.name));
       if (!fs.length) { toast('Choose HTML files: the saved pages.'); return; }
       status.textContent = 'Reading…';
-      for (const f of fs) { files.push(f); try { const x = wcParse(await f.text(), f.name); x.kind = wcKind(x); infos.push(x); } catch (e) { infos.push({ chapter: f.name, authors: [], site: null, kind: 'chapter' }); } }
+      for (const f of fs) {
+        files.push(f);
+        try {
+          const x = wcParse(await f.text(), f.name); x.kind = wcKind(x);
+          const els = wcPageEls(wcFindContent(x.doc, x.site), x.site);
+          const num = e => { const raw = e.getAttribute('data-page') || e.getAttribute('data-page-number') || e.getAttribute('title') || e.textContent; const m = WC_PAGE_RE.exec(raw || '') || /([0-9]{1,4})\s*\]?\s*$/.exec(raw || ''); return m ? m[1] : null; };
+          x.pageCount = els.length; x.firstLabel = els.length ? num(els[0]) : null; x.lastLabel = els.length ? num(els[els.length - 1]) : null;
+          infos.push(x);
+        } catch (e) { infos.push({ chapter: f.name, authors: [], site: null, kind: 'chapter' }); }
+      }
+      if (!manual) autoSort();
       status.textContent = ''; drawList(); draw();
     };
     pick.addEventListener('change', () => { addFiles([...pick.files]); pick.value = ''; });
     list.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); list.classList.add('over'); });
     list.addEventListener('dragleave', () => list.classList.remove('over'));
-    list.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); list.classList.remove('over'); addFiles([...e.dataTransfer.files]); });
+    list.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); list.classList.remove('over'); if (e.dataTransfer.files.length) addFiles([...e.dataTransfer.files]); });
     go.addEventListener('click', async () => {
       go.disabled = true;
-      const o = Object.assign({}, opts, { kinds: infos.map(x => x.kind), coverKind: opts.coverKind === 'auto' ? (libMatch ? 'library' : 'generated') : opts.coverKind, coverDoc: libMatch ? libMatch.id : null, title: title.value.trim(), authors: authors.value.split(/\s*;\s*|\s*,\s*(?=\S+\s+\S)/).map(s => s.trim()).filter(Boolean) });
+      const o = Object.assign({}, opts, { kinds: infos.map(x => x.kind), manualOrder: manual, coverKind: opts.coverKind === 'auto' ? (libMatch ? 'library' : 'generated') : opts.coverKind, coverDoc: libMatch ? libMatch.id : null, title: title.value.trim(), authors: authors.value.split(/\s*;\s*|\s*,\s*(?=\S+\s+\S)/).map(s => s.trim()).filter(Boolean) });
       try {
         const results = await wcConvert(files, o, msg => { status.textContent = msg; });
         for (const r of results) {
