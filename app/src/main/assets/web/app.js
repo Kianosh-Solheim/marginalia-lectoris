@@ -3930,24 +3930,46 @@ async function openEpub(ctx, params) {
     try { r.setEnd(node, off); } catch (_) { return 0; }
     return r.toString().length;
   }
+  const PAGE_MARKS = '[epub\\:type~="pagebreak"], [role="doc-pagebreak"], span[id^="page"], a[id^="page"], span[id^="pg"], [class*="pagebreak"], [class*="pagenum"]';
+  const markLabel = m => {
+    const t = (m.getAttribute('title') || m.getAttribute('aria-label') || m.textContent || m.id || '').trim();
+    const v = t.replace(/^(page|side|pg|p\.?|s\.?)\s*/i, '').trim();
+    return v && v.length < 12 ? v : '';
+  };
   function pageLabelAt(doc, range) {
-    const marks = [...doc.querySelectorAll('[epub\\:type~="pagebreak"], [role="doc-pagebreak"], span[id^="page"], a[id^="page"], span[id^="pg"], [class*="pagebreak"], [class*="pagenum"]')];
+    const marks = [...doc.querySelectorAll(PAGE_MARKS)];
     let label = '';
     for (const m of marks) {
       const rel = m.compareDocumentPosition(range.startContainer);
       if (rel & Node.DOCUMENT_POSITION_FOLLOWING || m.contains(range.startContainer)) {
-        const t = (m.getAttribute('title') || m.getAttribute('aria-label') || m.textContent || m.id || '').trim();
-        const v = t.replace(/^(page|side|pg|p\.?)\s*/i, '').trim();
-        if (v && v.length < 12) label = v;
+        const v = markLabel(m);
+        if (v) label = v;
       } else break;
     }
     return label;
+  }
+  /** The printed page(s) a selection is on: "25", or "25–26" when it runs over a page break. */
+  function pageSpanAt(doc, range) {
+    const first = pageLabelAt(doc, range);
+    let last = first;
+    for (const m of doc.querySelectorAll(PAGE_MARKS)) {
+      let inside = false; try { inside = range.intersectsNode(m) && !m.contains(range.startContainer); } catch (_) {}
+      if (inside) { const v = markLabel(m); if (v) last = v; }
+    }
+    return first && last && last !== first ? `${first}–${last}` : (last || first);
+  }
+  /** The selected text without the page markers inside it ("anachronistic p. 26conceptual" → "anachronistic conceptual"). */
+  function textWithoutMarks(range) {
+    const frag = range.cloneContents();
+    frag.querySelectorAll(PAGE_MARKS).forEach(m => m.remove());
+    return frag.textContent;
   }
   function rangeForText(doc, quote) {
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
     let flat = ''; const map = [];
     let n;
     while ((n = walker.nextNode())) {
+      if (n.parentElement && n.parentElement.closest(PAGE_MARKS)) continue;   // a page marker is not part of the quotation
       const v = n.nodeValue.toLowerCase();
       for (let k = 0; k < v.length; k++) if (LETTER.test(v[k])) { flat += v[k]; map.push([n, k]); }
     }
@@ -4023,18 +4045,18 @@ async function openEpub(ctx, params) {
   // Selection → bar
   rendition.on('selected', (cfiRange, contents) => {
     const range = contents.range(cfiRange);
-    const text = cleanSelected(range ? range.toString() : '');
+    const text = cleanSelected(range ? textWithoutMarks(range) : '');
     if (text.length < 2) return;
     const doc = contents.document;
     const href = contents.section ? contents.section.href : (lastLoc && lastLoc.start.href) || '';
     const total = bodyText(doc).length || 1;
     const progression = range ? offsetOf(doc, range.startContainer, range.startOffset) / total : 0;
-    const label = range ? pageLabelAt(doc, range) : '';
+    const label = range ? pageSpanAt(doc, range) : '';
     const t = tocFor(href);
     selectionBar(ctx, {
       text,
       pageRef: label || '',
-      where: [t ? t.title : '', label ? 'p. ' + label : ''].filter(Boolean).join(' · '),
+      where: [t ? t.title : '', label ? (/[–-]/.test(label) ? 'pp. ' : 'p. ') + label : ''].filter(Boolean).join(' · '),
       loc: { href, progression, chapter: t ? t.title : '' },
       save: async extra => {
         const r = await api(`doc/${d.id}/highlights`, { method: 'POST', json: Object.assign({ text, href, progression, cfi: cfiRange, pageLabel: label, chapter: t ? t.title : '' }, extra) });
