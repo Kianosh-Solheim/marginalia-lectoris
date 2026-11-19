@@ -304,12 +304,13 @@ function header() {
   file.addEventListener('change', () => { if (file.files.length) uploadFiles([...file.files]); file.value = ''; });
   const more = menuButton('☰', [
     EMBEDDED ? null : ['Tabs', 'Several things open at once, two of them side by side', () => { localSet('ml.tabs', '1'); showWorkspace(location.hash || '#/'); }],
+    ['Convert web pages', 'Saved chapters (HTML) → EPUB or PDF, with the printed page numbers', () => convertDialog()],
     ['Colours', 'Light, dark, or as the computer has it', () => themeDialog()],
     ['Settings', 'Search, AI, backups, notes export…', () => { location.hash = '#/settings'; }],
     ['Keyboard shortcuts', 'What the keys do', () => shortcutsDialog()],
     ['Sign out', 'Sign this browser out', async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); }],
   ].filter(Boolean), 'btn quiet morebtn');
-  more.classList.add('right'); more.querySelector('button').title = 'More: tabs, colours, settings, shortcuts, sign out';
+  more.classList.add('right'); more.querySelector('button').title = 'More: tabs, convert web pages, colours, settings, shortcuts, sign out';
   return h('header', { class: 'top' }, h('div', { class: 'top-inner' },
     h('div', { class: 'brand', onclick: () => { location.hash = '#/'; } }, 'Marginalia Lectoris', h('small', null, state.device || 'Tablet')),
     h('nav', { class: 'tabs' }, places.map(([k, label, href]) =>
@@ -2735,7 +2736,7 @@ function renderNotesList() {
 let dragDepth = 0, dragOut = false;
 function hasFiles(e) { return e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files'); }
 window.addEventListener('dragenter', e => {
-  if (dragOut || !hasFiles(e) || readerOpen || coverTake || state.writing) return;
+  if (dragOut || !hasFiles(e) || readerOpen || coverTake || state.writing || (typeof wcDropTarget !== 'undefined' && wcDropTarget)) return;
   tagCache = null;
   e.preventDefault(); dragDepth++;
   const image = state.currentDoc && [...(e.dataTransfer.items || [])].some(i => i.kind === 'file' && /^image\//.test(i.type));
@@ -2772,6 +2773,7 @@ window.addEventListener('drop', e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; document.getElementById('drop').hidden = true;
   if (dropCard) { dropCard.classList.remove('dropon'); dropCard = null; }
+  if (typeof wcDropTarget !== 'undefined' && wcDropTarget) { wcDropTarget([...e.dataTransfer.files]); return; }   // the convert dialog takes them
   if (readerOpen || state.writing) return;
   let files = [...e.dataTransfer.files];
   // Dropped on a book in the library: the files are added to that item.
