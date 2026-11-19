@@ -292,10 +292,10 @@ function drawVault() {
     const openIt = () => { location.hash = isPdf(d) ? `#/read/${d.id}?page=${cur.pageNumber}&hl=${cur.id}` : `#/read/${d.id}?pos=${cur.pageNumber}&hl=${cur.id}`; };
     add(mid, crumbs(crumb(cur.documentTitle, `#/notes/b/${cur.documentId}`), chapterOf(cur) ? crumb(chapterOf(cur), chapHref) : null, cur.title),
       h('h1', { class: 'nvtitle', title: 'Drag this into an open Obsidian note' }, cur.title || 'Untitled'),
-      h('div', { class: 'nvprops' },
+      h('div', { class: 'nvhead' }, noteCover(d, openIt), h('div', { class: 'nvprops' },
         h('div', null, h('span', { class: 'label' }, 'Tags'), tagsOf.length ? h('span', { class: 'tags' }, tagsOf.map(t => h('span', { class: 'tag', onclick: () => { vault.tag = t; drawVault(); } }, '#' + t))) : h('span', { class: 'muted' }, 'none')),
         h('div', null, h('span', { class: 'label' }, 'Source'), h('span', null, h('a', { href: `#/book/${cur.documentId}` }, cur.documentTitle), cur.documentAuthor ? ' · ' + cur.documentAuthor : '')),
-        h('div', null, h('span', { class: 'label' }, 'Place'), h('span', null, notePlaceLinks(cur, d)))),
+        h('div', null, h('span', { class: 'label' }, 'Place'), h('span', null, notePlaceLinks(cur, d))))),
       cur.highlightedText ? h('blockquote', { class: 'nvquote', style: { borderLeftColor: cur.colorHex || '#000' } }, cur.highlightedText) : null,
       cur.userNotes ? h('div', { class: 'nvtext' }, noteBody(cur.userNotes, cur, vault.idx, go)) : h('div', { class: 'muted nvtext' }, 'No text of your own on this note yet. Press Edit to write some; type [[ to link to another note.'),
       h('div', { class: 'acts nvacts' },
@@ -603,4 +603,13 @@ function notePlaceLinks(n, d) {
   if (end > start) out.push(' – ', link(end, printed.length > 1 ? printed[printed.length - 1] : (printed.length ? '(PDF ' + end + ')' : end), false));
   if (printed.length) out.push(h('span', { class: 'muted' }, ` · PDF p. ${start}${end > start ? '–' + end : ''}`));
   return out;
+}
+
+/** The source's cover beside a note's details (its first page when it has no cover); a click opens the book at the note. */
+function noteCover(d, openIt) {
+  if (!d || d.placeholder) return null;
+  const img = h('img', { src: coverUrl(d), alt: '', loading: 'lazy', draggable: 'false' });
+  const box = h('button', { class: 'nvcover', title: canRead(d) ? 'Open the book at this note' : d.title, onclick: () => { if (canRead(d)) openIt(); else location.hash = `#/book/${d.id}`; } }, img);
+  img.addEventListener('error', () => box.remove());
+  return box;
 }

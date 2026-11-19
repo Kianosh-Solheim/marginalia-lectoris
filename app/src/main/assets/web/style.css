@@ -1321,3 +1321,11 @@ main.lxpage { max-width: 860px; margin: 0 auto; padding: 22px 16px 60px; }
 .palrow.hit .palsnip { -webkit-line-clamp: 2; }
 .palrow.hit .palsnip mark, .palquote mark { background: var(--hl, #fde68a); color: inherit; padding: 0 1px; }
 .palbox.textmode input[type=search] { border-bottom: 2px solid var(--indigo, #3730a3); }
+/* A note's details with the cover of its source at the left */
+.nvhead { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 18px; }
+.nvhead .nvprops { margin-bottom: 0; }
+.nvhead .nvprops { flex: 1; min-width: 0; }
+.nvcover { flex: none; width: 74px; padding: 0; border: 1px solid var(--rule); background: var(--wash); cursor: pointer; box-shadow: 3px 3px 0 var(--ink); line-height: 0; }
+.nvcover img { width: 100%; height: auto; display: block; max-height: 112px; object-fit: cover; object-position: top; }
+.nvcover:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
+@media (max-width: 600px) { .nvcover { width: 54px; } }
