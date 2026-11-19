@@ -1329,3 +1329,18 @@ main.lxpage { max-width: 860px; margin: 0 auto; padding: 22px 16px 60px; }
 .nvcover img { width: 100%; height: auto; display: block; max-height: 112px; object-fit: cover; object-position: top; }
 .nvcover:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
 @media (max-width: 600px) { .nvcover { width: 54px; } }
+
+/* Convert web pages (convert.js) */
+.wc-list { margin: 4px 0 12px; }
+.wc-list.over .wc-drop { border-color: var(--ink); background: var(--card); }
+.wc-drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 26px 14px; border: 1.5px dashed var(--rule); cursor: pointer; text-align: center; }
+.wc-drop span { font-size: 13px; color: var(--grey); max-width: 460px; }
+.wc-files { display: flex; flex-direction: column; border: 1px solid var(--rule); max-height: 220px; overflow: auto; }
+.wc-file { display: flex; flex-direction: column; gap: 1px; padding: 6px 9px; border-bottom: 1px solid var(--rule); font-size: 14px; }
+.wc-file:last-child { border-bottom: 0; }
+.wc-file span { font-size: 12px; }
+.wc-fields { flex-direction: row !important; gap: 10px !important; margin-bottom: 10px; }
+.wc-fields label { flex: 1; }
+.wc-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 0; border-top: 1px solid var(--rule); }
+.wc-row > .label { width: 96px; }
+.wc-status { min-height: 18px; font-size: 13px; margin-top: 8px; }
