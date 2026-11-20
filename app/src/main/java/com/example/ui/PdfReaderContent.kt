@@ -520,6 +520,9 @@ fun PdfReaderPagerContent(
                 var anchorWordIndex by remember { mutableIntStateOf(0) }
                 var extraAppendedParagraphs by remember { mutableIntStateOf(0) }
                 var isPdfDragging by remember { mutableStateOf(false) }
+                // Pen marks: the ink trail while the pen moves, and when the last underline was made (so the next one adds to it).
+                var penTrail by remember { mutableStateOf<List<Offset>?>(null) }
+                var lastPenAt by remember { mutableStateOf(0L) }
 
                 // Fallback region box if the PDF page is a pure scanned image with 0 extractable words
                 var dragBoxStart by remember { mutableStateOf<Offset?>(null) }
@@ -1100,6 +1103,40 @@ fun PdfReaderPagerContent(
                                             }
                                             // A tap in the middle of the page does nothing: the menu opens only from
                                             // the corner button, so stray taps while reading never bring it up.
+                                        },
+                                        onPenTrail = { penTrail = it },
+                                        onPenStroke = pen@{ pts ->
+                                            val words = currentTextData?.words ?: emptyList()
+                                            if (words.isEmpty()) {
+                                                if (pts.size > 3) Toast.makeText(context, "This page has no text to underline (a scanned page without OCR)", Toast.LENGTH_SHORT).show()
+                                                return@pen
+                                            }
+                                            val norm = pts.map { toNormalized(it) }
+                                            val range: IntRange = when {
+                                                com.example.reader.PenMarks.isDot(norm) -> {
+                                                    val (rx, ry) = norm.first()
+                                                    val i = findClosestPdfWordIndex(words, rx, ry) ?: return@pen
+                                                    i..i
+                                                }
+                                                else -> com.example.reader.PenMarks.underline(words, norm) ?: run {
+                                                    // Not a level line: from the word where the pen went down to the word where it lifted.
+                                                    val a = findClosestPdfWordIndex(words, norm.first().first, norm.first().second) ?: return@pen
+                                                    val b = findClosestPdfWordIndex(words, norm.last().first, norm.last().second) ?: return@pen
+                                                    minOf(a, b)..maxOf(a, b)
+                                                }
+                                            }
+                                            val now = System.currentTimeMillis()
+                                            val cur = currentSelectedRange
+                                            // Underlines made one after another (within a few seconds) make one selection.
+                                            val merged = if (cur != null && activeSelectionPageIdx == pageIndex && now - lastPenAt < 3000L)
+                                                Pair(minOf(cur.first, range.first), maxOf(cur.second, range.last))
+                                            else Pair(range.first, range.last)
+                                            lastPenAt = now
+                                            anchorWordIndex = merged.first
+                                            activeSelectionPageIdx = pageIndex
+                                            selectedWordRange = merged
+                                            isPdfDragging = false
+                                            isPdfDraggingGlobal = false
                                         }
                                     )
                                 }
@@ -1126,6 +1163,13 @@ fun PdfReaderPagerContent(
                                 val canvasW = size.width
                                 val canvasH = size.height
                                 val words = pageTextData?.words ?: emptyList()
+                                // The pen's ink trail while it moves (gone when it lifts).
+                                penTrail?.takeIf { it.size > 1 }?.let { trail ->
+                                    val path = androidx.compose.ui.graphics.Path().apply {
+                                        moveTo(trail[0].x, trail[0].y); for (k in 1 until trail.size) lineTo(trail[k].x, trail[k].y)
+                                    }
+                                    drawPath(path, Color(0xFF444444), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.5f * density, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                                }
 
                                 // 1. Draw saved highlights on this PDF page
                                 for ((hs, he, hEntity) in matchedSavedHighlightSpans) {

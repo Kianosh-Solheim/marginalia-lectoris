@@ -480,7 +480,11 @@ suspend fun PointerInputScope.detectCustomPdfSelectionGestures(
     onDragFinish: (start: Offset, end: Offset) -> Unit,
     onDragCancel: () -> Unit,
     onTap: (Offset) -> Unit,
-    longPressTimeoutMs: Long = 380L
+    longPressTimeoutMs: Long = 380L,
+    /** Pen marks: the whole stroke (page points, unzoomed) is handed over when the pen lifts. Null keeps the old pen dragging. */
+    onPenStroke: ((List<Offset>) -> Unit)? = null,
+    /** The stroke so far, for drawing the ink trail (null when the pen lifts). */
+    onPenTrail: (List<Offset>?) -> Unit = {}
 ) {
     var lastTapTimeMs = 0L
     var lastTapPosition = Offset.Zero
@@ -531,6 +535,22 @@ suspend fun PointerInputScope.detectCustomPdfSelectionGestures(
         val downPos = toUnzoomedPoint(rawDownPos)
         val isStylus = down.type == PointerType.Stylus || down.type == PointerType.Eraser
 
+        if (isStylus && onPenStroke != null) {
+            down.consume()
+            val pts = ArrayList<Offset>(128).apply { add(downPos) }
+            onPenTrail(pts.toList())
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                change.consume()
+                if (!change.pressed) break
+                val p = toUnzoomedPoint(change.position)
+                if ((p - pts.last()).getDistance() >= 1.5f) { pts.add(p); onPenTrail(pts.toList()) }
+            }
+            onPenTrail(null)
+            onPenStroke(pts)
+            return@awaitEachGesture
+        }
         if (isStylus) {
             down.consume()
             onDragStart(downPos)
