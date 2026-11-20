@@ -8,6 +8,8 @@
    Cambridge Core and Idunn have their own rules; any other site is read with general ones. */
 
 const WC_SITES = [
+  { key: 'tibi', name: 'Tibi (NLB)', host: /nlb\.no|tibi\.no/i, sniff: 'meta[name="nordic:guidelines"], body > div.section-start',
+    content: ['body'], pages: ['.page-normal', '.page-front', '.page-special'], whole: true },
   { key: 'sage', name: 'Sage Knowledge', host: /sagepub\.com/i, sniff: 'section.page-section',
     content: ['section.page-section'], pages: ['span.page-wrapper'] },
   { key: 'oup', name: 'Oxford Academic', host: /oup\.com|oxfordre\.com|oxfordscholarship|oxfordhandbooks/i, sniff: '[data-widgetname="ArticleFulltext"], .widget-ArticleFulltext',
@@ -46,6 +48,10 @@ const wcSlug = (s, n = 70) => (String(s).replace(/[\\/:*?"<>|]+/g, ' ').replace(
 
 /** First look at a saved page: what it is, without changing anything. */
 function wcParse(html, fileName) {
+  // An XHTML file (Tibi/NLB, EPUB content files) closes empty elements as <div/>, which HTML reading would leave open
+  if (/^\s*(<\?xml|<!DOCTYPE html>\s*<html[^>]*xmlns=)/i.test(html.slice(0, 600)) || /<html[^>]*xmlns="http:\/\/www\.w3\.org\/1999\/xhtml"/.test(html.slice(0, 1500))) {
+    html = html.replace(/<(?!(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b)([a-zA-Z][\w:-]*)((?:\s+[\w:-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'))?)*)\s*\/>/g, '<$1$2></$1>');
+  }
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const meta = n => [...doc.querySelectorAll(`meta[name="${n}"], meta[property="${n}"]`)].map(m => (m.getAttribute('content') || '').trim()).filter(Boolean);
   const one = (...ns) => { for (const n of ns) { const v = meta(n); if (v.length) return v[0]; } return ''; };
@@ -57,7 +63,7 @@ function wcParse(html, fileName) {
   const journal = one('citation_journal_title');
   const cm = /\/(?:chpt|chapter|ch)\/(\d+)[-\/]/i.exec(url) || /[\/_-]chapter[-_]?(\d+)\b/i.exec(url);
   const chapter = one('citation_title', 'dc.title', 'DC.title', 'og:title') || (doc.title || fileName).trim();
-  const authors = meta('citation_author').length ? meta('citation_author') : meta('dc.creator').length ? meta('dc.creator') : meta('author');
+  const authors = meta('citation_author').length ? meta('citation_author') : meta('dc.creator').length ? meta('dc.creator') : meta('dc:creator').length ? meta('dc:creator') : meta('author');
   return {
     doc, url, site, fileName,
     canonical: wcNormUrl(url),
@@ -65,10 +71,10 @@ function wcParse(html, fileName) {
     book: one('citation_inbook_title', 'citation_book_title') || (journal ? chapter : ''),
     journal,
     authors: authors.map(a => a.includes(',') ? a.split(',').map(x => x.trim()).reverse().join(' ') : a),
-    publisher: one('citation_publisher', 'dc.publisher', 'DC.publisher'),
-    date: one('citation_publication_date', 'citation_date', 'dc.date', 'citation_online_date'),
-    isbn: one('citation_isbn'), doi: one('citation_doi', 'dc.identifier'),
-    lang: (one('citation_language', 'dc.language') || doc.documentElement.getAttribute('lang') || 'en').slice(0, 5),
+    publisher: one('citation_publisher', 'dc.publisher', 'DC.publisher', 'dc:publisher'),
+    date: one('citation_publication_date', 'citation_date', 'dc.date', 'citation_online_date', 'dc:date.issued', 'dc:date'),
+    isbn: one('citation_isbn', 'schema:isbn'), doi: one('citation_doi', 'dc.identifier'),
+    lang: (one('citation_language', 'dc.language', 'dc:language') || doc.documentElement.getAttribute('lang') || 'en').slice(0, 5),
     firstPage: parseInt(one('citation_firstpage'), 10) || null,
     chapNum: cm ? parseInt(cm[1], 10) : null,
   };
@@ -293,6 +299,10 @@ function wcStripAttrs(root) {
     if (t.getAttribute('class') === '') t.removeAttribute('class');
     if (t.hasAttribute('aria-label') && t.getAttribute('role') !== 'doc-pagebreak') t.removeAttribute('aria-label');
     if (t.hasAttribute('role') && !/^doc-/.test(t.getAttribute('role'))) t.removeAttribute('role');
+    if (t.hasAttribute('epub:type')) {   // values from vocabularies the book does not declare (z3998:author…) would make the EPUB invalid
+      const v = t.getAttribute('epub:type').split(/\s+/).filter(x => x && !x.includes(':')).join(' ');
+      if (v) t.setAttribute('epub:type', v); else t.removeAttribute('epub:type');
+    }
   });
 }
 
@@ -315,13 +325,13 @@ function wcPrefixIds(root, prefix) {
 /** One saved page → a chapter of the book. */
 async function wcChapter(info, n, opts, store) {
   const { doc, site } = info;
-  const src = wcFindContent(doc, site);
+  const src = info.contentRoot || wcFindContent(doc, site);
   const root = doc.createElement('div');
   root.append(src.cloneNode(true));
   wcPages(root, site, opts.label);
   wcClean(root);
   wcNotes(root);
-  wcStructure(root, site, info.chapter);
+  wcStructure(root, site, info.noHeading ? '' : info.chapter);
   await wcImages(root, store);
   wcStripAttrs(root);
   // give headings ids for the contents
@@ -464,10 +474,18 @@ async function wcEpub(chs, meta, store, opts) {
     O.file(c.file, wcXhtml(c.title, `<section epub:type="${sem.type}"${sem.role ? ` role="${sem.role}"` : ''} id="${c.anchor}">\n${wcSerialize(c.root)}\n</section>`, lang, bodyClass));
     manifest.push(`<item id="${id}" href="${c.file}" media-type="application/xhtml+xml"/>`); spine.push(id);
   });
-  const toc = chs.map(c => {
+  const item = c => {
     const subs = c.toc.filter(t => t[0] === 2).map(t => `<li><a href="${c.file}#${t[2]}">${wcEsc(t[1])}</a></li>`).join('');
-    return `<li><a href="${c.file}">${wcEsc(c.tocTitle || c.title)}</a>${subs ? `<ol>${subs}</ol>` : ''}</li>`;
-  }).join('');
+    return [`<li><a href="${c.file}">${wcEsc(c.tocTitle || c.title)}</a>`, subs ? `<ol>${subs}</ol>` : ''];
+  };
+  let toc = '';
+  for (let i = 0; i < chs.length; i++) {
+    const [open, subs] = item(chs[i]);
+    const kids = [];
+    const isPart = chs[i].kind === 'part';
+    while (isPart && chs[i + 1] && chs[i + 1].depth === 1) { const [o, sb] = item(chs[++i]); kids.push(o + sb + '</li>'); }
+    toc += open + (kids.length ? `<ol>${subs ? subs.slice(4, -5) : ''}${kids.join('')}</ol>` : subs) + '</li>';
+  }
   const pageList = chs.flatMap(c => c.pages.map(([num, pid]) => `<li><a href="${c.file}#${pid}">${wcEsc(num)}</a></li>`)).join('');
   O.file('nav.xhtml', wcXhtml('Contents', `<nav epub:type="toc" id="toc" role="doc-toc"><h1>Contents</h1><ol>${toc}</ol></nav>\n`
     + (pageList ? `<nav epub:type="page-list" id="page-list" hidden=""><h2>Pages</h2><ol>${pageList}</ol></nav>\n` : '')
@@ -677,15 +695,28 @@ function wcTypst(chs, meta, opts) {
 }
 #let tcap(body) = block(below: 0.5em, sticky: true, text(size: 0.85em, weight: "bold", body))
 #let fig(imgs, cap) = block(width: 100%, breakable: false, above: 1.1em, below: 1.1em, { set align(center); for i in imgs { i; v(0.2em) }; if cap != [] { set align(left); text(size: 0.85em, weight: "bold", cap) } })
-${book ? `#let fitpage(sheets, body) = context {
-  // the text of one printed page, a little smaller when it would not fit; past ${WC_MIN_PT} pt it goes on to another sheet
-  // pictures (in em) shrink with the text, and up to 40 % more by the time the text is at its smallest
-  let k(sz) = 1 - 0.4 * (${opts.fontSize}pt - sz) / ${(opts.fontSize - WC_MIN_PT).toFixed(2)}pt
-  let set-in(sz, b) = { set text(size: sz); show image: it => scale(k(sz) * 100%, reflow: true, it); b }
-  let room = if sheets > 1 { sheets * ${(ph - mt - mb) * 0.86}mm } else { ${(ph - mt - mb) * 0.94}mm }   // some room for what measuring cannot see (widows, figures that move on)
-  let s = ${opts.fontSize}pt
-  while s > ${WC_MIN_PT}pt and measure(width: ${pw - 2 * mx}mm, set-in(s, body)).height > room { s -= 0.25pt }
-  set-in(s, body)
+${book ? `// ---- pages as in the printed book, filling the sheet:
+//  1. one size for the whole book, so that a usual page fills its sheet (fitBook)
+//  2. each page a little larger or smaller, up to 5 % (fitAdjust); past that, smaller only where it must, down to ${WC_MIN_PT} pt
+//  3. a sheet still mostly empty is cut short below its text (fitTrim)
+#let BASE = ${opts.fontSize}pt
+#let bookbase = state("ml-bookbase", BASE)
+#let W = ${pw - 2 * mx}mm
+#let ROOM = ${(ph - mt - mb) * 0.94}mm
+// pictures (in em) shrink with the text, and up to 40 % more by the time the text is at its smallest
+#let k(sz) = calc.min(1, 1 - 0.4 * (BASE - sz) / ${(opts.fontSize - WC_MIN_PT).toFixed(2)}pt)
+#let set-in(sz, b) = { set text(size: sz); show image: it => scale(k(sz) * 100%, reflow: true, it); b }
+#let bpage(body, sheets, num, pre) = context {
+  let base = bookbase.get()
+  let room = if sheets > 1 { sheets * ${(ph - mt - mb) * 0.86}mm } else { ROOM }   // some room for what measuring cannot see (widows, figures that move on)
+  let hof(sz) = measure(width: W, set-in(sz, body)).height
+  let s = ${opts.fitAdjust ? 'base * 1.05' : 'base'}
+  let lo = ${opts.fitAdjust ? 'base * 0.95' : 'base'}
+  while s > lo and hof(s) > room { s -= 0.1pt }
+  while s > ${WC_MIN_PT}pt and hof(s) > room { s -= 0.25pt }
+  let h = hof(s)
+  let ht = ${opts.fitTrim ? `if sheets == 1 and h < room * 0.85 { calc.max(${(ph * 0.4).toFixed(1)}mm, h + ${mt + mb + 5}mm) } else { ${ph}mm }` : `${ph}mm`}
+  page(numbering: num, height: ht, { pre; set-in(s, body) })
 }
 ` : ''}#set page(width: ${pw}mm, height: ${ph}mm, margin: (top: ${mt}mm, bottom: ${mb}mm, x: ${mx}mm),
   header: context {
@@ -722,7 +753,13 @@ ${book ? `#let fitpage(sheets, body) = context {
 #show heading: it => if it.level > 3 { block(above: 1.1em, below: 0.4em, sticky: true, emph(it.body)) } else { it }
 #show link: it => if type(it.dest) == str { text(fill: rgb("#0b5a8c"), it) } else { it }
 
-${opts.cover ? `#page(margin: 0pt, header: none, footer: none, numbering: none, fill: luma(245))[#align(center + horizon, image("images/cover.${opts.cover.ext}", width: 100%, height: 100%, fit: "contain"))]\n` : ''}#page(header: none, footer: none)[
+${opts.cover ? `#page(margin: 0pt, header: none, footer: none, numbering: none, fill: luma(245))[#align(center + horizon, image("images/cover.${opts.cover.ext}", width: 100%, height: 100%, fit: "contain"))]\n` : ''}#page(header: none, footer: none)[${book && opts.fitBook ? `#context {
+  // the size that fills a usual page: text height grows with the square of its size
+  let rs = range(bp.len()).map(i => measure(width: W, { set text(size: BASE); bp.at(i) }).height / (ROOM * bpn.at(i)))
+  let full = rs.filter(r => r > 0.35).sorted()
+  let med = if full.len() > 0 { full.at(calc.floor(full.len() / 2)) } else { 1.0 }
+  bookbase.update(calc.max(${WC_MIN_PT}pt, calc.min(16pt, BASE * calc.sqrt(0.96 / med))))
+}` : ''}
   #v(22%)
   #align(center)[
     #text(size: 21pt, weight: "bold")[${wcTyText(meta.title)}]
@@ -735,20 +772,27 @@ ${opts.cover ? `#page(margin: 0pt, header: none, footer: none, numbering: none, 
   ]
 ]
 ${book ? '#page(numbering: "i")[#counter(page).update(1)' : '#pagebreak(weak: true)\n'}#heading(level: 1, outlined: false, bookmarked: false)[Contents]
-${chs.map(c => c.toc.map(t => `#tocline(${t[0]}, <${t[2]}>, [${wcTyText(t[0] === 1 ? (c.tocTitle || c.title) : t[1]).replace(/^[(.]/, '\\$&')}])`).join('\n')).join('\n')}
+${chs.map(c => c.toc.map(t => `#tocline(${t[0] + (c.depth || 0)}, <${t[2]}>, [${wcTyText(t[0] === 1 ? (c.tocTitle || c.title) : t[1]).replace(/^[(.]/, '\\$&')}])`).join('\n')).join('\n')}
 ${book ? ']' : ''}
 `;
+  const bodies = [], sheets = []; let pages = '';
   chs.forEach(c => {
     const chunks = book ? wcPageChunks(c.root) : null;
-    if (!chunks) { src += `\n#pagebreak(weak: true)\n#metadata(none)<${c.anchor}>\n` + blocks(c.root); return; }
+    if (!chunks) { pages += `\n#pagebreak(weak: true)\n#metadata(none)<${c.anchor}>\n` + blocks(c.root); return; }
     chunks.forEach((k, i) => {
       const num = /^\d+$/.test(k.label) ? parseInt(k.label, 10) : wcRoman(k.label);
       const numbering = /^\d+$/.test(k.label) ? '"1"' : num ? '"i"' : 'none';
       const meta = `(label: ${wcTyStr(k.label)}, last: ${k.last || 'none'})`;
-      src += `\n#page(numbering: ${numbering})[${num ? `#counter(page).update(${num})` : ''}#metadata(${meta})<bpstart>${i === 0 ? `#metadata(none)<${c.anchor}>` : ''}\n#fitpage(${k.last ? k.last - num + 1 : 1})[\n${blocks(k.root)}]]\n`;
+      const pre = `${num ? `#counter(page).update(${num})` : ''}#metadata(${meta})<bpstart>${i === 0 ? `#metadata(none)<${c.anchor}>` : ''}`;
+      bodies.push(blocks(k.root)); sheets.push(k.last ? k.last - num + 1 : 1);
+      pages += `\n#bpage(bp.at(${bodies.length - 1}), ${sheets[sheets.length - 1]}, ${numbering}, [${pre}])\n`;
     });
   });
-  return src;
+  if (!book) return src + pages;
+  const defs = `#let bp = (\n${bodies.map(b => `[\n${b}]`).join(',\n')},\n)\n#let bpn = (${sheets.join(', ')},)\n`;
+  // the definitions go before the title page, which measures them
+  const at = src.indexOf('#page(header: none, footer: none)[');
+  return src.slice(0, at) + defs + src.slice(at) + pages;
 }
 
 const WC_MIN_PT = 8.5;   // the smallest the text of a crowded printed page is set, before it goes on to another sheet
@@ -819,6 +863,7 @@ function wcKind(info) {
 /** The EPUB semantics of a part of the book, by its kind and title. */
 function wcSemantics(c) {
   if (c.kind === 'chapter') return { type: 'bodymatter chapter', role: 'doc-chapter' };
+  if (c.kind === 'part') return { type: 'bodymatter part', role: 'doc-part' };
   const t = c.info.chapter || '';
   const pairs = [[/preface|forord|fortale/i, 'preface'], [/foreword/i, 'foreword'], [/prologue/i, 'prologue'], [/acknowledge?ments?|takk/i, 'acknowledgments'], [/introduction|innledning|introduksjon/i, 'introduction'],
     [/dedication/i, 'dedication'], [/epigraph/i, 'epigraph'], [/references|bibliography|works cited|litteratur|referanser|kilder/i, 'bibliography'], [/index|register|stikkord/i, 'index'],
@@ -861,6 +906,51 @@ function wcLibraryMatch(title) {
   return state.docs.find(d => !d.folder && !d.placeholder && norm(d.title) === want) || null;
 }
 
+// ------------------------------------------------------------------ a whole book in one file (Tibi/NLB and the like)
+
+/** One file that holds a whole book, its sections marked (Tibi: empty <div class="section-start" epub:type="…">). */
+function wcIsWholeBook(info) {
+  if (!info || !info.doc) return false;
+  if (info.site && info.site.whole) return true;
+  return info.doc.querySelectorAll('body > div.section-start, body > section[epub\\:type]').length > 2;
+}
+/** The whole book's sections, each as a part of the book of its own: front matter, parts, chapters, back matter. */
+function wcSplitBook(info) {
+  const doc = info.doc, body = doc.body;
+  const isStart = n => n.nodeType === 1 && (n.matches('div.section-start') || (n.tagName === 'SECTION' && n.hasAttribute('epub:type')));
+  const segs = []; let cur = null;
+  for (const n of [...body.childNodes]) {
+    if (isStart(n)) {
+      cur = { type: n.getAttribute('epub:type') || '', nodes: n.tagName === 'SECTION' ? [...n.childNodes] : [] }; segs.push(cur);
+      continue;
+    }
+    if (!cur) { cur = { type: 'frontmatter', nodes: [] }; segs.push(cur); }
+    cur.nodes.push(n);
+  }
+  const pageSel = [...(info.site ? info.site.pages : []), ...WC_GENERIC_PAGES].join(', ');
+  const named = { halftitlepage: 'Half title', titlepage: 'Title page', colophon: 'Colophon', copyright: 'Copyright', toc: 'Contents', dedication: 'Dedication', epigraph: 'Epigraph', index: 'Index', backmatter: 'Back matter', frontmatter: 'Front matter' };
+  const out = []; let carry = [];
+  segs.forEach(sg => {
+    const root = doc.createElement('div');
+    carry.forEach(n => root.append(n)); carry = [];
+    sg.nodes.forEach(n => root.append(n.cloneNode(true)));
+    // headings made only for navigation (hidden on the page) name the section but are not shown
+    const hidden = root.querySelector('.hidden-headline');
+    root.querySelectorAll('.hidden-headline, .hidden-headline-anchor').forEach(e => e.remove());
+    const probe = root.cloneNode(true); probe.querySelectorAll(pageSel).forEach(e => e.remove());
+    if (!probe.textContent.trim() && !probe.querySelector('img, table')) { carry = [...root.childNodes]; return; }   // only page markers: they go on to the next section
+    const types = sg.type.split(/\s+/);
+    const kind = types.includes('frontmatter') ? 'front' : types.includes('backmatter') ? 'back' : types.includes('part') ? 'part' : 'chapter';
+    const visible = root.querySelector('h1, h2, h3, h4');
+    const special = types.find(t => named[t] && t !== 'frontmatter' && t !== 'backmatter');
+    const title = (visible && visible.textContent.trim()) || (hidden && hidden.textContent.trim()) || named[special || types[0]] || 'Section';
+    // noHeading: the book shows no heading here (its name was only for navigation), so none is added
+    out.push(Object.assign({}, info, { chapter: title, contentRoot: root, kind, seq: out.length, chapNum: null, firstPage: null, book: info.book || info.chapter, noHeading: !visible }));
+  });
+  if (carry.length && out.length) carry.forEach(n => out[out.length - 1].contentRoot.append(n));
+  return out.length ? out : [info];
+}
+
 // ------------------------------------------------------------------ the whole job
 
 /** Saved pages (File objects) → { epub?: Blob, pdf?: Blob, name, meta }. */
@@ -870,17 +960,24 @@ async function wcConvert(files, opts, progress = () => {}) {
     progress(`Reading ${f.name}…`);
     const info = wcParse(await f.text(), f.name);
     info.kind = (opts.kinds && opts.kinds[i]) || wcKind(info);
+    info.fileIdx = i;
     infos.push(info);
   }
-  const groups = opts.separate ? infos.map(i => [i]) : [infos];
+  const expand = list => list.flatMap(x => wcIsWholeBook(x) ? wcSplitBook(x) : [x]);
+  const groups = (opts.separate ? infos.map(i => [i]) : [infos]).map(expand);
   const results = [];
   for (const group of groups) {
     const store = { list: [], bySrc: new Map() };
     let chs = [];
-    for (let i = 0; i < group.length; i++) { progress(`Chapter ${i + 1} of ${group.length}: ${group[i].chapter}`); chs.push(await wcChapter(group[i], i + 1, opts, store)); }
-    const rank = { front: 0, chapter: 1, back: 2 };
+    for (let i = 0; i < group.length; i++) { progress(`Part ${i + 1} of ${group.length}: ${group[i].chapter}`); chs.push(await wcChapter(group[i], i + 1, opts, store)); }
+    const rank = { front: 0, part: 1, chapter: 1, back: 2 };
     chs.forEach(c => { c.kind = c.info.kind || 'chapter'; c.key = wcPageKey(c); });
-    if (!opts.manualOrder) chs = chs.map((c, i) => [c, i]).sort(([a, i], [b, j]) => (a.key != null && b.key != null ? a.key - b.key : rank[a.kind] - rank[b.kind]) || i - j).map(x => x[0]);
+    // the sections of one whole-book file keep the book's own order
+    const sameBook = (a, b) => a.info.seq != null && b.info.seq != null && a.info.fileIdx === b.info.fileIdx;
+    if (!opts.manualOrder) chs = chs.map((c, i) => [c, i]).sort(([a, i], [b, j]) => sameBook(a, b) ? a.info.seq - b.info.seq : (a.key != null && b.key != null ? a.key - b.key : rank[a.kind] - rank[b.kind]) || i - j).map(x => x[0]);
+    // chapters that belong to a part are one level in under it in the contents
+    let inPart = false;
+    chs.forEach(c => { if (c.kind === 'part') { inPart = true; c.depth = 0; } else if (c.kind === 'chapter') c.depth = inPart ? 1 : 0; else { if (c.kind === 'back') inPart = false; c.depth = 0; } });
     // chapter numbers: from the addresses when every chapter has one, else counted; front and back matter get none
     const body = chs.filter(c => c.kind === 'chapter');
     const known = body.length && body.every(c => c.info.chapNum != null);
@@ -915,6 +1012,7 @@ function wcChapterLabel(c, opts) {
   const word = (opts.chapterWord == null ? 'Chapter' : opts.chapterWord).trim();
   if (!opts.chapterLabel || opts.chapterLabel === 'none') return;
   if (/^\s*(chapter|kapittel|kapitel|chapitre|capitolo|cap[ií]tulo|ch\.|kap\.)\s*[0-9ivxlc]+\b/i.test(c.title)) return;   // numbered already
+  if (/^\s*([0-9]{1,3}|[IVXLC]{1,7})\.?\s*$/i.test(c.title)) return;   // the title is the number ("IV")
   const lab = (word ? word + ' ' : '') + c.number;
   const h1 = c.root.querySelector('h1');
   c.tocTitle = `${lab}: ${c.title}`;
@@ -934,6 +1032,7 @@ var wcDropTarget = null;   // while the dialog is open, files dropped anywhere c
 function convertDialog() {
   const opts = {
     epub: localGet('ml.wc.epub', '1') === '1', pdf: localGet('ml.wc.pdf', '1') === '1', bookPages: localGet('ml.wc.book', '1') === '1',
+    fitBook: localGet('ml.wc.fitbook', '1') === '1', fitAdjust: localGet('ml.wc.fitadj', '1') === '1', fitTrim: localGet('ml.wc.fittrim', '1') === '1',
     separate: false, showPages: localGet('ml.wc.pages', '1') === '1',
     label: localGet('ml.wc.label', 'p. '), chapterLabel: localGet('ml.wc.chap', 'none'), chapterWord: localGet('ml.wc.chapword', 'Chapter'), pageSize: [158, 210], fontSize: 10.5,
     toLibrary: localGet('ml.wc.lib', '1') === '1', download: localGet('ml.wc.dl', '0') === '1',
@@ -1001,6 +1100,10 @@ function convertDialog() {
         opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF pages'),
           chip('As in the book', () => opts.bookPages, () => { opts.bookPages = true; localSet('ml.wc.book', '1'); }, 'Each printed page on a page of its own, with its number; a crowded page is set a little smaller'),
           chip('Flowing', () => !opts.bookPages, () => { opts.bookPages = false; localSet('ml.wc.book', '0'); }, 'The text runs on from page to page; the printed pages are marked in the text')) : null,
+        opts.pdf && opts.bookPages ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'Fill the pages'),
+          chip('One size for the book', () => opts.fitBook, () => { opts.fitBook = !opts.fitBook; localSet('ml.wc.fitbook', opts.fitBook ? '1' : '0'); }, 'The text size that fills a usual page, the same all through the book'),
+          chip('Adjust each page', () => opts.fitAdjust, () => { opts.fitAdjust = !opts.fitAdjust; localSet('ml.wc.fitadj', opts.fitAdjust ? '1' : '0'); }, 'Each page up to 5 % larger or smaller, to fill its sheet'),
+          chip('Trim short pages', () => opts.fitTrim, () => { opts.fitTrim = !opts.fitTrim; localSet('ml.wc.fittrim', opts.fitTrim ? '1' : '0'); }, 'A sheet that is still mostly empty (a chapter\'s start or end) is cut short below its text')) : null,
         opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF size'),
           sizes.map(([l, s]) => chip(l, () => opts.pageSize[0] === s[0] && opts.pageSize[1] === s[1], () => { opts.pageSize = s; })),
           h('span', { class: 'spacer' }),
@@ -1029,13 +1132,13 @@ function convertDialog() {
         ? ['In your order. ', h('button', { class: 'btn quiet', onclick: () => { manual = false; autoSort(); drawList(); } }, 'Sort by printed page')]
         : 'In the order of the printed pages. Drag a file, or use ↑ ↓, to set your own.'));
       list.append(h('div', { class: 'wc-files' }, infos.map((x, i) => {
-        const pages = x.doc ? (x.pageCount ? `pp. ${x.firstLabel}–${x.lastLabel}` : 'no page numbers found') : '';
+        const pages = x.doc ? [x.whole ? `whole book, ${x.sections} sections` : '', x.pageCount ? `pp. ${x.firstLabel}–${x.lastLabel}` : 'no page numbers found'].filter(Boolean).join(' · ') : '';
         // what the page is: a chapter (numbered), or front or back matter (preface, references, index… not numbered)
         const kind = h('select', { class: 'wc-kind', title: 'Chapters are numbered; front and back matter are not, and go before or after the chapters' },
           [['chapter', 'Chapter'], ['front', 'Front matter'], ['back', 'Back matter']].map(([k, l]) => h('option', { value: k, selected: x.kind === k }, l)));
         kind.addEventListener('change', () => { x.kind = kind.value; if (!manual) { autoSort(); drawList(); } });
         const row = h('div', { class: 'wc-file', draggable: 'true' },
-          h('div', { class: 'wc-fhead' }, h('span', { class: 'wc-grip', title: 'Drag to move' }, '⋮⋮'), h('b', null, x.chapter), kind,
+          h('div', { class: 'wc-fhead' }, h('span', { class: 'wc-grip', title: 'Drag to move' }, '⋮⋮'), h('b', null, x.chapter), x.whole ? null : kind,
             h('button', { class: 'chip', title: 'Move up', disabled: i === 0, onclick: () => move(i, i - 1) }, '↑'),
             h('button', { class: 'chip', title: 'Move down', disabled: i === infos.length - 1, onclick: () => move(i, i + 1) }, '↓'),
             h('button', { class: 'chip', title: 'Leave this page out', onclick: () => { infos.splice(i, 1); files.splice(i, 1); drawList(); draw(); } }, '×')),
@@ -1060,6 +1163,7 @@ function convertDialog() {
         files.push(f);
         try {
           const x = wcParse(await f.text(), f.name); x.kind = wcKind(x);
+          if (wcIsWholeBook(x)) { x.whole = true; x.sections = wcSplitBook(x).length; }
           const els = wcPageEls(wcFindContent(x.doc, x.site), x.site);
           const num = e => { const raw = e.getAttribute('data-page') || e.getAttribute('data-page-number') || e.getAttribute('title') || e.textContent; const m = WC_PAGE_RE.exec(raw || '') || /([0-9]{1,4})\s*\]?\s*$/.exec(raw || ''); return m ? m[1] : null; };
           x.pageCount = els.length; x.firstLabel = els.length ? num(els[0]) : null; x.lastLabel = els.length ? num(els[els.length - 1]) : null;
@@ -1092,7 +1196,7 @@ function convertDialog() {
       } catch (e) { console.error(e); status.textContent = 'Could not convert: ' + (e.message || e); go.disabled = false; }
     });
     box.append(h('h2', null, 'Convert web pages to EPUB or PDF'),
-      h('p', { class: 'muted', style: { marginTop: '-6px', fontSize: '13px' } }, 'Chapters you have saved from a publisher\'s reading page become a book for the tablet, keeping the printed page numbers, notes, figures and tables. Sage Knowledge, Oxford Academic, Cambridge Core and Idunn are recognised; other sites are read with general rules.'),
+      h('p', { class: 'muted', style: { marginTop: '-6px', fontSize: '13px' } }, 'Chapters you have saved from a publisher\'s reading page, or a whole book in one file (Tibi/NLB), become a book for the tablet, keeping the printed page numbers, notes, figures and tables. Sage Knowledge, Oxford Academic, Cambridge Core, Idunn and Tibi are recognised; other sites are read with general rules.'),
       pick, list, h('div', { class: 'fields wc-fields' }, h('label', null, h('span', { class: 'label' }, 'Title'), title), h('label', null, h('span', { class: 'label' }, 'Author(s)'), authors)),
       optsBox, status,
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), go));
