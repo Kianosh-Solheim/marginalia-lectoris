@@ -118,12 +118,13 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                     null -> {
                         val client = req.query["client"].orEmpty()
                         require(client.isNotBlank()) { "No client." }
-                        val seen = req.query["seen"].orEmpty().split(',').mapNotNull { it.toLongOrNull() }.toSet()
+                        val seen = req.query["seen"].orEmpty().split(',').filter { it.isNotBlank() }.toSet()
                         ok(NoteRelay.poll(client, seen, req.query["wait"]?.toLongOrNull() ?: 0L))
                     }
                     "claim" -> { NoteRelay.claim(b.optString("client").ifBlank { throw IllegalArgumentException("No client.") }); ok(JSONObject().put("active", true)) }
                     "release" -> { NoteRelay.release(b.optString("client")); ok(JSONObject().put("active", false)) }
                     "done" -> { NoteRelay.done(b.optLong("id")); ok(JSONObject().put("ok", true)) }
+                    "continue" -> { NoteRelay.requestContinue(b.optLong("id")); ok(JSONObject().put("ok", true)) }
                     else -> throw NoSuchElementException("No such relay route.")
                 }
             }

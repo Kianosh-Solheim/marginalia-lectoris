@@ -32,7 +32,11 @@ async function relayPoll(my) {
       if (my !== relay.loop) return;
       fails = 0;
       if (!r.active) { relayStop(false); toast(r.taken ? 'Another browser takes the notes now' : 'Switched off on the tablet', 4000); return; }
-      (r.items || []).forEach(id => { if (!relay.seen.has(id)) { relay.seen.add(id); relay.queue.push(id); } });
+      // Each note comes with its round: a note continued on the next page comes again, with the rest joined on.
+      (r.items || []).forEach(it => {
+        const id = typeof it === 'object' ? it.id : it, key = typeof it === 'object' ? `${it.id}:${it.round}` : String(it);
+        if (!relay.seen.has(key)) { relay.seen.add(key); if (!relay.queue.includes(id) && relay.open !== id) relay.queue.push(id); }
+      });
       relayNext();
     } catch (e) {
       if (++fails > 4) { relayStop(false); toast('Lost contact with the tablet; it writes its notes itself again', 5000); return; }
@@ -59,6 +63,10 @@ async function relayNext() {
   editNote(n, () => finish(), {
     heading: 'From the tablet', sub: where + (more ? ` — ${more} more waiting` : ''), cancelLabel: more ? 'Skip' : 'Leave as it is', focusTitle: true,
     onClose: finish,
+    onContinue: async () => {
+      await api('relay/continue', { method: 'POST', json: { id } });
+      toast('Select the rest of the quotation on the tablet — the note comes back here with it', 5000);
+    },
   });
 }
 /** The small switch in the corner while it is on, with how many wait. */

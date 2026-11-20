@@ -2173,15 +2173,69 @@ fun ReaderScreen(
 
     // "Take notes here" in a browser: the highlight is saved at once and its note is written on the computer.
     var relayOn by remember { mutableStateOf(com.example.server.NoteRelay.active()) }
-    LaunchedEffect(Unit) { while (true) { relayOn = com.example.server.NoteRelay.active(); kotlinx.coroutines.delay(1500) } }
-    val relayNow = showAddHighlightDialog && noteContinuation == null && highlightQuoteText.isNotBlank() && com.example.server.NoteRelay.active()
+    // A saved note that goes on to the next page (asked for from the browser or from here).
+    var relayContinueId by remember { mutableStateOf<Long?>(null) }
+    var offerContinue by remember { mutableStateOf<Long?>(null) }
+    val isPdfHere = isPdfDocument
+    val highlightsNow by androidx.compose.runtime.rememberUpdatedState(highlights)
+    val startRelayContinue: (Long) -> Unit = { id ->
+        val h = highlightsNow.firstOrNull { it.id == id }
+        if (h != null && isPdfHere) {
+            val (range, _) = com.example.reader.PdfToEbookParser.parseStoredPageLabels(h.pageNumber, h.printedPageLabel)
+            val last = maxOf(h.pageNumber, range.substringAfterLast('–').substringAfterLast('-').trim().toIntOrNull() ?: h.pageNumber)
+            noteContinuation = com.example.reader.NoteContinuation(h.title, h.highlightedText, h.userNotes, h.pageNumber, last, h.printedPageLabel, h.chapterTitle, h.colorHex, h.tags)
+            relayContinueId = id; offerContinue = null
+            targetHighlightRequest = null
+            targetPageRequest = last   // 0-based index of the page after [last]
+            jumpRequestToken++
+            Toast.makeText(context, "Select the rest of the quotation on this page, then choose Note", Toast.LENGTH_LONG).show()
+        }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            relayOn = com.example.server.NoteRelay.active()
+            com.example.server.NoteRelay.continueRequest?.let { id ->
+                if (highlightsNow.any { it.id == id }) { com.example.server.NoteRelay.continueRequest = null; startRelayContinue(id) }
+            }
+            // The tablet's own offer to continue, for ten seconds after a note was handed over.
+            val lp = com.example.server.NoteRelay.lastPushed
+            offerContinue = if (relayOn && isPdfHere && lp != null && noteContinuation == null && System.currentTimeMillis() - com.example.server.NoteRelay.lastPushedAt < 10_000 && highlightsNow.any { it.id == lp }) lp else null
+            kotlinx.coroutines.delay(700)
+        }
+    }
+    val relayNow = showAddHighlightDialog && highlightQuoteText.isNotBlank() && com.example.server.NoteRelay.active() &&
+        (noteContinuation == null || relayContinueId != null)
     LaunchedEffect(relayNow, highlightQuoteText, highlightPageNumber) {
         if (!relayNow) return@LaunchedEffect
-        com.example.server.NoteRelay.armNext()
-        onAddHighlight("", highlightQuoteText, "", highlightPageNumber, highlightPrintedPageLabel, highlightChapterText, highlightColorHex, "",
-            highlightParagraphCitation, highlightPageEquivalent, highlightEpubCfi)
+        val contId = relayContinueId
+        val cont = noteContinuation
+        val saved = contId?.let { id -> highlights.firstOrNull { it.id == id } }
+        if (cont != null && saved != null) {
+            // The rest of a quotation: joined to the note already saved, which goes to the computer again.
+            onUpdateHighlight(saved.copy(
+                highlightedText = com.example.reader.NoteContinuation.join(saved.highlightedText, highlightQuoteText),
+                printedPageLabel = com.example.reader.NoteContinuation.span(cont, highlightPageNumber, highlightPrintedPageLabel)
+            ))
+            com.example.server.NoteRelay.push(saved.id)
+            Toast.makeText(context, "Added to the note · sent to the computer", Toast.LENGTH_SHORT).show()
+        } else {
+            com.example.server.NoteRelay.armNext()
+            onAddHighlight("", highlightQuoteText, "", highlightPageNumber, highlightPrintedPageLabel, highlightChapterText, highlightColorHex, "",
+                highlightParagraphCitation, highlightPageEquivalent, highlightEpubCfi)
+            Toast.makeText(context, "Saved · sent to the computer", Toast.LENGTH_SHORT).show()
+        }
+        relayContinueId = null; noteContinuation = null
         showAddHighlightDialog = false
-        Toast.makeText(context, "Saved · sent to the computer", Toast.LENGTH_SHORT).show()
+    }
+    offerContinue?.let { id ->
+        androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomCenter) {
+            androidx.compose.foundation.layout.Row(
+                Modifier.padding(bottom = 56.dp).background(Color.Black).clickable { startRelayContinue(id) }.padding(horizontal = 14.dp, vertical = 9.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                androidx.compose.material3.Text("Continue on next page ›", color = Color.White, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            }
+        }
     }
     if (relayOn) {
         androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomStart) {
@@ -2244,11 +2298,18 @@ fun ReaderScreen(
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                 ) {
                     androidx.compose.material3.Text("Select the rest of the quotation, then Note", color = Color.White, fontSize = 13.sp)
-                    androidx.compose.material3.Text("   Back to the note", color = Color.White, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    androidx.compose.material3.Text(if (relayContinueId != null) "   Nothing more" else "   Back to the note", color = Color.White, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                         modifier = Modifier.clickable {
-                            // Nothing more to add: the dialog comes back as it was.
-                            highlightQuoteText = ""; highlightPageNumber = c.lastPage; highlightPrintedPageLabel = ""
-                            showAddHighlightDialog = true
+                            val rid = relayContinueId
+                            if (rid != null) {
+                                // A note written on the computer: it goes back there as it is.
+                                relayContinueId = null; noteContinuation = null
+                                com.example.server.NoteRelay.push(rid)
+                            } else {
+                                // Nothing more to add: the dialog comes back as it was.
+                                highlightQuoteText = ""; highlightPageNumber = c.lastPage; highlightPrintedPageLabel = ""
+                                showAddHighlightDialog = true
+                            }
                         })
                 }
             }

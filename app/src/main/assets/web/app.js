@@ -2364,7 +2364,7 @@ function editNote(n, onSaved, opts = {}) {
     // The printed page, to correct by hand (a range as 183–184). A page typed here is kept when the document is renumbered.
     const hasPage = n.pageNumber > 0 && (n.fileType ? /pdf/i.test(n.fileType) : true) && !n.epubCfi;
     const pg = h('input', { value: n.printedPageLabel || '', placeholder: 'e.g. 183 or 183–184', style: { maxWidth: '180px' } });
-    const save = async () => {
+    const save = async (andThen) => {
       try {
         const old = n.title;
         const json = { title: t.value, userNotes: body.value, tags: g.value, colorHex: color };
@@ -2372,6 +2372,7 @@ function editNote(n, onSaved, opts = {}) {
         const r = await api(`highlight/${n.id}`, { method: 'PATCH', json });
         Object.assign(n, r);
         const moved = await retitleLinks(old, r.title, n.id);
+        if (typeof andThen === 'function') { tagCache = null; await andThen(r); close(); return; }
         if (moved) toast(`Note saved · ${moved} link${moved === 1 ? '' : 's'} to it updated`, 2500); tagCache = null; close(); toast('Note saved'); onSaved && onSaved(r);
       } catch (e) { fail(e); }
     };
@@ -2389,7 +2390,8 @@ function editNote(n, onSaved, opts = {}) {
         h('button', { class: 'btn quiet', style: { marginRight: 'auto', color: 'var(--red)' }, title: 'Delete this note', onclick: () => confirmBox('Delete this note?', n.title, 'Delete', async () => {
           try { await api(`highlight/${n.id}`, { method: 'DELETE' }); tagCache = null; close(); toast('Note deleted'); onSaved && onSaved(n, true); } catch (e) { fail(e); }
         }) }, 'Delete'),
-        h('button', { class: 'btn', onclick: close }, opts.cancelLabel || 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
+        opts.onContinue && hasPage && /pdf/i.test(n.fileType || 'pdf') ? h('button', { class: 'btn', title: 'Keep what you have written, turn the tablet to the next page and select the rest of the quotation there', onclick: () => save(opts.onContinue) }, 'Continue on next page ›') : null,
+        h('button', { class: 'btn', onclick: close }, opts.cancelLabel || 'Cancel'), h('button', { class: 'btn fill', onclick: () => save() }, 'Save')));
     if (opts.focusTitle) setTimeout(() => { t.focus(); t.select(); }, 30);
   }, opts.onClose);
 }
