@@ -2171,8 +2171,34 @@ fun ReaderScreen(
         )
     }
 
+    // "Take notes here" in a browser: the highlight is saved at once and its note is written on the computer.
+    var relayOn by remember { mutableStateOf(com.example.server.NoteRelay.active()) }
+    LaunchedEffect(Unit) { while (true) { relayOn = com.example.server.NoteRelay.active(); kotlinx.coroutines.delay(1500) } }
+    val relayNow = showAddHighlightDialog && noteContinuation == null && highlightQuoteText.isNotBlank() && com.example.server.NoteRelay.active()
+    LaunchedEffect(relayNow, highlightQuoteText, highlightPageNumber) {
+        if (!relayNow) return@LaunchedEffect
+        com.example.server.NoteRelay.armNext()
+        onAddHighlight("", highlightQuoteText, "", highlightPageNumber, highlightPrintedPageLabel, highlightChapterText, highlightColorHex, "",
+            highlightParagraphCitation, highlightPageEquivalent, highlightEpubCfi)
+        showAddHighlightDialog = false
+        Toast.makeText(context, "Saved · sent to the computer", Toast.LENGTH_SHORT).show()
+    }
+    if (relayOn) {
+        androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomStart) {
+            androidx.compose.foundation.layout.Row(
+                Modifier.padding(start = 8.dp, bottom = 56.dp).background(Color.Black).clickable {
+                    com.example.server.NoteRelay.release(null); relayOn = false
+                    Toast.makeText(context, "Notes are written on the tablet again", Toast.LENGTH_SHORT).show()
+                }.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                androidx.compose.material3.Text("Notes → computer  ×", color = Color.White, fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            }
+        }
+    }
+
     // Add Highlight & Note Dialog
-    if (showAddHighlightDialog) {
+    if (showAddHighlightDialog && !relayNow) {
         val isPdfDoc = document.fileType.equals("PDF", ignoreCase = true)
         val cont = noteContinuation
         CreateHighlightDialog(

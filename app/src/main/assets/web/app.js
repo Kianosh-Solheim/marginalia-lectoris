@@ -308,6 +308,7 @@ function header() {
     ['Convert web pages', 'Saved chapters (HTML) → EPUB or PDF, with the printed page numbers', () => convertDialog()],
     ['Colours', 'Light, dark, or as the computer has it', () => themeDialog()],
     ['Settings', 'Search, AI, backups, notes export…', () => { location.hash = '#/settings'; }],
+    [(typeof relay !== 'undefined' && relay.on && !EMBEDDED) ? '✓ Take notes here' : 'Take notes here', 'Highlights made on the tablet open here for title, note and links', () => relaySet(!(typeof relay !== 'undefined' && relay.on))],
     ['Tablet screen', 'See and control the tablet from here', () => { location.hash = '#/screen'; }],
     ['Keyboard shortcuts', 'What the keys do', () => shortcutsDialog()],
     ['Sign out', 'Sign this browser out', async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); }],
@@ -2356,7 +2357,7 @@ async function pageNumbersDialog(d, current, total, currentLabel, onDone) {
   });
 }
 
-function editNote(n, onSaved) {
+function editNote(n, onSaved, opts = {}) {
   modal((box, close) => {
     let color = n.colorHex || '#FFEB3B';
     const t = h('input', { value: n.title }), body = h('textarea', { rows: 7 }, n.userNotes || ''), g = tagInput(n.tags || '', true);
@@ -2376,7 +2377,7 @@ function editNote(n, onSaved) {
     };
     body.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); });
     linkComplete(body);
-    box.append(h('h2', null, 'Edit note'), h('div', { class: 'fields' },
+    box.append(h('h2', null, opts.heading || 'Edit note'), opts.sub ? h('div', { class: 'muted', style: { marginTop: '-6px', marginBottom: '8px' } }, opts.sub) : null, h('div', { class: 'fields' },
       h('div', { class: 'quote' }, n.highlightedText),
       h('div', { class: 'dfield' }, h('span', { class: 'label' }, 'Title'), withMic(t, { oneLine: true })),
       h('div', { class: 'dfield' }, h('span', { class: 'label' }, 'Note'), withMic(body)),
@@ -2388,8 +2389,9 @@ function editNote(n, onSaved) {
         h('button', { class: 'btn quiet', style: { marginRight: 'auto', color: 'var(--red)' }, title: 'Delete this note', onclick: () => confirmBox('Delete this note?', n.title, 'Delete', async () => {
           try { await api(`highlight/${n.id}`, { method: 'DELETE' }); tagCache = null; close(); toast('Note deleted'); onSaved && onSaved(n, true); } catch (e) { fail(e); }
         }) }, 'Delete'),
-        h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
-  });
+        h('button', { class: 'btn', onclick: close }, opts.cancelLabel || 'Cancel'), h('button', { class: 'btn fill', onclick: save }, 'Save')));
+    if (opts.focusTitle) setTimeout(() => { t.focus(); t.select(); }, 30);
+  }, opts.onClose);
 }
 
 function notesSection(d, main) {

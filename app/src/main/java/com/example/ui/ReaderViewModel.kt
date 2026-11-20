@@ -839,7 +839,9 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
                 colorHex = colorHex,
                 tags = resolvedTags
             )
-            repository.insertHighlight(highlight)
+            val newId = repository.insertHighlight(highlight)
+            // Made while a browser takes the notes: it opens there for title, note and links.
+            if (com.example.server.NoteRelay.takeArmed()) com.example.server.NoteRelay.push(newId)
 
             // Save highlight.md inside the document folder: Readmark/[Books|Articles]/[Title]/highlight.md
             val curSettings = repository.getSettings()

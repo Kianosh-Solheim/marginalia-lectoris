@@ -111,6 +111,22 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s.firstOrNull() == "dictation" -> return dictationRoute(req, s.drop(1))
             s.firstOrNull() == "lexicon" -> return lexiconRoute(req, s.drop(1))
             s.firstOrNull() == "screen" -> return screenRoute(req, s.drop(1))
+            s.firstOrNull() == "relay" -> {
+                val ok = { o: JSONObject -> HttpResponse.json(o.toString()).header("Cache-Control", "no-store") }
+                val b = if (m == "POST") runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject()) else JSONObject()
+                return when (s.getOrNull(1)) {
+                    null -> {
+                        val client = req.query["client"].orEmpty()
+                        require(client.isNotBlank()) { "No client." }
+                        val seen = req.query["seen"].orEmpty().split(',').mapNotNull { it.toLongOrNull() }.toSet()
+                        ok(NoteRelay.poll(client, seen, req.query["wait"]?.toLongOrNull() ?: 0L))
+                    }
+                    "claim" -> { NoteRelay.claim(b.optString("client").ifBlank { throw IllegalArgumentException("No client.") }); ok(JSONObject().put("active", true)) }
+                    "release" -> { NoteRelay.release(b.optString("client")); ok(JSONObject().put("active", false)) }
+                    "done" -> { NoteRelay.done(b.optLong("id")); ok(JSONObject().put("ok", true)) }
+                    else -> throw NoSuchElementException("No such relay route.")
+                }
+            }
             s == listOf("style-check") && m == "POST" -> return styleCheck(req)
             s == listOf("highlights") && m == "GET" -> return HttpResponse.json(allHighlights().toString())
             s == listOf("tags") && m == "GET" -> {
