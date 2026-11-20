@@ -57,15 +57,18 @@ function paletteCite(d, what) {
   const st = bib && ((bib.styles || []).find(x => x.id === bib.defaultStyle) || (bib.styles || [])[0]);
   return st ? plainRef(what === 'ref' ? st.reference : st.inText) : null;
 }
-function openPalette() {
-  if (document.querySelector('.palette')) return;
+function openPalette(opts) {
+  opts = opts || {};
+  if (document.querySelector('.palette')) { if (opts.book && window.paletteTextMode) window.paletteTextMode(); return; }
   const back = h('div', { class: 'palette' }), box = h('div', { class: 'palbox' });
-  const PLACE = 'Open a book, a note, a document — or type what you want to do…';
+  // In a text: the palette searches it first (and Ctrl+F searches only it).
+  const bk = window.paletteBook || null;
+  const PLACE = bk ? 'Search in this text — or open a book, a note, a document, or type what you want to do…' : 'Open a book, a note, a document — or type what you want to do…';
   const input = h('input', { type: 'search', placeholder: PLACE, spellcheck: 'false' });
   const list = h('div', { class: 'pallist' }), side = h('div', { class: 'palside' }), foot = h('div', { class: 'palfoot muted' });
   let items = [], sel = 0, data = { books: [], notes: [], docs: [] };
   let preview = localGet('ml.palPreview', '') === '1', sub = null, bibTimer = 0;   // sub: { of, query, sel } while the actions of one item are listed
-  const close = () => { back.remove(); document.removeEventListener('keydown', onKey, true); clearTimeout(bibTimer); };
+  const close = () => { back.remove(); document.removeEventListener('keydown', onKey, true); clearTimeout(bibTimer); clearTimeout(bookTimer); };
   const actions = paletteActions();
   const score = (hay, title, terms) => { if (!terms.every(t => hay.includes(t))) return -1; const tl = norm(title); return (tl.startsWith(terms[0]) ? 6 : 0) + (terms.every(t => tl.includes(t)) ? 3 : 0) + Math.max(0, 2 - tl.length / 60); };
   const abstractOf = d => String(d.summary || (d.bib && d.bib.fields && (d.bib.fields.ABSTRACT || d.bib.fields.abstract)) || '').replace(/\s+/g, ' ').trim();
@@ -94,16 +97,43 @@ function openPalette() {
   const bookItem = (d, s) => ({ title: d.title, kind: d.category === 'ARTICLE' ? 'Article' : 'Book', s, doc: d, more: abstractOf(d) });
   // ---- the texts of the books: searched on the tablet a moment after typing stops
   let textMode = false, texts = null, textSeq = 0, textTimer = 0, textBusy = false;
-  const TEXT_PLACE = 'Search in the texts of your books and articles…';
-  const textQuery = () => { const v = input.value.trim(); return textMode ? v : v.startsWith('/') ? v.slice(1).trim() : v; };
-  const textOn = () => textMode || input.value.trim().startsWith('/');
+  const TEXT_PLACE = bk ? 'Search in this text…' : 'Search in the texts of your books and articles…';
+  // With a text open, Ctrl+F means this text only; a leading / still searches all the books.
+  const bookOnly = () => !!bk && textMode && !input.value.trim().startsWith('/');
+  const textQuery = () => { const v = input.value.trim(); return v.startsWith('/') ? v.slice(1).trim() : v; };
+  const textOn = () => (textMode && !bk) || input.value.trim().startsWith('/');
+  // ---- this text: searched a moment after typing stops
+  let inBook = null, bookSeq = 0, bookTimer = 0, bookBusy = false;
+  const searchBook = () => {
+    clearTimeout(bookTimer);
+    const q = input.value.trim();
+    if (!bk || sub || q.length < 2 || q.startsWith('/')) { inBook = null; bookBusy = false; return; }
+    if (inBook && inBook.q === q) return;
+    bookBusy = true;
+    bookTimer = setTimeout(async () => {
+      const my = ++bookSeq;
+      let r = null; try { r = await bk.search(q); } catch (_) {}
+      if (my !== bookSeq || !back.isConnected) return;
+      bookBusy = false; inBook = { q, hits: (r && r.hits) || [], notes: (r && r.notes) || [], failed: !r, status: r && r.status };
+      const keep = sel; find(true); sel = Math.min(keep, Math.max(0, items.length - 1)); draw();
+    }, 220);
+  };
+  const bookItems = max => {
+    if (!inBook) return [];
+    const q = inBook.q, d = bk.d;
+    const out = inBook.hits.slice(0, max).map(hit => ({ title: isPdf(d) ? 'p. ' + (hit.label || hit.loc) : (hit.label || 'pos. ' + hit.loc), kind: 'This text', inBook: true,
+      textHit: hit, hitDoc: d, more: hit.snippet, s: 0, run: () => bk.open(q, hit) }));
+    if (bookOnly()) inBook.notes.slice(0, 8).forEach(n => out.push({ title: n.title || 'Note', kind: 'Your note', inBook: true,
+      textHit: { snippet: n.snippet, start: n.start, end: n.end }, noteHit: n, more: n.snippet, s: 0, run: () => bk.goToNote(n.id) }));
+    return out;
+  };
   const textLink = (d, hit, q) => isPdf(d) ? `#/read/${d.id}?page=${hit.loc}&find=${encodeURIComponent(q)}`
     : `#/read/${d.id}?href=${encodeURIComponent(hit.href)}&pos=${hit.loc}&find=${encodeURIComponent(q)}&occ=${hit.occurrence || 0}`;
   const textWhere = (d, hit) => isPdf(d) ? 'p. ' + (hit.label || hit.loc) : (hit.label || 'pos. ' + hit.loc);
   const searchTexts = () => {
     clearTimeout(textTimer);
     const q = textQuery();
-    if (sub || q.length < 3) { texts = null; textBusy = false; return; }
+    if (sub || q.length < 3 || bookOnly()) { texts = null; textBusy = false; return; }
     if (texts && texts.q === q) return;
     textBusy = true;
     textTimer = setTimeout(async () => {
@@ -131,9 +161,19 @@ function openPalette() {
   const textTotal = () => texts ? texts.books.reduce((a, b) => a + b.count, 0) : 0;
 
   const find = fromTexts => {
-    if (fromTexts !== true) searchTexts();
+    if (fromTexts !== true) { searchTexts(); searchBook(); }
     const terms = norm(input.value.trim().replace(/^\//, '')).split(/\s+/).filter(Boolean);
     const out = [];
+    if (!sub && bookOnly()) {
+      // Ctrl+F in a text: only its matches (and the notes that have the words).
+      bookItems(200).forEach(x => out.push(x));
+      const q = input.value.trim();
+      if (q.length >= 2) {
+        out.push({ title: `Show “${q}” in the search panel`, kind: 'This text', sub: 'All matches, ↑ ↓, Fuzzy/Exact, this chapter only, Ask AI', run: () => bk.open(q, null) });
+        out.push({ title: `Search all books for “${q}”`, kind: 'Search', sub: 'The texts of your library', keepOpen: true, run: () => { textMode = false; input.value = '/' + q; input.placeholder = PLACE; box.classList.remove('textmode'); find(); input.focus(); } });
+      }
+      items = out; if (fromTexts !== true) sel = 0; draw(); return;
+    }
     if (!sub && textOn()) {
       // Only the texts: Ctrl+F, or a query that starts with /
       textItems(60).forEach(x => out.push(x));
@@ -151,6 +191,8 @@ function openPalette() {
       data.books.slice().sort((a, b) => (b.lastRead || 0) - (a.lastRead || 0)).slice(0, 5).forEach(d => out.push(bookItem(d, 0)));
       actions.slice(0, 12).forEach(a => out.push(Object.assign({ s: 0 }, a)));
     } else {
+      // In a text: its matches come first.
+      bookItems(5).forEach(x => out.push(x));
       push(actions.map(a => Object.assign({ s: score(a.hay, a.title, terms) + 1 }, a)).map(a => { if (a.s < 1) a.s = -1; return a; }), 5);
       push(data.books.map(d => bookItem(d, score(norm([d.title, d.author, d.displayAuthor, d.year, d.citekey, d.tags, abstractOf(d)].join(' ')), d.title, terms))), 8);
       push(data.docs.map(d => ({ title: d.title, kind: 'Document', sub: `${d.words || 0} words`, s: score(norm(d.title), d.title, terms), run: () => { location.hash = '#/write/' + encodeURIComponent(d.id); } })), 4);
@@ -188,12 +230,12 @@ function openPalette() {
         h('div', { class: 'muted mono palsmeta' }, [n.printedPageLabel ? 'p. ' + n.printedPageLabel : '', splitTags(n.tags).map(t => '#' + t).join(' ')].filter(Boolean).join(' · ')),
         n.highlightedText ? h('blockquote', { class: 'palquote' }, n.highlightedText) : null, n.userNotes ? h('div', { class: 'palabs' }, n.userNotes) : null);
     } else if (it && it.textHit) {
-      const d = it.hitDoc, n = it.noteHit;
+      const d = it.inBook && it.noteHit ? null : it.hitDoc, n = it.noteHit;
       side.append(h('div', { class: 'serif palstitle' }, d ? d.title : (n.title || 'Note')),
         h('div', { class: 'palswho' }, d ? (whoOf(d) || '') : (n.docTitle || '')),
         h('div', { class: 'muted mono palsmeta' }, [d && d.year, it.kind].filter(Boolean).join(' · ')),
         h('blockquote', { class: 'palquote' }, snippetEl(it.textHit.snippet || '', it.textHit.start || 0, it.textHit.end || 0)),
-        h('div', { class: 'muted', style: { fontSize: '12px' } }, d ? 'Enter opens the book here, with the words marked. Ctrl+Enter opens the full search.' : 'Enter opens the note in its book.'));
+        h('div', { class: 'muted', style: { fontSize: '12px' } }, it.inBook ? (n ? 'Enter goes to the note in this text.' : 'Enter goes to this place; the search panel opens with all the matches.') : d ? 'Enter opens the book here, with the words marked. Ctrl+Enter opens the full search.' : 'Enter opens the note in its book.'));
     } else side.append(h('div', { class: 'muted', style: { fontSize: '13px' } }, 'Highlight a book, an article or a note to see it here.'));
   };
   const drawFoot = () => {
@@ -201,8 +243,9 @@ function openPalette() {
     const parts = sub ? [k('↑ ↓', 'move'), k('Enter', 'do it'), k('Esc', 'back')]
       : it && it.doc ? [k('Enter', 'open'), k('Tab', 'all actions'), k('Ctrl+G', 'its notes'), k('Ctrl+D', 'copy citation'), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
       : it && it.note ? [k('Enter', 'open'), k('Tab', 'all actions'), k('Ctrl+Enter', 'open the source there'), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
+      : it && it.inBook ? [k('Enter', 'go there'), k('↑ ↓', 'move'), k('Ctrl+F', bookOnly() ? 'search everything' : 'only this text'), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
       : it && it.textHit ? [k('Enter', 'open at the place'), k('Ctrl+Enter', 'full search'), k('Ctrl+F', textMode ? 'everything' : 'only texts'), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
-      : [k('↑ ↓', 'move'), k('Enter', 'open'), k('Ctrl+F', textMode ? 'search everything' : 'search the texts'), k('Ctrl+I', preview ? 'hide preview' : 'preview'), k('Esc', 'close')];
+      : [k('↑ ↓', 'move'), k('Enter', 'open'), k('Ctrl+F', textMode ? 'search everything' : bk ? 'only this text' : 'search the texts'), k('Ctrl+I', preview ? 'hide preview' : 'preview'), k('Esc', 'close')];
     clear(foot); parts.forEach((p, i) => { if (i) foot.append(' · '); foot.append(...p); });
   };
   /** Citations need the item's details; they are fetched from the tablet a moment after it is highlighted. */
@@ -217,7 +260,9 @@ function openPalette() {
     clear(list);
     box.classList.toggle('wide', preview);
     if (sub) list.append(h('div', { class: 'palsub' }, h('span', { class: 'muted' }, 'Actions for '), h('b', null, sub.of.title)));
-    if (!items.length) list.append(h('div', { class: 'palnone muted' }, textOn() ? (textQuery().length < 3 ? 'Write at least three letters to search in the texts.' : textBusy ? 'Searching the texts…' : 'Nothing found in the texts.') : 'Nothing found.'));
+    if (!items.length && bookOnly()) list.append(h('div', { class: 'palnone muted' }, input.value.trim().length < 2 ? 'Write what to look for in this text.' : bookBusy ? 'Searching this text…' : 'Nothing found in this text.'));
+    else if (!items.length) list.append(h('div', { class: 'palnone muted' }, textOn() ? (textQuery().length < 3 ? 'Write at least three letters to search in the texts.' : textBusy ? 'Searching the texts…' : 'Nothing found in the texts.') : 'Nothing found.'));
+    if (bookOnly() && bookBusy && items.length) list.prepend(h('div', { class: 'palsec' }, h('span', { class: 'muted' }, 'Searching this text…')));
     if (textOn() && textBusy && items.length) list.prepend(h('div', { class: 'palsec' }, h('span', { class: 'muted' }, 'Searching the texts…')));
     if (texts && texts.indexing && texts.indexing.running && textOn()) list.append(h('div', { class: 'palnone muted', style: { fontSize: '12px' } }, 'Some books are still being read for search; more may turn up later.'));
     items.forEach((it, i) => {
@@ -227,10 +272,14 @@ function openPalette() {
         cover = h('span', { class: 'palcover' });
         if (!it.doc.placeholder) { const img = h('img', { src: coverUrl(it.doc), alt: '', loading: 'lazy' }); img.addEventListener('error', () => img.remove()); cover.append(img); }
       }
-      if (it.textHit && (i === 0 || !items[i - 1].textHit)) list.append(h('div', { class: 'palsec' }, h('span', null, 'In the texts'), h('span', { class: 'muted' }, texts && texts.q ? `${textTotal()} page${textTotal() === 1 ? '' : 's'} in ${texts.books.length} book${texts.books.length === 1 ? '' : 's'}${textOn() ? '' : ' · Ctrl+F shows more'}` : '')));
+      if (it.inBook && (i === 0 || !items[i - 1].inBook)) {
+        const n = inBook ? inBook.hits.length : 0;
+        list.append(h('div', { class: 'palsec' }, h('span', null, 'In this text'), h('span', { class: 'muted' }, `${n} match${n === 1 ? '' : 'es'}${inBook && inBook.status && inBook.status.state && inBook.status.state !== 'done' ? ' so far' : ''}${bookOnly() ? '' : ' · Ctrl+F shows all'}`)));
+      }
+      if (it.textHit && !it.inBook && (i === 0 || !items[i - 1].textHit || items[i - 1].inBook)) list.append(h('div', { class: 'palsec' }, h('span', null, 'In the texts'), h('span', { class: 'muted' }, texts && texts.q ? `${textTotal()} page${textTotal() === 1 ? '' : 's'} in ${texts.books.length} book${texts.books.length === 1 ? '' : 's'}${textOn() ? '' : ' · Ctrl+F shows more'}` : '')));
       const row = h('div', { class: 'palrow' + (i === sel ? ' on' : '') + (it.doc ? ' book' : '') + (it.textHit ? ' hit' : ''), onclick: e => { sel = i; if (sub) { close(); it.run(e); } else act(it, e.ctrlKey && e.shiftKey ? 'Ctrl+Shift+Enter' : e.altKey ? 'Alt+Enter' : e.ctrlKey ? 'Ctrl+Enter' : 'Enter') || act(it, 'Enter'); } }, ...[
         cover,
-        it.textHit ? h('span', { class: 'palmain' }, h('span', { class: 'palt' }, it.title, it.hitDoc ? h('span', { class: 'muted', style: { fontWeight: 400 } }, '  ' + meta(it.hitDoc)) : (it.noteHit ? h('span', { class: 'muted', style: { fontWeight: 400 } }, '  ' + (it.noteHit.docTitle || '')) : null)),
+        it.textHit ? h('span', { class: 'palmain' }, h('span', { class: 'palt' }, it.title, it.inBook ? null : it.hitDoc ? h('span', { class: 'muted', style: { fontWeight: 400 } }, '  ' + meta(it.hitDoc)) : (it.noteHit ? h('span', { class: 'muted', style: { fontWeight: 400 } }, '  ' + (it.noteHit.docTitle || '')) : null)),
             h('span', { class: 'palmore palsnip' }, snippetEl(it.textHit.snippet || '', it.textHit.start || 0, it.textHit.end || 0)))
         : it.doc ? h('span', { class: 'palmain' }, h('span', { class: 'palt' }, it.title),
             h('span', { class: 'palwho' }, meta(it.doc) || h('span', { class: 'muted' }, 'No author recorded')),
@@ -244,7 +293,7 @@ function openPalette() {
     drawSide(); drawFoot(); warm();
   };
   const setTextMode = on => {
-    textMode = on; texts = null;
+    textMode = on; texts = null; inBook = null;
     if (on && input.value.trim().startsWith('/')) input.value = input.value.trim().slice(1).trim();
     input.placeholder = on ? TEXT_PLACE : PLACE; box.classList.toggle('textmode', on);
     find(); input.focus();
@@ -273,6 +322,7 @@ function openPalette() {
   box.append(input, h('div', { class: 'palbody' }, list, side), foot);
   back.append(box); document.body.append(back);
   input.focus();
+  if (opts.book && bk) { input.value = bk.q(); setTextMode(true); input.select(); }
   find();
   paletteLoad(false).then(d => { data = d; find(); });
 }
@@ -281,7 +331,7 @@ function shortcutsDialog() {
     ['Everywhere', [['Ctrl+K', 'Open anything, or do anything (the command palette)'], ['?', 'This list']]],
     ['In the command palette, on a book or article', [['Enter', 'Open in the reader'], ['Ctrl+Enter', 'Open its book page'], ['Tab', 'List everything that can be done with it'], ['Ctrl+G', 'Go to its notes'], ['Ctrl+I', 'Show or hide the preview with the whole abstract'], ['Ctrl+D', 'Copy the in-text citation'], ['Ctrl+B', 'Copy the full reference'], ['Ctrl+Y', 'Copy the citekey'], ['Ctrl+Shift+Enter', 'Open in a new tab'], ['Alt+Enter', 'Open in the other pane']]],
     ['Notes', [['/', 'Search the notes'], ['[[', 'In a note: link to another note']]],
-    ['Reader', [['← →', 'Previous and next page'], ['Ctrl+F', 'Search in the book']]],
+    ['Reader', [['← →', 'Previous and next page'], ['Ctrl+F', 'Search in this text (the palette; Enter goes to the match)'], ['Ctrl+K', 'The palette: matches in this text first, then everything else']]],
     ['Writing', [['Ctrl+Shift+C', 'Insert a citation'], ['Ctrl+Alt+N', 'Notes panel'], ['Ctrl+Alt+M', 'Comment on the selection'], ['Ctrl+Alt+E', 'Formula'], ['Ctrl+Alt+D', 'Dictate at the cursor (again to stop)'], ['Ctrl+Alt+L', 'Lexicon panel'], ['Ctrl+Alt+S', 'Style panel (British style corrections)'], ['Ctrl+S', 'Save now']]],
     ['Tabs', [['Ctrl+click', 'Open in a new tab'], ['Ctrl+Alt+click', 'Open in the other pane'], ['Middle click on a tab', 'Close it']]],
   ];

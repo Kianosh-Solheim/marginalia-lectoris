@@ -207,6 +207,7 @@ function route() {
   }
   lastRouteHash = location.hash || '#/';
   window.paletteContext = null;   // the reader and others add what belongs to them
+  window.paletteBook = null;      // the open book, for searching it from the palette
   if (EMBEDDED) tabReport();
   const hash = location.hash.replace(/^#\/?/, '');
   const [path, qs] = hash.split('?');
@@ -2898,7 +2899,7 @@ function readerKeys(e) {
   if (e.key === 'ArrowRight' || e.key === 'PageDown') { readerOpen.next && readerOpen.next(); e.preventDefault(); }
   if (e.key === 'ArrowLeft' || e.key === 'PageUp') { readerOpen.prev && readerOpen.prev(); e.preventDefault(); }
   if (e.key === 'Escape' && !document.querySelector('.scrim')) history.back();
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && readerOpen.openSearch) { e.preventDefault(); readerOpen.openSearch(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); if (window.paletteBook && typeof openPalette === 'function') openPalette({ book: true }); else if (readerOpen.openSearch) readerOpen.openSearch(); }
 }
 
 async function openReader(id, params) {
@@ -2969,7 +2970,8 @@ async function openReader(id, params) {
   bookMenu.classList.add('right');
   bar.insertBefore(bookMenu, bar.querySelector('.rsep'));
   window.paletteContext = [
-    ['Search in this book', 'Reader', () => toggleSide('search'), 'find'], ['Contents of this book', 'Reader', () => toggleSide('toc'), 'toc chapters'], ['Notes in this book', 'Reader', () => toggleSide('notes'), 'panel highlights'],
+    ['Search in this text', 'Reader', () => { if (window.paletteTextMode) window.paletteTextMode(); }, 'find ctrl+f words', true],
+    ['Search panel (this book)', 'Reader', () => toggleSide('search'), 'find matches list'], ['Contents of this book', 'Reader', () => toggleSide('toc'), 'toc chapters'], ['Notes in this book', 'Reader', () => toggleSide('notes'), 'panel highlights'],
   ].concat(bookItems.map(([t, sub, fn]) => [t.replace('…', '') + (t.startsWith('Page') ? ' of this book' : ' (this book)'), 'Reader', fn, sub]));
 
   function toggleSide(mode) {
@@ -3044,6 +3046,23 @@ async function openReader(id, params) {
   const hl = +params.get('hl');
   if (hl) { const n = ctx.notes.find(x => x.id === hl); if (n && !n.file) setTimeout(() => readerOpen && readerOpen.goToNote(n), 300); }
   if (readerOpen) readerOpen.openSearch = () => { if (side.hidden || sideMode !== 'search') toggleSide('search'); else if (ctx.searchUi) ctx.searchUi.input.focus(); };
+  // The palette searches this book; a chosen match opens the search panel with the same search, at that match.
+  const findDefaults = () => ({ q: '', whole: localGet('ml.findWhole', '0') === '1', exact: localGet('ml.findExact', '0') === '1', typos: localGet('ml.findTypos', '0') === '1', hits: [], notes: [], i: -1 });
+  window.paletteBook = {
+    d, q: () => (ctx.find && ctx.find.q) || '',
+    search: q => api(`doc/${d.id}/search?q=${encodeURIComponent(q)}${modeParam(ctx.find || findDefaults())}`, { timeout: 60000 }),
+    open: async (q, hit) => {
+      if (!readerOpen) return;
+      ctx.find = Object.assign(ctx.find || findDefaults(), { q });
+      if (side.hidden || sideMode !== 'search') toggleSide('search'); else ctx.searchUi.input.value = q;
+      await ctx.searchUi.run();
+      const hits = ctx.find.hits || [];
+      let k = hit ? hits.findIndex(x => x.loc === hit.loc && (x.href || '') === (hit.href || '') && (x.occurrence || 0) === (hit.occurrence || 0) && x.start === hit.start) : 0;
+      if (k < 0 && hit) k = hits.findIndex(x => x.loc === hit.loc && (x.href || '') === (hit.href || ''));
+      if (hits.length) ctx.searchUi.go(Math.max(0, k));
+    },
+    goToNote: id => { const n = ctx.notes.find(x => x.id === id); if (n && readerOpen) readerOpen.goToNote(n); },
+  };
   // From the library's search: open the search here, run it, and show the chosen match.
   const find = params.get('find');
   if (find && readerOpen) {

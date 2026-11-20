@@ -668,6 +668,8 @@ function readerSearchPanel(ctx, side) {
   };
   input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 300); });
   input.addEventListener('keydown', e => {
+    // Ctrl+F here too goes to the palette (which this panel follows).
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && window.paletteBook && typeof openPalette === 'function') { e.preventDefault(); e.stopPropagation(); openPalette({ book: true }); return; }
     if (e.key === 'Enter') {
       e.preventDefault(); clearTimeout(timer);
       if (f.q !== input.value.trim()) run().then(() => { go(0); if (f.q.length > 1) savedApi('add', { q: f.q, mode: f.exact ? 'exact' : 'fuzzy', whole: !!f.whole, typos: !!f.typos, filters: {} }).catch(() => {}); });
