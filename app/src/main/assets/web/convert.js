@@ -695,15 +695,28 @@ function wcTypst(chs, meta, opts) {
 }
 #let tcap(body) = block(below: 0.5em, sticky: true, text(size: 0.85em, weight: "bold", body))
 #let fig(imgs, cap) = block(width: 100%, breakable: false, above: 1.1em, below: 1.1em, { set align(center); for i in imgs { i; v(0.2em) }; if cap != [] { set align(left); text(size: 0.85em, weight: "bold", cap) } })
-${book ? `#let fitpage(sheets, body) = context {
-  // the text of one printed page, a little smaller when it would not fit; past ${WC_MIN_PT} pt it goes on to another sheet
-  // pictures (in em) shrink with the text, and up to 40 % more by the time the text is at its smallest
-  let k(sz) = 1 - 0.4 * (${opts.fontSize}pt - sz) / ${(opts.fontSize - WC_MIN_PT).toFixed(2)}pt
-  let set-in(sz, b) = { set text(size: sz); show image: it => scale(k(sz) * 100%, reflow: true, it); b }
-  let room = if sheets > 1 { sheets * ${(ph - mt - mb) * 0.86}mm } else { ${(ph - mt - mb) * 0.94}mm }   // some room for what measuring cannot see (widows, figures that move on)
-  let s = ${opts.fontSize}pt
-  while s > ${WC_MIN_PT}pt and measure(width: ${pw - 2 * mx}mm, set-in(s, body)).height > room { s -= 0.25pt }
-  set-in(s, body)
+${book ? `// ---- pages as in the printed book, filling the sheet:
+//  1. one size for the whole book, so that a usual page fills its sheet (fitBook)
+//  2. each page a little larger or smaller, up to 5 % (fitAdjust); past that, smaller only where it must, down to ${WC_MIN_PT} pt
+//  3. a sheet still mostly empty is cut short below its text (fitTrim)
+#let BASE = ${opts.fontSize}pt
+#let bookbase = state("ml-bookbase", BASE)
+#let W = ${pw - 2 * mx}mm
+#let ROOM = ${(ph - mt - mb) * 0.94}mm
+// pictures (in em) shrink with the text, and up to 40 % more by the time the text is at its smallest
+#let k(sz) = calc.min(1, 1 - 0.4 * (BASE - sz) / ${(opts.fontSize - WC_MIN_PT).toFixed(2)}pt)
+#let set-in(sz, b) = { set text(size: sz); show image: it => scale(k(sz) * 100%, reflow: true, it); b }
+#let bpage(body, sheets, num, pre) = context {
+  let base = bookbase.get()
+  let room = if sheets > 1 { sheets * ${(ph - mt - mb) * 0.86}mm } else { ROOM }   // some room for what measuring cannot see (widows, figures that move on)
+  let hof(sz) = measure(width: W, set-in(sz, body)).height
+  let s = ${opts.fitAdjust ? 'base * 1.05' : 'base'}
+  let lo = ${opts.fitAdjust ? 'base * 0.95' : 'base'}
+  while s > lo and hof(s) > room { s -= 0.1pt }
+  while s > ${WC_MIN_PT}pt and hof(s) > room { s -= 0.25pt }
+  let h = hof(s)
+  let ht = ${opts.fitTrim ? `if sheets == 1 and h < room * 0.85 { calc.max(${(ph * 0.4).toFixed(1)}mm, h + ${mt + mb + 5}mm) } else { ${ph}mm }` : `${ph}mm`}
+  page(numbering: num, height: ht, { pre; set-in(s, body) })
 }
 ` : ''}#set page(width: ${pw}mm, height: ${ph}mm, margin: (top: ${mt}mm, bottom: ${mb}mm, x: ${mx}mm),
   header: context {
@@ -740,7 +753,13 @@ ${book ? `#let fitpage(sheets, body) = context {
 #show heading: it => if it.level > 3 { block(above: 1.1em, below: 0.4em, sticky: true, emph(it.body)) } else { it }
 #show link: it => if type(it.dest) == str { text(fill: rgb("#0b5a8c"), it) } else { it }
 
-${opts.cover ? `#page(margin: 0pt, header: none, footer: none, numbering: none, fill: luma(245))[#align(center + horizon, image("images/cover.${opts.cover.ext}", width: 100%, height: 100%, fit: "contain"))]\n` : ''}#page(header: none, footer: none)[
+${opts.cover ? `#page(margin: 0pt, header: none, footer: none, numbering: none, fill: luma(245))[#align(center + horizon, image("images/cover.${opts.cover.ext}", width: 100%, height: 100%, fit: "contain"))]\n` : ''}#page(header: none, footer: none)[${book && opts.fitBook ? `#context {
+  // the size that fills a usual page: text height grows with the square of its size
+  let rs = range(bp.len()).map(i => measure(width: W, { set text(size: BASE); bp.at(i) }).height / (ROOM * bpn.at(i)))
+  let full = rs.filter(r => r > 0.35).sorted()
+  let med = if full.len() > 0 { full.at(calc.floor(full.len() / 2)) } else { 1.0 }
+  bookbase.update(calc.max(${WC_MIN_PT}pt, calc.min(16pt, BASE * calc.sqrt(0.96 / med))))
+}` : ''}
   #v(22%)
   #align(center)[
     #text(size: 21pt, weight: "bold")[${wcTyText(meta.title)}]
@@ -756,17 +775,24 @@ ${book ? '#page(numbering: "i")[#counter(page).update(1)' : '#pagebreak(weak: tr
 ${chs.map(c => c.toc.map(t => `#tocline(${t[0] + (c.depth || 0)}, <${t[2]}>, [${wcTyText(t[0] === 1 ? (c.tocTitle || c.title) : t[1]).replace(/^[(.]/, '\\$&')}])`).join('\n')).join('\n')}
 ${book ? ']' : ''}
 `;
+  const bodies = [], sheets = []; let pages = '';
   chs.forEach(c => {
     const chunks = book ? wcPageChunks(c.root) : null;
-    if (!chunks) { src += `\n#pagebreak(weak: true)\n#metadata(none)<${c.anchor}>\n` + blocks(c.root); return; }
+    if (!chunks) { pages += `\n#pagebreak(weak: true)\n#metadata(none)<${c.anchor}>\n` + blocks(c.root); return; }
     chunks.forEach((k, i) => {
       const num = /^\d+$/.test(k.label) ? parseInt(k.label, 10) : wcRoman(k.label);
       const numbering = /^\d+$/.test(k.label) ? '"1"' : num ? '"i"' : 'none';
       const meta = `(label: ${wcTyStr(k.label)}, last: ${k.last || 'none'})`;
-      src += `\n#page(numbering: ${numbering})[${num ? `#counter(page).update(${num})` : ''}#metadata(${meta})<bpstart>${i === 0 ? `#metadata(none)<${c.anchor}>` : ''}\n#fitpage(${k.last ? k.last - num + 1 : 1})[\n${blocks(k.root)}]]\n`;
+      const pre = `${num ? `#counter(page).update(${num})` : ''}#metadata(${meta})<bpstart>${i === 0 ? `#metadata(none)<${c.anchor}>` : ''}`;
+      bodies.push(blocks(k.root)); sheets.push(k.last ? k.last - num + 1 : 1);
+      pages += `\n#bpage(bp.at(${bodies.length - 1}), ${sheets[sheets.length - 1]}, ${numbering}, [${pre}])\n`;
     });
   });
-  return src;
+  if (!book) return src + pages;
+  const defs = `#let bp = (\n${bodies.map(b => `[\n${b}]`).join(',\n')},\n)\n#let bpn = (${sheets.join(', ')},)\n`;
+  // the definitions go before the title page, which measures them
+  const at = src.indexOf('#page(header: none, footer: none)[');
+  return src.slice(0, at) + defs + src.slice(at) + pages;
 }
 
 const WC_MIN_PT = 8.5;   // the smallest the text of a crowded printed page is set, before it goes on to another sheet
@@ -1006,6 +1032,7 @@ var wcDropTarget = null;   // while the dialog is open, files dropped anywhere c
 function convertDialog() {
   const opts = {
     epub: localGet('ml.wc.epub', '1') === '1', pdf: localGet('ml.wc.pdf', '1') === '1', bookPages: localGet('ml.wc.book', '1') === '1',
+    fitBook: localGet('ml.wc.fitbook', '1') === '1', fitAdjust: localGet('ml.wc.fitadj', '1') === '1', fitTrim: localGet('ml.wc.fittrim', '1') === '1',
     separate: false, showPages: localGet('ml.wc.pages', '1') === '1',
     label: localGet('ml.wc.label', 'p. '), chapterLabel: localGet('ml.wc.chap', 'none'), chapterWord: localGet('ml.wc.chapword', 'Chapter'), pageSize: [158, 210], fontSize: 10.5,
     toLibrary: localGet('ml.wc.lib', '1') === '1', download: localGet('ml.wc.dl', '0') === '1',
@@ -1073,6 +1100,10 @@ function convertDialog() {
         opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF pages'),
           chip('As in the book', () => opts.bookPages, () => { opts.bookPages = true; localSet('ml.wc.book', '1'); }, 'Each printed page on a page of its own, with its number; a crowded page is set a little smaller'),
           chip('Flowing', () => !opts.bookPages, () => { opts.bookPages = false; localSet('ml.wc.book', '0'); }, 'The text runs on from page to page; the printed pages are marked in the text')) : null,
+        opts.pdf && opts.bookPages ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'Fill the pages'),
+          chip('One size for the book', () => opts.fitBook, () => { opts.fitBook = !opts.fitBook; localSet('ml.wc.fitbook', opts.fitBook ? '1' : '0'); }, 'The text size that fills a usual page, the same all through the book'),
+          chip('Adjust each page', () => opts.fitAdjust, () => { opts.fitAdjust = !opts.fitAdjust; localSet('ml.wc.fitadj', opts.fitAdjust ? '1' : '0'); }, 'Each page up to 5 % larger or smaller, to fill its sheet'),
+          chip('Trim short pages', () => opts.fitTrim, () => { opts.fitTrim = !opts.fitTrim; localSet('ml.wc.fittrim', opts.fitTrim ? '1' : '0'); }, 'A sheet that is still mostly empty (a chapter\'s start or end) is cut short below its text')) : null,
         opts.pdf ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'PDF size'),
           sizes.map(([l, s]) => chip(l, () => opts.pageSize[0] === s[0] && opts.pageSize[1] === s[1], () => { opts.pageSize = s; })),
           h('span', { class: 'spacer' }),
