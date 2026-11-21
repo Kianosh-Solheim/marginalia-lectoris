@@ -308,7 +308,7 @@ const WRITE_EXPORTS = [
   ['typ', 'Typst (.typ)', 'typst', false],
 ];
 /** The document in another format, as a Blob. Pictures are sent along to Pandoc. */
-async function exportBlob(doc, title, ext, docId, citing, comments, keyed, sink) {
+async function exportBlob(doc, title, ext, docId, citing, comments, keyed, sink, texSet) {
   const [, , to, binary] = WRITE_EXPORTS.find(e => e[0] === ext);
   const pd = await ensurePandoc('Exporting to .' + ext + '.');
   const files = {}; const srcs = {};
@@ -342,6 +342,7 @@ async function exportBlob(doc, title, ext, docId, citing, comments, keyed, sink)
     if (bibTitle) ast.meta['biblio-title'] = { t: 'MetaInlines', c: textToInlines(bibTitle) };
     if (ext === 'tex') { opts['cite-method'] = keyed.method; if (keyed.method === 'biblatex') ast.meta.biblatexoptions = { t: 'MetaString', c: 'style=' + keyed.style }; else ast.meta['biblio-style'] = { t: 'MetaString', c: 'apalike' }; }
   }
+  if (ext === 'tex' && texSet) Object.assign(ast.meta, texMeta(texSet));
   if (binary) opts['output-file'] = 'out.' + ext;
   const r = await pd.convert(opts, JSON.stringify(ast), files);
   if (binary) {
@@ -489,6 +490,7 @@ async function showWriter(id, params) {
   let outlineP = null; // the outline (woutline.js)
   let lexP = null;     // the lexicon panel (lexicon.js)
   let styleC = null, styleP = null; // style corrections (wstyle.js)
+  let texP = null;     // the LaTeX preview (latex.js)
   app.append(
     h('div', { class: 'wtop' },
       h('a', { class: 'btn quiet', href: '#/writing', title: 'All documents' }, '← Writing'),
@@ -559,7 +561,7 @@ async function showWriter(id, params) {
         insertImages(fs, p ? p.pos : null); return true;
       },
     },
-    onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); recomputeSoon(); if (notesP) notesP.refresh(); },
+    onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); recomputeSoon(); if (notesP) notesP.refresh(); if (texP) texP.changed(); },
     onSelectionUpdate: () => { refreshBar(); if (commenting) commenting.selectionChanged(); if (outlineP) outlineP.refresh(); },
   });
 
@@ -629,9 +631,10 @@ async function showWriter(id, params) {
     dictMic(dictTarget, { key: 'writer:' + id, cls: 'wdict' }),
     toolbarButton('✓ Style', 'British style: Oxford spelling, conventions, formal register, your own rules, and an AI check (Ctrl+Alt+S)', () => styleP.toggle(), () => styleP && styleP.isOpen()),
     toolbarButton('Aa Lexicon', 'Your words and their meanings beside the text: click one to put it in (Ctrl+Alt+L)', () => lexP.toggle(), () => lexP && lexP.isOpen()),
+    toolbarButton('TeX PDF', 'The document set by LaTeX, beside the text; it follows as you write (Ctrl+Alt+P)', () => texP.toggle(), () => texP && texP.isOpen()),
   ];
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
-  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]]];
+  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]], ['LaTeX', [31]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
@@ -643,13 +646,32 @@ async function showWriter(id, params) {
   styleC = new StyleChecker(editor, wbody.querySelector('.wsheet'), (d.settings || {}).style, () => { dirty = true; scheduleSave(); });
   styleP = stylePanel(styleC, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
   wbody.append(styleP.el);
+  // LaTeX: the document as .tex (Pandoc), with the cited sources as a .bib, the pictures and your class.
+  const texSource = async set => {
+    const doc = editor.getJSON();
+    let keyed = null;
+    try {
+      const info = await resolveCiteKeys(citing, doc);
+      if (Object.keys(info.keys).length) keyed = { keys: info.keys, method: 'biblatex', style: set.style || localGet('ml.wbiblatexStyle', /apa|american psychological/i.test(citing.styleLabel) ? 'apa' : citing.isNote ? 'verbose' : 'authoryear'), bibName: 'references.bib' };
+    } catch (e) { console.warn('citation keys', e); }
+    const sink = {};
+    const tex = await (await exportBlob(doc, title, 'tex', docId, citing, commenting.settings(), keyed, sink, set)).text();
+    const files = [{ path: 'main.tex', content: tex }];
+    if (keyed) files.push({ path: 'references.bib', content: await bibFile(citing, keyed.keys, false) });
+    for (const [n, b] of Object.entries(sink.files || {})) files.push({ path: n, content: new Uint8Array(await b.arrayBuffer()) });
+    if (set.clsFile && set.clsFile.content) files.push({ path: set.clsFile.name, content: set.clsFile.content });
+    return { files, tex, biber: !!keyed };
+  };
+  texP = latexPanel(texSource, (d.settings || {}).latex, () => { dirty = true; scheduleSave(); }, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
+  wbody.append(texP.el);
   try { new ResizeObserver(() => styleC.paintSoon()).observe(wbody.querySelector('.wsheet')); } catch (_) {}
-  const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } if (lexP) { lexP.el.style.top = t + 'px'; lexP.el.style.height = `calc(100vh - ${t}px)`; } if (styleP) { styleP.el.style.top = t + 'px'; styleP.el.style.height = `calc(100vh - ${t}px)`; } };
+  const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } if (lexP) { lexP.el.style.top = t + 'px'; lexP.el.style.height = `calc(100vh - ${t}px)`; } if (styleP) { styleP.el.style.top = t + 'px'; styleP.el.style.height = `calc(100vh - ${t}px)`; } if (texP) { texP.el.style.top = t + 'px'; texP.el.style.height = `calc(100vh - ${t}px)`; } };
   window.addEventListener('resize', placeNotes);
   if (localGet('ml.wnotesOpen', '')) notesP.open();
   if (localGet('ml.woutlineOpen', '')) outlineP.open();
   if (localGet('ml.wlexOpen', '')) lexP.open();
   if (localGet('ml.wstyleOpen', '')) styleP.open();
+  if (localGet('ml.wtexOpen', '')) texP.open();
   document.addEventListener('click', () => { tableMenu.hidden = true; });
   function refreshBar() {
     btns.forEach(b => { if (b._on) b.classList.toggle('on', !!b._on()); });
@@ -676,7 +698,7 @@ async function showWriter(id, params) {
   imgIn.addEventListener('change', () => { const fs = [...imgIn.files]; imgIn.value = ''; insertImages(fs); });
 
   // ----- saving
-  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified, settings: Object.assign({}, citing.settings(), { comments: commenting.settings(), style: styleC ? styleC.settings() : ((d.settings || {}).style || {}) }) }, extra);
+  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified, settings: Object.assign({}, citing.settings(), { comments: commenting.settings(), style: styleC ? styleC.settings() : ((d.settings || {}).style || {}), latex: texP ? texP.settings() : ((d.settings || {}).latex || undefined) }) }, extra);
   async function save(extra) {
     if (saving) { scheduleSave(); return; }
     saving = true; clearTimeout(saveTimer);
@@ -732,6 +754,8 @@ async function showWriter(id, params) {
     if (e.ctrlKey && e.altKey && (e.key === 'o' || e.key === 'O' || e.code === 'KeyO')) { e.preventDefault(); outlineP.toggle(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyS') { e.preventDefault(); styleP.toggle(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyL') { e.preventDefault(); lexP.toggle(); }
+    if (e.ctrlKey && e.altKey && e.code === 'KeyP') { e.preventDefault(); texP.toggle(); }
+    if (e.ctrlKey && e.altKey && e.key === 'Enter') { e.preventDefault(); if (!texP.isOpen()) texP.open(); else texP.compile(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyD') { e.preventDefault(); const mic = bar.querySelector('.wdict .dmic'); if (mic) mic.click(); }
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }
   };
@@ -812,6 +836,13 @@ async function showWriter(id, params) {
       await save();
       toast(`Writing ${label}…`, 0);
       const name = safeFileName(title) + '.' + ext;
+      if (ext === 'texpdf') {
+        // PDF set by LaTeX (the same as in the LaTeX panel, with this document's LaTeX settings).
+        toast('Setting the pages with LaTeX…', 0);
+        const blob = await texP.savePdf(safeFileName(title) + '.pdf');
+        if (blob) putOnTablet(blob, safeFileName(title) + '.pdf');
+        toast('', 1); return;
+      }
       if (ext === 'pdf') {
         // PDF: Pandoc writes Typst, and Typst sets the pages.
         const sink = {};
@@ -881,7 +912,7 @@ async function showWriter(id, params) {
       draw();
     });
   }
-  [['pdf', 'PDF (.pdf)']].concat(WRITE_EXPORTS, [['zip', 'Overleaf project (.zip)'], ['bib', 'Bibliography file (.bib)']]).forEach(([ext, label]) => exportMenu.append(h('button', { onclick: () => {
+  [['pdf', 'PDF (.pdf)'], ['texpdf', 'PDF via LaTeX (.pdf)']].concat(WRITE_EXPORTS, [['zip', 'Overleaf project (.zip)'], ['bib', 'Bibliography file (.bib)']]).forEach(([ext, label]) => exportMenu.append(h('button', { onclick: () => {
     exportMenu.hidden = true;
     if (ext === 'tex' || ext === 'md' || ext === 'bib' || ext === 'zip') keyedExport(ext, label); else runExport(ext, label, null);
   } }, label)));

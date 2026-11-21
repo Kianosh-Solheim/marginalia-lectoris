@@ -1401,3 +1401,17 @@ main.scrpage { padding: 10px 14px 0; max-width: none; }
 .texpdf { width: 100%; height: 62vh; border: 1px solid var(--line); background: #fff; }
 .texwarn { padding: 8px 10px; border-left: 3px solid #b8860b; background: var(--card); font-size: 13px; }
 .texlog { max-height: 40vh; overflow: auto; font-size: 11px; white-space: pre-wrap; background: var(--card); padding: 8px; }
+.wtexpanel { position: sticky; width: min(46vw, 640px); flex: none; overflow-y: auto; background: var(--card, #f4f4f4); border-left: 1.5px solid var(--ink); padding: 8px 10px 40px 14px; align-self: flex-start; box-sizing: border-box; font-size: 13px; }
+.wtexpanel[hidden] { display: none; }
+.wtexpanel .wnhead { position: sticky; top: -8px; background: inherit; z-index: 2; padding: 4px 0; gap: 4px; align-items: center; }
+.wtexpanel.busy .wtexstat::before { content: '◌ '; }
+.wtexstat { font-size: 11px; margin-left: 6px; }
+.wtexgrip { position: absolute; left: 0; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
+.wtexgrip:hover { background: rgba(0,0,0,.08); }
+.wtexpages { display: grid; gap: 4px; margin-top: 6px; }
+.wtexset { display: grid; gap: 4px; justify-items: center; }
+.wtexpage { background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+.wtexpno { font-size: 10.5px; }
+.wtexprob { padding: 6px 8px; border-left: 3px solid #b8860b; background: var(--paper); display: grid; gap: 4px; font-size: 12.5px; }
+.wtexline { display: block; font-size: 11px; opacity: .8; white-space: pre-wrap; margin-top: 2px; }
+@media (max-width: 1000px) { .wtexpanel { position: fixed; right: 0; bottom: 0; z-index: 30; width: 92vw; box-shadow: -4px 0 16px rgba(0,0,0,.18); } }

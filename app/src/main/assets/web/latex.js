@@ -230,3 +230,168 @@ function latexSettingsSection() {
   api('writing/latex-status').then(draw).catch(() => body.append(h('div', { class: 'muted' }, 'Could not ask the tablet.')));
   return sec;
 }
+
+// ------------------------------------------------------------------ the preview beside the writing
+
+const TEX_DEFAULTS = { cls: 'article', engine: 'pdflatex', fontsize: '12pt', papersize: 'a4', margin: '2.5cm', style: '', preamble: '', clsFile: null, auto: true };
+
+/** Pandoc's LaTeX options from the document's LaTeX settings. */
+function texMeta(set) {
+  const s = Object.assign({}, TEX_DEFAULTS, set || {});
+  const str = c => ({ t: 'MetaString', c });
+  const meta = {};
+  meta.documentclass = str(s.clsFile && s.clsFile.name ? s.clsFile.name.replace(/\.cls$/i, '') : s.cls);
+  if (s.fontsize) meta.fontsize = str(s.fontsize);
+  if (s.papersize) meta.papersize = str(s.papersize);
+  if (s.margin) meta.geometry = { t: 'MetaList', c: [str('margin=' + s.margin)] };
+  if (s.preamble && s.preamble.trim()) meta['header-includes'] = { t: 'MetaList', c: [{ t: 'MetaBlocks', c: [{ t: 'RawBlock', c: ['latex', s.preamble] }] }] };
+  return meta;
+}
+
+/**
+ * The LaTeX panel: the document set by LaTeX, beside the text. [source]() gives
+ * { files, main, biber, tex } for the document as it is now. Settings are kept with the document.
+ */
+function latexPanel(source, settings, onSettings, onToggle) {
+  let set = Object.assign({}, TEX_DEFAULTS, settings || {});
+  const el = h('aside', { class: 'wtexpanel', hidden: true });
+  const status = h('span', { class: 'mono muted wtexstat' }, '');
+  const pages = h('div', { class: 'wtexpages' });
+  const problems = h('div', { class: 'wtexprob', hidden: true });
+  const logBox = h('pre', { class: 'texlog', hidden: true });
+  let lastPdf = null, lastTex = '', timer = 0, running = false, again = false, width = +localGet('ml.wtexWidth', '0') || 0;
+  const grip = h('div', { class: 'wtexgrip', title: 'Drag to make the panel wider or narrower' });
+  grip.addEventListener('pointerdown', e => {
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    const x0 = e.clientX, w0 = el.offsetWidth;
+    const move = ev => { width = Math.max(280, Math.min(window.innerWidth * 0.75, w0 + (x0 - ev.clientX))); el.style.width = width + 'px'; };
+    const up = () => { grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); localSet('ml.wtexWidth', String(Math.round(width))); redrawSoon(); };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up);
+  });
+  if (width) el.style.width = width + 'px';
+  const autoCb = h('input', { type: 'checkbox', checked: set.auto !== false, title: 'Set the pages again a moment after you stop typing' });
+  autoCb.addEventListener('change', () => { set.auto = autoCb.checked; onSettings(set); });
+  el.append(grip,
+    h('div', { class: 'wnhead' }, h('b', null, 'LaTeX'), status, h('span', { style: { flex: 1 } }),
+      h('label', { class: 'row', style: { gap: '3px', fontSize: '11.5px' }, title: 'Set the pages again a moment after you stop typing' }, autoCb, 'Live'),
+      h('button', { class: 'btn quiet', title: 'Set the pages now (Ctrl+Alt+Enter)', onclick: () => api_.compile() }, '⟳'),
+      h('button', { class: 'btn quiet', title: 'LaTeX settings for this document', onclick: () => settingsDialog() }, '⚙'),
+      h('button', { class: 'btn quiet', title: 'Save the PDF', onclick: () => api_.savePdf() }, '⤓'),
+      h('button', { class: 'btn quiet', title: 'Close', onclick: () => api_.close() }, '×')),
+    problems, pages,
+    h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } },
+      h('button', { class: 'btn quiet', style: { fontSize: '11.5px' }, onclick: () => { logBox.hidden = !logBox.hidden; } }, 'Log'),
+      h('button', { class: 'btn quiet', style: { fontSize: '11.5px' }, onclick: () => { if (lastTex) saveBlob(new Blob([lastTex], { type: 'text/plain' }), 'main.tex'); } }, 'The .tex')),
+    logBox);
+
+  let shownDoc = null, redrawTimer = 0;
+  const redrawSoon = () => { clearTimeout(redrawTimer); redrawTimer = setTimeout(() => { if (lastPdf) show(lastPdf); }, 200); };
+  /** Draws the pages; the new ones replace the old at once, at the same place. */
+  async function show(bytes) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdf.worker.min.js';
+    const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+    const w = Math.max(200, pages.clientWidth - 4), dpr = Math.min(2, window.devicePixelRatio || 1);
+    const fresh = h('div', { class: 'wtexset' });
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const vp0 = page.getViewport({ scale: 1 }), scale = w / vp0.width, vp = page.getViewport({ scale: scale * dpr });
+      const c = h('canvas', { class: 'wtexpage' }); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+      c.style.width = Math.round(vp.width / dpr) + 'px'; c.style.height = Math.round(vp.height / dpr) + 'px';
+      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      fresh.append(c, h('div', { class: 'wtexpno mono muted' }, `${i} / ${pdf.numPages}`));
+    }
+    const top = el.scrollTop;
+    clear(pages); pages.append(fresh); el.scrollTop = top;
+    if (shownDoc) { try { shownDoc.destroy(); } catch (_) {} }
+    shownDoc = pdf;
+  }
+  function showProblems(r, tex) {
+    const pr = latexProblems(r.log);
+    clear(problems);
+    const lines = tex.split('\n');
+    const items = [];
+    if (pr.missing.length) items.push(h('div', null, h('b', null, 'Missing: '), pr.missing.join(', '), '. ', set.clsFile ? '' : 'Not in your LaTeX collection, and not found online.',
+      latex.collection !== 'extra' ? h('button', { class: 'btn quiet', onclick: () => ensureLatex(null, 'extra').then(() => api_.compile()).catch(fail) }, 'Get the Full collection') : null));
+    pr.errors.slice(0, 4).forEach(e => items.push(h('div', null, h('b', null, e.line ? `Line ${e.line}: ` : ''), e.text,
+      e.line && lines[e.line - 1] ? h('code', { class: 'wtexline' }, lines[e.line - 1].slice(0, 140)) : null)));
+    if (r.styleNote) items.unshift(h('div', null, r.styleNote));
+    problems.hidden = !items.length;
+    problems.append(...items);
+  }
+  async function compile() {
+    if (running) { again = true; return; }
+    running = true; again = false;
+    const t0 = performance.now();
+    status.textContent = 'setting…';
+    el.classList.add('busy');
+    try {
+      const onPrint = m => { if (/Downloading data|Preparing/.test(m)) status.textContent = 'loading TeX Live ' + m.replace(/^.*\(/, '('); };
+      let src = await source(set);
+      let r = await latexCompile({ files: src.files, main: 'main.tex', engine: set.engine, biber: src.biber, onPrint });
+      // A biblatex style that is not in TeX Live here (biblatex-apa, for one): shown with authoryear instead.
+      const style = latexProblems(r.log).missing.find(f => /\.(bbx|cbx)$/.test(f));
+      if (style && src.biber) {
+        src = await source(Object.assign({}, set, { style: 'authoryear' }));
+        r = await latexCompile({ files: src.files, main: 'main.tex', engine: set.engine, biber: true, onPrint });
+        r.styleNote = `The biblatex style “${style.replace(/\.\w+$/, '')}” is not available here, so the citations are shown in authoryear. Choose another style under ⚙.`;
+      }
+      lastTex = src.tex;
+      logBox.textContent = r.log || (r.logs || []).map(l => [l.cmd, l.stdout, l.stderr].filter(Boolean).join('\n')).join('\n\n');
+      showProblems(r, src.tex);
+      if (r.pdf && r.pdf.length) { lastPdf = r.pdf; await show(r.pdf); }
+      status.textContent = (r.ok ? '' : 'with errors · ') + ((performance.now() - t0) / 1000).toFixed(1) + ' s';
+    } catch (e) {
+      status.textContent = 'failed';
+      clear(problems); problems.hidden = false; problems.append(h('div', null, String(e.message || e)));
+    } finally {
+      running = false; el.classList.remove('busy');
+      if (again && !el.hidden) setTimeout(compile, 100);
+    }
+  }
+  function settingsDialog() {
+    modal((box, close) => {
+      const sel = (v, opts) => h('select', null, opts.map(([k, l]) => h('option', { value: k, selected: k === v }, l)));
+      const cls = sel(set.cls, [['article', 'article — essays, papers'], ['report', 'report — theses with chapters'], ['book', 'book'], ['memoir', 'memoir'], ['scrartcl', 'KOMA scrartcl'], ['scrreprt', 'KOMA scrreprt']]);
+      const engine = sel(set.engine, [['pdflatex', 'pdfLaTeX — quickest'], ['xelatex', 'XeLaTeX — system-style fonts (fontspec)'], ['lualatex', 'LuaLaTeX']]);
+      const size = sel(set.fontsize, [['10pt', '10 pt'], ['11pt', '11 pt'], ['12pt', '12 pt']]);
+      const paper = sel(set.papersize, [['a4', 'A4'], ['letter', 'US Letter']]);
+      const margin = h('input', { value: set.margin, style: { width: '90px' } });
+      const style = h('input', { value: set.style, placeholder: 'as when exporting', style: { width: '170px' } });
+      const pre = h('textarea', { rows: 6, class: 'mono', style: { width: '100%', fontSize: '12px' }, placeholder: '\\usepackage{setspace}\n\\onehalfspacing' }, set.preamble || '');
+      let clsFile = set.clsFile;
+      const clsName = h('span', { class: 'mono muted' }, clsFile ? clsFile.name : 'none');
+      const clsIn = h('input', { type: 'file', accept: '.cls', style: { display: 'none' } });
+      clsIn.addEventListener('change', async () => { const f = clsIn.files[0]; if (!f) return; clsFile = { name: f.name, content: await f.text() }; clsName.textContent = f.name; });
+      const row = (label, el, sub) => h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, label), sub ? h('div', { class: 'muted' }, sub) : null), el);
+      box.classList.add('wide');
+      box.append(h('h2', null, 'LaTeX for this document'),
+        row('Document class', cls), row('Engine', engine), row('Font size', size), row('Paper', paper), row('Margins', margin, 'e.g. 2.5cm or 1in'),
+        row('biblatex style', style, 'e.g. apa, authoryear, verbose, chicago-authordate'),
+        row('Your own class (.cls)', h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, clsName, h('button', { class: 'btn', onclick: () => clsIn.click() }, 'Choose…'), clsFile ? h('button', { class: 'btn quiet', onclick: () => { clsFile = null; clsName.textContent = 'none'; } }, 'Remove') : null, clsIn), 'A template from a journal or the university; it is used instead of the class above.'),
+        h('div', { class: 'label', style: { marginTop: '10px' } }, 'In the preamble'), pre,
+        h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: () => {
+          set = Object.assign({}, set, { cls: cls.value, engine: engine.value, fontsize: size.value, papersize: paper.value, margin: margin.value.trim(), style: style.value.trim(), preamble: pre.value, clsFile });
+          onSettings(set); close(); api_.compile();
+        } }, 'Save')));
+    });
+  }
+  const api_ = {
+    el,
+    isOpen: () => !el.hidden,
+    settings: () => set,
+    open() { el.hidden = false; localSet('ml.wtexOpen', '1'); onToggle && onToggle(true); compile(); },
+    close() { el.hidden = true; localSet('ml.wtexOpen', ''); onToggle && onToggle(false); },
+    toggle() { if (el.hidden) api_.open(); else api_.close(); },
+    compile: () => { clearTimeout(timer); return compile(); },
+    /** The text changed: set the pages again when typing has paused. */
+    changed() { if (el.hidden || set.auto === false) return; clearTimeout(timer); timer = setTimeout(compile, 2500); },
+    async savePdf(name) {
+      if (!lastPdf) await compile();
+      if (!lastPdf) { toast('There is no PDF yet'); return null; }
+      const blob = new Blob([lastPdf], { type: 'application/pdf' });
+      saveBlob(blob, name || 'document.pdf');
+      return blob;
+    },
+  };
+  return api_;
+}
