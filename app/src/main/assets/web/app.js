@@ -1205,6 +1205,7 @@ function renderSettings(main, data) {
   });
   body.appendChild(coloursSettingsSection());
   body.appendChild(dictationSettingsSection());
+  body.appendChild(latexSettingsSection());
   body.appendChild(notesExportSettingsSection());
   body.appendChild(searchSettingsSection());
   body.appendChild(zoteroSettingsSection());

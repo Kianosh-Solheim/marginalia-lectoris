@@ -1391,3 +1391,13 @@ main.scrpage { padding: 10px 14px 0; max-width: none; }
 /* Notes from the tablet */
 .relaypill { position: fixed; left: 12px; bottom: 12px; z-index: 350; border: 1.5px solid var(--ink); background: var(--card); color: var(--ink); font-family: var(--mono); font-size: 11.5px; font-weight: 700; padding: 6px 10px; cursor: pointer; box-shadow: 3px 3px 0 var(--ink); }
 .relaypill.busy { background: var(--ink); color: var(--paper); }
+
+/* LaTeX */
+.texcols { display: grid; gap: 8px; margin: 10px 0; }
+.texcol { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); cursor: pointer; }
+.texcol > span { display: grid; gap: 2px; font-size: 13px; }
+.texview { display: grid; gap: 8px; margin-top: 8px; justify-items: stretch; }
+.texview > button { justify-self: start; }
+.texpdf { width: 100%; height: 62vh; border: 1px solid var(--line); background: #fff; }
+.texwarn { padding: 8px 10px; border-left: 3px solid #b8860b; background: var(--card); font-size: 13px; }
+.texlog { max-height: 40vh; overflow: auto; font-size: 11px; white-space: pre-wrap; background: var(--card); padding: 8px; }

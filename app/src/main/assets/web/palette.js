@@ -22,6 +22,7 @@ function paletteActions() {
     ['Library', 'Go to', go('#/'), 'home all books articles'], ['Books', 'Go to', go('#/books'), ''], ['Articles', 'Go to', go('#/articles'), ''],
     ['Take notes here (from the tablet)', 'Switch', () => relaySet(!relay.on), 'relay companion tablet highlight note dialog computer'],
     ['Tablet screen', 'Go to', go('#/screen'), 'remote control mirror see tablet display'],
+    ['LaTeX: compile a test document', 'LaTeX', () => latexTest(), 'tex pdf compiler biblatex test'],
     ['Search in the texts', 'Search', () => { if (window.paletteTextMode) window.paletteTextMode(); }, 'find full text words inside books articles pdf ctrl+f', true],
     ['Notes', 'Go to', go('#/notes'), 'vault highlights'], ['Writing', 'Go to', go('#/writing'), 'documents editor'], ['Lexicon', 'Go to', go('#/lexicon'), 'words vocabulary definitions dictionary glossary'], ['Literature matrices', 'Go to', go('#/matrix'), 'matrix table compare sources synthesis'], ['Search in the texts', 'Go to', go('#/search'), 'full text find'],
     ['Zotero', 'Go to', go('#/zotero'), ''], ['Presentations', 'Go to', go('#/presentations'), 'slides'], ['Settings', 'Go to', go('#/settings'), 'preferences backup ai'],
