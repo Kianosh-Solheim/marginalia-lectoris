@@ -385,3 +385,14 @@ function firstDifference(a, b) {
   const name = c => c === undefined ? '(end)' : (/\s/.test(c) || c.charCodeAt(0) > 126) ? `${c.trim() ? c + ' ' : ''}U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}` : c;
   return { at: i, before: a.slice(Math.max(0, i - 40), i), was: name(a[i]), now: name(b[i]) };
 }
+
+/** The citation keys used in a .tex file (\\cite, \\autocite, \\textcites … in all their forms). */
+function texCitedKeys(tex) {
+  const out = new Set();
+  const re = /\\[a-zA-Z]*cites?\*?((?:\s*\[[^\]]*\])*\s*\{[^}]*\}(?:(?:\s*\[[^\]]*\])*\s*\{[^}]*\})*)/g;
+  let m;
+  while ((m = re.exec(String(tex).replace(/(^|[^\\])%.*$/gm, '$1')))) {
+    for (const g of m[1].matchAll(/\{([^}]*)\}/g)) g[1].split(',').map(k => k.trim()).filter(k => /^[\w:.\-+/]+$/.test(k)).forEach(k => out.add(k));
+  }
+  return [...out];
+}

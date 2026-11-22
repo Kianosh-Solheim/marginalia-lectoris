@@ -418,7 +418,7 @@ function latexPanel(source, settings, onSettings, onToggle) {
         ...guesses.map(g => h('button', { class: 'btn quiet', title: 'Fetch it from CTAN to the tablet; it is used in every compile from then on', onclick: () => ctanFetch(g).then(() => api_.compile()).catch(fail) }, `Fetch ${g} from CTAN`)),
         latex.collection !== 'extra' ? h('button', { class: 'btn quiet', onclick: () => ensureLatex(null, 'extra').then(() => api_.compile()).catch(fail) }, 'Get the Full collection') : null));
     }
-    pr.errors.slice(0, 4).forEach(e => items.push(h('div', null, h('b', null, e.line ? `Line ${e.line}: ` : ''), e.text,
+    pr.errors.slice(0, 4).forEach(e => items.push(h('div', null, e.line && api_.onLine ? h('a', { href: '#', class: 'wtexlinelink', title: 'Open the LaTeX at this line', onclick: ev => { ev.preventDefault(); api_.onLine(e.line); } }, `Line ${e.line}: `) : h('b', null, e.line ? `Line ${e.line}: ` : ''), e.text,
       e.line && lines[e.line - 1] ? h('code', { class: 'wtexline' }, lines[e.line - 1].slice(0, 140)) : null)));
     if (r.styleNote) items.unshift(h('div', null, r.styleNote));
     if (r.diagNote) items.unshift(h('div', null, r.diagNote));

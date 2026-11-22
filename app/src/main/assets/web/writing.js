@@ -548,6 +548,7 @@ async function showWriter(id, params) {
   let lexP = null;     // the lexicon panel (lexicon.js)
   let styleC = null, styleP = null; // style corrections (wstyle.js)
   let texP = null;     // the LaTeX preview (latex.js)
+  let texV = null;     // the LaTeX view (wtexview.js)
   app.append(
     h('div', { class: 'wtop' },
       h('a', { class: 'btn quiet', href: '#/writing', title: 'All documents' }, '← Writing'),
@@ -691,9 +692,10 @@ async function showWriter(id, params) {
     toolbarButton('Aa Lexicon', 'Your words and their meanings beside the text: click one to put it in (Ctrl+Alt+L)', () => lexP.toggle(), () => lexP && lexP.isOpen()),
     toolbarButton('TeX PDF', 'The document set by LaTeX, beside the text; it follows as you write (Ctrl+Alt+P)', () => texP.toggle(), () => texP && texP.isOpen()),
     toolbarButton('\\TeX', 'Insert LaTeX that is kept as it is (your own commands, spacing, environments)', () => rawTexDialog(editor, null)),
+    toolbarButton('LaTeX ⇄', 'Edit the whole .tex file; switch back and forth with the visual view (Ctrl+Alt+X)', () => texV.toggle(), () => texV && texV.mode === 'latex'),
   ];
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
-  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]], ['LaTeX', [31, 32]]];
+  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]], ['LaTeX', [33, 31, 32]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
@@ -748,16 +750,49 @@ async function showWriter(id, params) {
       if (Object.keys(info.keys).length) keyed = { keys: info.keys, method: 'biblatex', style: set.style || biblatexStyleFor(citing), bibName: 'references.bib' };
     } catch (e) { console.warn('citation keys', e); }
     const sink = {};
-    const tex = await (await exportBlob(doc, title, 'tex', docId, citing, commenting.settings(), keyed, sink, set)).text();
+    let tex = await (await exportBlob(doc, title, 'tex', docId, citing, commenting.settings(), keyed, sink, set)).text();
+    // In the LaTeX view: the LaTeX as you have written it; sources cited there by key are looked up too.
+    const own = texV && texV.mode === 'latex' ? texV.text() : null;
+    if (own != null) {
+      tex = own;
+      const used = texCitedKeys(own);
+      if (used.length) {
+        keyed = keyed || { keys: {}, method: 'biblatex', style: set.style || biblatexStyleFor(citing), bibName: 'references.bib' };
+        const have = new Set(Object.values(keyed.keys));
+        const ask = used.filter(k => !have.has(k));
+        if (ask.length) {
+          let found = {}; try { found = await api('writing/citekey-lookup', { method: 'POST', json: { keys: ask } }); } catch (_) {}
+          Object.entries(found).forEach(([k, e]) => { if (e && e.id && e.csl) { citing.items[e.id] = citing.items[e.id] || e.csl; keyed.keys[e.id] = k; } });
+        }
+      }
+    }
     const files = [{ path: 'main.tex', content: tex }];
     if (keyed) files.push({ path: 'references.bib', content: await bibFile(citing, keyed.keys, false) });
     for (const [n, b] of Object.entries(sink.files || {})) files.push({ path: n, content: new Uint8Array(await b.arrayBuffer()) });
     if (set.clsFile && set.clsFile.content) files.push({ path: set.clsFile.name, content: set.clsFile.content });
-    return { files, tex, biber: !!keyed, styleInfo: keyed && !set.style ? biblatexStyleInfo(citing) : keyed ? { style: set.style, how: `biblatex, style=${set.style} (chosen under ⚙)`, exact: true } : null, styleLabel: citing.styleLabel };
+    return { files, tex, biber: own != null ? /\\(addbibresource|printbibliography)\b/.test(own) : !!keyed, styleInfo: keyed && !set.style ? biblatexStyleInfo(citing) : keyed ? { style: set.style, how: `biblatex, style=${set.style} (chosen under ⚙)`, exact: true } : null, styleLabel: citing.styleLabel };
   };
   texP = latexPanel(texSource, (d.settings || {}).latex, () => { dirty = true; scheduleSave(); }, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
   wbody.append(texP.el);
   texP.addTool('Round-trip check', 'Convert to LaTeX and back, and show what (if anything) changed', roundTripCheck);
+  // The LaTeX view (wtexview.js): the whole .tex, edited directly; Ctrl+Alt+X switches.
+  texV = texView({
+    row: wbody.querySelector('.wsheetrow'), sheet: wbody.querySelector('.wsheet'), editor, wrap: app,
+    state: (d.settings || {}).texview,
+    exportTex: async () => { const x = await texExport(texP.settings(), true); return { tex: x.tex, back: x.back }; },
+    importTex: async (text, back) => {
+      const r = await texToPm(text, back);
+      (r.sources || []).forEach(e => { citing.items[e.id] = e.csl; if (e.uri) citing.uris[e.id] = e.uri; });
+      editor.commands.setContent(r.content, true);
+      await citing.recompute(editor);
+      if (r.unknown && r.unknown.length) toast('Not found in the library: ' + r.unknown.join(', '), 5000);
+    },
+    saveState: () => { dirty = true; scheduleSave(); },
+    onMode: () => { placeNotes(); refreshBar(); commenting.renderSoon(); },
+    onChange: () => texP.changed(),
+    onCompile: () => { if (!texP.isOpen()) texP.open(); else texP.compile(); },
+  });
+  texP.onLine = n => texV.gotoLine(n);
   try { new ResizeObserver(() => styleC.paintSoon()).observe(wbody.querySelector('.wsheet')); } catch (_) {}
   const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } if (lexP) { lexP.el.style.top = t + 'px'; lexP.el.style.height = `calc(100vh - ${t}px)`; } if (styleP) { styleP.el.style.top = t + 'px'; styleP.el.style.height = `calc(100vh - ${t}px)`; } if (texP) { texP.el.style.top = t + 'px'; texP.el.style.height = `calc(100vh - ${t}px)`; } };
   window.addEventListener('resize', placeNotes);
@@ -800,7 +835,7 @@ async function showWriter(id, params) {
   imgIn.addEventListener('change', () => { const fs = [...imgIn.files]; imgIn.value = ''; insertImages(fs); });
 
   // ----- saving
-  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified, settings: Object.assign({}, citing.settings(), { comments: commenting.settings(), style: styleC ? styleC.settings() : ((d.settings || {}).style || {}), latex: texP ? texP.settings() : ((d.settings || {}).latex || undefined) }) }, extra);
+  const payload = (extra = {}) => Object.assign({ title, content: editor.getJSON(), words: editor.storage.characterCount.words(), baseModified, settings: Object.assign({}, citing.settings(), { comments: commenting.settings(), style: styleC ? styleC.settings() : ((d.settings || {}).style || {}), latex: texP ? texP.settings() : ((d.settings || {}).latex || undefined), texview: texV ? texV.state() : ((d.settings || {}).texview || undefined) }) }, extra);
   async function save(extra) {
     if (saving) { scheduleSave(); return; }
     saving = true; clearTimeout(saveTimer);
@@ -857,6 +892,7 @@ async function showWriter(id, params) {
     if (e.ctrlKey && e.altKey && e.code === 'KeyS') { e.preventDefault(); styleP.toggle(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyL') { e.preventDefault(); lexP.toggle(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyP') { e.preventDefault(); texP.toggle(); }
+    if (e.ctrlKey && e.altKey && e.code === 'KeyX') { e.preventDefault(); texV.toggle(); }
     if (e.ctrlKey && e.altKey && e.key === 'Enter') { e.preventDefault(); if (!texP.isOpen()) texP.open(); else texP.compile(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyD') { e.preventDefault(); const mic = bar.querySelector('.wdict .dmic'); if (mic) mic.click(); }
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }

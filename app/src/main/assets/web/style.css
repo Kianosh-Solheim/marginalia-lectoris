@@ -1423,3 +1423,22 @@ main.scrpage { padding: 10px 14px 0; max-width: none; }
 .rtdiff del { color: #a33; } .rtdiff ins { color: #276; text-decoration: none; }
 .wtexcite { font-size: 12px; padding: 2px 0 6px; }
 .wmenustyle { font-size: 12px; padding: 6px 12px 8px; border-bottom: 1px solid var(--line); display: grid; gap: 2px; }
+/* The LaTeX view */
+.wtexcode { flex: 1 1 auto; min-width: 0; max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; border: 1px solid var(--line); background: var(--paper); align-self: stretch; }
+.wtexcode[hidden] { display: none; }
+.wtexhead { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card, var(--paper)); z-index: 3; }
+.wtexinfo { font-size: 11.5px; }
+.wtexarea .CodeMirror { height: calc(100vh - 190px); font: 13.5px/1.5 var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); background: var(--paper); color: var(--ink); }
+.wtexarea .CodeMirror-gutters { background: var(--card, #f4f4f4); border-right: 1px solid var(--line); }
+.wtexarea .CodeMirror-linenumber { color: var(--muted, #888); }
+.wtexarea .CodeMirror-cursor { border-left-color: var(--ink); }
+.wtexarea .CodeMirror-selected, .wtexarea .CodeMirror-focused .CodeMirror-selected { background: rgba(120,140,200,.28); }
+.wtexarea .cm-tag { color: #2f5fa8; } .wtexarea .cm-bracket { color: #8a6d1f; } .wtexarea .cm-comment { color: #888; font-style: italic; }
+.wtexarea .cm-keyword { color: #8a3a8a; } .wtexarea .cm-atom { color: #b05a00; } .wtexarea .cm-string, .wtexarea .cm-string-2 { color: #2c7a4b; } .wtexarea .cm-number { color: #b05a00; }
+.wtexarea .wtexhit { background: rgba(230,180,40,.35); }
+.texmode .wtoolbar .wgroup:not(:last-child) { opacity: .35; pointer-events: none; }
+.wtexlinelink { font-weight: 700; color: inherit; text-decoration: underline; }
+html[data-theme="dark"] .wtexarea .cm-tag { color: #8fb4ff; } html[data-theme="dark"] .wtexarea .cm-keyword { color: #d59ad5; }
+html[data-theme="dark"] .wtexarea .cm-string, html[data-theme="dark"] .wtexarea .cm-string-2 { color: #7fd1a0; } html[data-theme="dark"] .wtexarea .cm-bracket { color: #e0c070; }
+html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .cm-number { color: #f0a060; }
+.texmode .wstylepop, .texmode .wstylelayer { display: none !important; }
