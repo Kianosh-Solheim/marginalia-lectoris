@@ -130,12 +130,39 @@ function ctanGuess(file) {
   return stem;
 }
 /** The biblatex style that matches the citation style chosen in the writing program. */
-function biblatexStyleFor(citing) {
-  const l = String((citing && citing.styleLabel) || '');
-  if (/chicago/i.test(l)) return /author[- ]?date/i.test(l) ? 'chicago-authordate' : 'chicago-notes';
-  if (/apa|american psychological/i.test(l)) return 'apa';
-  if (/\bmla\b|modern language/i.test(l)) return 'mla';
-  return citing && citing.isNote ? 'verbose' : 'authoryear';
+/**
+ * The biblatex style nearest to the citation style chosen in the writing program:
+ * { style, pkg (the CTAN package it needs, if any), how (what LaTeX loads), exact (the same style, or only the nearest) }.
+ */
+function biblatexStyleInfo(citing) {
+  const st = (citing && citing.style) || {};
+  const l = [st.name, st.id, st.title, citing && citing.styleLabel].filter(Boolean).join(' ').toLowerCase();
+  const note = !!(citing && citing.isNote) || st.cls === 'note';
+  const r = (style, pkg, exact, how) => ({ style, pkg: pkg || null, exact: !!exact, how: how || (pkg ? `${pkg} (${style})` : `biblatex, style=${style}`) });
+  if (/chicago/.test(l)) return /author[- ]?date/.test(l) ? r('chicago-authordate', 'biblatex-chicago', true, 'biblatex-chicago (authordate)') : r('chicago-notes', 'biblatex-chicago', true, 'biblatex-chicago (notes)');
+  if (/\bapa\b|american psychological/.test(l)) return r('apa', 'biblatex-apa', true);
+  if (/\bmla\b|modern language/.test(l)) return r('mla', 'biblatex-mla', true);
+  if (/oscola|oxford university standard for (the )?citation of legal/.test(l)) return r('oscola', 'biblatex-oscola', true);
+  if (/\bieee\b/.test(l)) return r('ieee', 'biblatex-ieee', true);
+  if (/vancouver|nature|science|numeric|\bama\b|american medical/.test(l)) return r('numeric-comp', null, false);
+  if (/harvard|author[- ]?date/.test(l)) return r('authoryear', null, false);
+  return note ? r('verbose', null, false) : r('authoryear', null, false);
+}
+function biblatexStyleFor(citing) { return biblatexStyleInfo(citing).style; }
+/** The same citation as LaTeX writes it (near enough: Pandoc decides the final form). */
+function latexCiteText(attrs, keys) {
+  const items = (attrs.items || []);
+  const k = i => (keys && keys[i.id]) || '?';
+  const opt = i => (i.prefix ? `[${i.prefix}]` : '') + (i.locator || i.suffix ? `[${[i.locator, i.suffix].filter(Boolean).join(', ')}]` : (i.prefix ? '[]' : ''));
+  if (items.length === 1) return `\\autocite${items[0].suppressAuthor ? '*' : ''}${opt(items[0])}{${k(items[0])}}`;
+  return '\\autocites' + items.map(i => `${opt(i)}{${k(i)}}`).join('');
+}
+/** Where a style was found, from a LaTeX log: the CTAN package on the tablet, the collection, or the server online. */
+function latexStyleOrigin(log, style) {
+  const m = new RegExp('\\(([^()\\s]*' + String(style).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.(?:cbx|bbx|sty))').exec(String(log || ''));
+  if (!m) return '';
+  const p = m[1];
+  return p.startsWith('./') || !p.includes('/') ? 'the CTAN package on the tablet' : /texlive_remote/.test(p) ? 'the TeX Live server online' : 'the TeX Live collection';
 }
 
 const LATEX_DRIVERS = { pdflatex: 'pdftex_bibtex8', xelatex: 'xetex_bibtex8_dvipdfmx', lualatex: 'luahbtex_bibtex8' };
@@ -323,11 +350,13 @@ function texMeta(set) {
  * { files, main, biber, tex } for the document as it is now. Settings are kept with the document.
  */
 function latexPanel(source, settings, onSettings, onToggle) {
+  // source(set) → { files, tex, biber, styleInfo, styleLabel }
   let set = Object.assign({}, TEX_DEFAULTS, settings || {});
   const el = h('aside', { class: 'wtexpanel', hidden: true });
   const status = h('span', { class: 'mono muted wtexstat' }, '');
   const pages = h('div', { class: 'wtexpages' });
   const problems = h('div', { class: 'wtexprob', hidden: true });
+  const citeLine = h('div', { class: 'wtexcite muted', hidden: true });
   const logBox = h('pre', { class: 'texlog', hidden: true });
   let toolRow = null;
   let lastPdf = null, lastTex = '', timer = 0, running = false, again = false, width = +localGet('ml.wtexWidth', '0') || 0;
@@ -349,7 +378,7 @@ function latexPanel(source, settings, onSettings, onToggle) {
       h('button', { class: 'btn quiet', title: 'LaTeX settings for this document', onclick: () => settingsDialog() }, '⚙'),
       h('button', { class: 'btn quiet', title: 'Save the PDF', onclick: () => api_.savePdf() }, '⤓'),
       h('button', { class: 'btn quiet', title: 'Close', onclick: () => api_.close() }, '×')),
-    problems, pages,
+    citeLine, problems, pages,
     h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } },
       h('button', { class: 'btn quiet', style: { fontSize: '11.5px' }, onclick: () => { logBox.hidden = !logBox.hidden; } }, 'Log'),
       h('button', { class: 'btn quiet', style: { fontSize: '11.5px' }, onclick: () => { if (lastTex) saveBlob(new Blob([lastTex], { type: 'text/plain' }), 'main.tex'); } }, 'The .tex'),
@@ -427,6 +456,12 @@ function latexPanel(source, settings, onSettings, onToggle) {
         r = r2;
       }
       lastTex = src.tex;
+      if (src.styleInfo) {
+        const si = src.styleInfo, from = latexStyleOrigin(r.log, r.styleNote ? 'authoryear' : si.style);
+        clear(citeLine); citeLine.hidden = false;
+        citeLine.append(h('span', null, 'Citations: ', h('b', null, src.styleLabel || ''), ' → ', h('span', { class: 'mono' }, r.styleNote ? 'biblatex, style=authoryear (for now)' : si.how),
+          si.exact ? '' : ' · the nearest LaTeX equivalent', from ? ` · from ${from}` : ''));
+      }
       logBox.textContent = r.log || (r.logs || []).map(l => [l.cmd, l.stdout, l.stderr].filter(Boolean).join('\n')).join('\n\n');
       showProblems(r, src.tex);
       if (r.pdf && r.pdf.length) { lastPdf = r.pdf; await show(r.pdf); }

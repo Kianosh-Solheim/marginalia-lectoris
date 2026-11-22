@@ -526,7 +526,7 @@ async function showWriter(id, params) {
   // Citations: the style, the sources' data and the formatted text (see cite.js).
   let recomputeTimer = 0;
   const citing = new Citing(T, d.settings, () => { dirty = true; scheduleSave(); styleBtn.textContent = '❝ Style: ' + shortStyle(); recomputeSoon(); });
-  const shortStyle = () => { const t = citing.styleLabel; return t.length > 28 ? t.slice(0, 26) + '…' : t; };
+  const shortStyle = () => { const t = citing.styleLabel.replace(/ \d+(st|nd|rd|th) edition/i, ''); return t.length > 40 ? t.slice(0, 38) + '…' : t; };
   const recomputeSoon = () => { clearTimeout(recomputeTimer); recomputeTimer = setTimeout(() => citing.recompute(editor).then(refresh), 300); };
 
   // ----- layout
@@ -555,7 +555,7 @@ async function showWriter(id, params) {
       h('button', { class: 'btn quiet', title: 'Earlier versions of this document', onclick: () => showVersions() }, 'Versions'),
       h('button', { class: 'btn quiet', title: 'Keep the text as it is now as a named version', onclick: () => saveVersion() }, 'Save version'),
       h('button', { class: 'btn quiet', title: 'Replace the text with a Word, LibreOffice, Markdown, HTML or LaTeX file', onclick: () => fileIn.click() }, 'Import…'),
-      h('span', { class: 'wmenuwrap' }, h('button', { class: 'btn', onclick: e => { e.stopPropagation(); exportMenu.hidden = !exportMenu.hidden; } }, 'Export ▾'), exportMenu),
+      h('span', { class: 'wmenuwrap' }, h('button', { class: 'btn', onclick: e => { e.stopPropagation(); exportMenu.hidden = !exportMenu.hidden; if (!exportMenu.hidden) exportStyleLine(); } }, 'Export ▾'), exportMenu),
       fileIn, imgIn),
     bar, banner,
     wbody);
@@ -753,7 +753,7 @@ async function showWriter(id, params) {
     if (keyed) files.push({ path: 'references.bib', content: await bibFile(citing, keyed.keys, false) });
     for (const [n, b] of Object.entries(sink.files || {})) files.push({ path: n, content: new Uint8Array(await b.arrayBuffer()) });
     if (set.clsFile && set.clsFile.content) files.push({ path: set.clsFile.name, content: set.clsFile.content });
-    return { files, tex, biber: !!keyed };
+    return { files, tex, biber: !!keyed, styleInfo: keyed && !set.style ? biblatexStyleInfo(citing) : keyed ? { style: set.style, how: `biblatex, style=${set.style} (chosen under ⚙)`, exact: true } : null, styleLabel: citing.styleLabel };
   };
   texP = latexPanel(texSource, (d.settings || {}).latex, () => { dirty = true; scheduleSave(); }, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
   wbody.append(texP.el);
@@ -787,7 +787,15 @@ async function showWriter(id, params) {
     refreshBar();
   }
   refresh();
-  citing.ready.then(() => { styleBtn.textContent = '❝ Style: ' + shortStyle(); return citing.recompute(editor); }).then(refresh).catch(e => { styleBtn.textContent = '❝ Style: (not loaded)'; console.warn(e); });
+  const styleTitle = () => { const si = biblatexStyleInfo(citing); styleBtn.title = `Citation style: ${citing.styleLabel}\nIn LaTeX: ${si.how}${si.exact ? '' : ' (the nearest equivalent)'}\nClick to change the style or language.`; };
+  // The style is fetched from the tablet; if that fails, it is tried again (and the button says why).
+  const loadStyle = (tries) => citing.ready.then(() => { styleBtn.textContent = '❝ Style: ' + shortStyle(); styleTitle(); return citing.recompute(editor); }).then(refresh).catch(e => {
+    console.warn(e);
+    if (tries > 0) { setTimeout(() => { citing.ready = citing.load(); loadStyle(tries - 1); }, 2500); styleBtn.textContent = '❝ Style: loading…'; return; }
+    styleBtn.textContent = '❝ Style: ' + shortStyle() + ' (not loaded)';
+    styleBtn.title = `${citing.styleLabel} could not be loaded: ${e.message || e}. Click to choose it again.`;
+  });
+  loadStyle(2);
 
   imgIn.addEventListener('change', () => { const fs = [...imgIn.files]; imgIn.value = ''; insertImages(fs); });
 
@@ -1006,6 +1014,9 @@ async function showWriter(id, params) {
       draw();
     });
   }
+  const expStyle = h('div', { class: 'wmenustyle muted' });
+  const exportStyleLine = () => { const si = biblatexStyleInfo(citing), own = texP && texP.settings().style; clear(expStyle).append(h('div', null, 'Citations: ', h('b', null, citing.styleLabel)), h('div', null, 'In LaTeX: ', h('span', { class: 'mono' }, own ? `biblatex, style=${own} (⚙)` : si.how), own || si.exact ? '' : ' (nearest)')); };
+  exportMenu.append(expStyle);
   [['pdf', 'PDF (.pdf)'], ['texpdf', 'PDF via LaTeX (.pdf)']].concat(WRITE_EXPORTS, [['zip', 'Overleaf project (.zip)'], ['bib', 'Bibliography file (.bib)']]).forEach(([ext, label]) => exportMenu.append(h('button', { onclick: () => {
     exportMenu.hidden = true;
     if (ext === 'tex' || ext === 'md' || ext === 'bib' || ext === 'zip') keyedExport(ext, label); else runExport(ext, label, null);

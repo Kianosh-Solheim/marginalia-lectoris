@@ -111,6 +111,18 @@ class Citing {
     this.onChange();
   }
 
+  /** The tooltip of a citation: its text, the style, and how it goes into LaTeX. */
+  async hoverTitle(v) {
+    const attrs = v.node.attrs, base = (v.dom.title || 'Citation').split('\n\nStyle:')[0];
+    const ids = (attrs.items || []).map(i => i.id);
+    const si = typeof biblatexStyleInfo === 'function' ? biblatexStyleInfo(this) : null;
+    const put = () => { v.dom.title = `${base.replace(/ — click to change$/, '')}\n\nStyle: ${this.styleLabel}` + (si ? `\nLaTeX: ${latexCiteText(attrs, this.keys)}  ·  ${si.how}${si.exact ? '' : ' (nearest)'}` : '') + '\nClick to change.'; };
+    put();
+    if (ids.some(id => !this.keys[id])) {
+      try { const r = await api('writing/citekeys', { method: 'POST', json: { ids } }); ids.forEach(id => { if (r[id] && r[id].key) this.keys[id] = cleanKey(r[id].key); }); put(); } catch (_) {}
+    }
+  }
+
   // ----- the nodes
   /** A citation as it is written with keys: [see @tilly2017, p. 275; -@porta2013]. */
   keyText(attrs) {
@@ -158,6 +170,8 @@ class Citing {
             else { dom.className = 'cite'; dom.innerHTML = html || xmlEsc(self.fallback(v.node.attrs)); dom.title = 'Citation — click to change'; }
           } };
           dom.addEventListener('click', e => { e.preventDefault(); if (typeof getPos === 'function') self.edit(editor, getPos(), v.node.attrs); });
+          // Hovering: the style, and the citation as LaTeX writes it.
+          dom.addEventListener('mouseenter', () => self.hoverTitle(v));
           self.views.add(v); v.render();
           return { dom, update: n => { if (n.type.name !== 'citation') return false; v.node = n; v.render(); return true; }, destroy: () => self.views.delete(v), ignoreMutation: () => true };
         };
