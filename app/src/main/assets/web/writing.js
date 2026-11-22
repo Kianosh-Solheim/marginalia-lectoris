@@ -715,8 +715,8 @@ async function showWriter(id, params) {
         box.classList.add('wide');
         box.append(h('h2', null, 'Round-trip check'),
           h('p', null, diff.length ? `${diff.length >= 12 ? 'At least 12' : diff.length} block${diff.length === 1 ? '' : 's'} changed on the way to LaTeX and back (of ${a.length}):` : `All ${a.length} blocks came back the same — text, formatting, citations, footnotes, formulas, comments and LaTeX boxes.`),
-          diff.length ? h('div', { class: 'rtdiff' }, diff.map(d => h('div', null, h('div', { class: 'muted mono', style: { fontSize: '11px' } }, 'Block ' + d.at), h('div', null, h('del', null, short(d.was))), h('div', null, h('ins', null, short(d.now)))))) : null,
-          back.unknown && back.unknown.length ? h('p', { class: 'muted' }, 'Citation keys not found: ' + back.unknown.join(', ')) : null,
+          ...[diff.length ? h('div', { class: 'rtdiff' }, diff.map(d => h('div', null, h('div', { class: 'muted mono', style: { fontSize: '11px' } }, 'Block ' + d.at), h('div', null, h('del', null, short(d.was))), h('div', null, h('ins', null, short(d.now)))))) : null].filter(Boolean),
+          ...[back.unknown && back.unknown.length ? h('p', { class: 'muted' }, 'Citation keys not found: ' + back.unknown.join(', ')) : null].filter(Boolean),
           h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: () => saveBlob(new Blob([x.tex], { type: 'text/plain' }), 'roundtrip.tex') }, 'The .tex'), h('button', { class: 'btn fill', onclick: close }, 'Close')));
       });
     } catch (e) { toast('', 1); fail(e); }

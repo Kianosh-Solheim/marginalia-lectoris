@@ -317,7 +317,12 @@ function texSplit(tex) {
 async function texToPm(tex, back) {
   back = back || {};
   const pd = await ensurePandoc('Reading the LaTeX.');
-  const clean = String(tex).split('\n').filter(l => !/% marginalia\s*$/.test(l)).join('\n');
+  // Only the body is read: the preamble is kept as it is by the LaTeX view, and the title is the document's own.
+  let clean = String(tex).split('\n').filter(l => !/% marginalia\s*$/.test(l)).join('\n');
+  if (/\\begin\{document\}/.test(clean)) clean = texSplit(clean).body;
+  clean = clean.replace(/^[ \t]*\\maketitle[ \t]*$/m, '')
+    // Pandoc writes a line break at the start of a paragraph as \hfill\break; read it back as one.
+    .replace(/\\hfill\s*\\break\b/g, '\\\\ ');
   let r = null;
   for (const from of ['latex+raw_tex-latex_macros', 'latex+raw_tex', 'latex']) {
     try { r = await pd.convert({ from, to: 'json' }, clean, {}); } catch (_) { r = null; }
