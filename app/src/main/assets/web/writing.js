@@ -101,14 +101,16 @@ function pmInlinesToPandoc(nodes, ctx) {
         else if (MARK_T[m.type]) inl = [{ t: MARK_T[m.type], c: inl }];
       }
       const cx = ctx && ctx.cm;
-      if (cx) (cx.first.get(n) || []).forEach(id => out.push(...commentStartInlines(id, cx, ctx.format)));
+      const cf = ctx && ctx.texMarkers ? 'texmarks' : ctx && ctx.format;
+      if (cx) (cx.first.get(n) || []).forEach(id => out.push(...commentStartInlines(id, cx, cf)));
       out.push(...inl);
-      if (cx) (cx.last.get(n) || []).forEach(id => out.push(...commentEndInlines(id, cx, ctx.format)));
+      if (cx) (cx.last.get(n) || []).forEach(id => out.push(...commentEndInlines(id, cx, cf)));
     } else if (n.type === 'hardBreak') out.push({ t: 'LineBreak' });
     else if (n.type === 'image') out.push(imageToPandoc(n, ctx));
     else if (n.type === 'footnote') out.push({ t: 'Note', c: pmBlocksToPandoc((n.attrs.content && n.attrs.content.content) || [], Object.assign({}, ctx, { inNote: true })) });
     else if (n.type === 'citation' && ctx && ctx.citing) out.push(...(ctx.citeKeys ? citeKeyInlines(n.attrs, ctx) : ctx.citing.citationInlines(n.attrs, ctx.format, !!ctx.inNote)));
     else if (n.type === 'math') out.push({ t: 'Math', c: [{ t: n.attrs.display ? 'DisplayMath' : 'InlineMath' }, n.attrs.tex || ''] });
+    else if (n.type === 'rawTex') out.push({ t: 'RawInline', c: ['latex', n.attrs.tex || ''] });
   }
   return mergeInlines(out);
 }
@@ -129,6 +131,7 @@ function pmBlocksToPandoc(nodes, ctx, tight) {
       case 'horizontalRule': out.push({ t: 'HorizontalRule' }); break;
       case 'image': out.push({ t: 'Para', c: [imageToPandoc(n, ctx)] }); break;
       case 'table': out.push(tableToPandoc(n, ctx)); break;
+      case 'rawTexBlock': out.push({ t: 'RawBlock', c: ['latex', n.attrs.tex || ''] }); break;
       case 'bibliography': if (ctx && ctx.citeKeys) out.push({ t: 'Div', c: [['refs', [], []], []] }); else if (ctx && ctx.citing) out.push(...ctx.citing.bibliographyBlocks(ctx.format)); break;
       default: if (n.content) out.push(...pmBlocksToPandoc(n.content, ctx));
     }
@@ -211,7 +214,17 @@ function pandocInlinesToPm(inls, marks, ctx) {
       case 'Link': out.push(...pandocInlinesToPm(x.c[1], withMark(marks, { type: 'link', attrs: { href: x.c[2][0], target: '_blank' } }), ctx)); break;
       case 'Image': out.push({ type: 'image', attrs: { src: ctx && ctx.mapSrc ? ctx.mapSrc(x.c[2][0]) : x.c[2][0], alt: plainText(x.c[1]), title: x.c[2][1] || null } }); break;
       case 'Note': out.push({ type: 'footnote', attrs: { content: { type: 'doc', content: ensureBlocks(pandocBlocksToPm(x.c, ctx)) } } }); break;
-      default: break;   // RawInline and the like
+      case 'RawInline': {
+        // LaTeX the editor has no form for is kept as it is (a grey box); Marginalia's own markers carry the comments.
+        if (!/^(la)?tex$/.test(x.c[0])) break;
+        const t = x.c[1]; let m;
+        if ((m = /^\\mlbegin\{([^}]*)\}\s*$/.exec(t))) { if (ctx && ctx.cm) { ctx.cm.open.push(m[1]); ctx.cm.justStarted = null; } break; }
+        if ((m = /^\\mlend\{([^}]*)\}\s*$/.exec(t))) { if (ctx && ctx.cm) ctx.cm.open = ctx.cm.open.filter(i => i !== m[1]); break; }
+        if (/^\\printbibliography/.test(t)) break;
+        if (t.trim()) out.push({ type: 'rawTex', attrs: { tex: t } });
+        break;
+      }
+      default: break;
     }
   }
   // The text of a footnote cannot hold another footnote.
@@ -228,7 +241,11 @@ function pandocBlocksToPm(blocks, ctx) {
   const out = [];
   for (const b of blocks || []) {
     switch (b.t) {
-      case 'Para': case 'Plain': out.push(para(b.c, ctx)); break;
+      case 'Para': case 'Plain': {
+        const only = b.c.filter(x => x.t !== 'Space' && x.t !== 'SoftBreak');
+        if (only.length === 1 && only[0].t === 'RawInline' && /^\\printbibliography/.test(only[0].c[1])) { out.push(...pandocBlocksToPm([{ t: 'RawBlock', c: ['latex', only[0].c[1]] }], ctx)); break; }
+        out.push(para(b.c, ctx)); break;
+      }
       case 'Header': { const c = pandocInlinesToPm(b.c[2], [], ctx); out.push(c.length ? { type: 'heading', attrs: { level: Math.min(6, b.c[0]) }, content: c } : { type: 'heading', attrs: { level: Math.min(6, b.c[0]) } }); break; }
       case 'BlockQuote': out.push({ type: 'blockquote', content: ensureBlocks(pandocBlocksToPm(b.c, ctx)) }); break;
       case 'BulletList': out.push({ type: 'bulletList', content: b.c.map(item => listItem(item, ctx)) }); break;
@@ -240,7 +257,20 @@ function pandocBlocksToPm(blocks, ctx) {
       case 'Div': out.push(...pandocBlocksToPm(b.c[1], ctx)); break;
       case 'Figure': { out.push(...pandocBlocksToPm(b.c[2], ctx)); const cap = b.c[1][1]; if (cap && cap.length) cap.forEach(cb => { if (cb.c) out.push(para([{ t: 'Emph', c: cb.t === 'Para' || cb.t === 'Plain' ? cb.c : [] }], ctx)); }); break; }
       case 'Table': out.push(tableToPm(b, ctx)); break;
-      default: break;   // RawBlock and the like
+      case 'RawBlock': {
+        if (!/^(la)?tex$/.test(b.c[0])) break;
+        const t = b.c[1];
+        const bib = /^\\printbibliography(\[([^\]]*)\])?/.exec(t.trim());
+        if (bib) {
+          const title = ((bib[2] || '').match(/title=\{?([^,}\]]+)\}?/) || [])[1];
+          if (title) out.push({ type: 'heading', attrs: { level: (ctx && ctx.bibLevel) || 1 }, content: [{ type: 'text', text: title.trim() }] });
+          out.push({ type: 'bibliography' }); break;
+        }
+        if (/^\\(mlbegin|mlend)\{/.test(t.trim())) break;
+        if (t.trim()) out.push({ type: 'rawTexBlock', attrs: { tex: t } });
+        break;
+      }
+      default: break;
     }
   }
   return out;
@@ -326,11 +356,13 @@ async function exportBlob(doc, title, ext, docId, citing, comments, keyed, sink,
       files[name] = blob; map[src] = name;
     } catch (_) {}
   }
-  const cm = comments && (ext === 'docx' || ext === 'odt') && Object.keys(comments).length ? commentBounds(doc, comments) : null;
+  const markers = ext === 'tex' && texSet && texSet.markers;
+  const cm = comments && (ext === 'docx' || ext === 'odt' || markers) && Object.keys(comments).length ? commentBounds(doc, comments) : null;
   // With citation keys (LaTeX, Markdown): Pandoc writes the citation commands and sets up the bibliography.
   let bibTitle = '';
-  if (keyed && ext === 'tex') { const s = stripBibliography(doc); doc = s.doc; bibTitle = s.title; }
-  const ast = pmToPandoc(doc, title, { mapSrc: src => map[src] || src, citing, format: ext, cm, citeKeys: keyed ? keyed.keys : null });
+  if (keyed && ext === 'tex') { const s = stripBibliography(doc); doc = s.doc; bibTitle = s.title; if (sink) sink.bibLevel = s.level; }
+  const ast = pmToPandoc(doc, title, { mapSrc: src => map[src] || src, citing, format: ext, cm, citeKeys: keyed ? keyed.keys : null, texMarkers: markers });
+  if (sink) sink.map = map;
   const opts = { from: 'json', to, standalone: true };
   if (ext === 'typ') {
     ast.meta.papersize = { t: 'MetaString', c: 'a4' }; ast.meta.fontsize = { t: 'MetaString', c: '11pt' };
@@ -343,6 +375,12 @@ async function exportBlob(doc, title, ext, docId, citing, comments, keyed, sink,
     if (ext === 'tex') { opts['cite-method'] = keyed.method; if (keyed.method === 'biblatex') ast.meta.biblatexoptions = { t: 'MetaString', c: 'style=' + keyed.style }; else ast.meta['biblio-style'] = { t: 'MetaString', c: 'apalike' }; }
   }
   if (ext === 'tex' && texSet) Object.assign(ast.meta, texMeta(texSet));
+  if (markers) {
+    // Marginalia's markers (comments) do nothing in the PDF. The line is recognised and left out when the file comes back.
+    const def = { t: 'MetaBlocks', c: [{ t: 'RawBlock', c: ['latex', TEX_MARKER_DEFS] }] };
+    const hi = ast.meta['header-includes'];
+    ast.meta['header-includes'] = { t: 'MetaList', c: [def].concat(hi ? (hi.t === 'MetaList' ? hi.c : [hi]) : []) };
+  }
   if (binary) opts['output-file'] = 'out.' + ext;
   const r = await pd.convert(opts, JSON.stringify(ast), files);
   if (binary) {
@@ -516,7 +554,7 @@ async function showWriter(id, params) {
         h('span', { style: { flex: 1 } }),
         h('button', { class: 'btn', onclick: close }, 'Cancel'),
         h('button', { class: 'btn fill', onclick: () => { const c = fe.getJSON(); editor.chain().setNodeSelection(pos).updateAttributes('footnote', { content: c }).setTextSelection(pos + 1).focus().run(); close(); } }, 'Done')));
-      const fe = new T.Editor({ element: host, extensions: [T.StarterKit.configure({ heading: false, codeBlock: false, horizontalRule: false, blockquote: false }), T.Underline, T.Link.configure({ openOnClick: false }), T.Superscript, T.Subscript, T.Placeholder.configure({ placeholder: 'Write the footnote…' }), mathExtension(T, p => mathDialog(fe, p)), ...citing.noteExtensions],
+      const fe = new T.Editor({ element: host, extensions: [T.StarterKit.configure({ heading: false, codeBlock: false, horizontalRule: false, blockquote: false }), T.Underline, T.Link.configure({ openOnClick: false }), T.Superscript, T.Subscript, T.Placeholder.configure({ placeholder: 'Write the footnote…' }), mathExtension(T, p => mathDialog(fe, p)), ...rawTexExtensions(T, p => rawTexDialog(fe, p)), ...citing.noteExtensions],
         content: node.attrs.content || { type: 'doc', content: [{ type: 'paragraph' }] } });
       setTimeout(() => fe.commands.focus('end'), 50);
     }, () => {});
@@ -547,6 +585,7 @@ async function showWriter(id, params) {
       footnoteExtension(T, editFootnote),
       commentMarkExtension(T),
       mathExtension(T, pos => mathDialog(editor, pos)),
+      ...rawTexExtensions(T, pos => rawTexDialog(editor, pos)),
       ...citing.extensions,
     ],
     content: d.content,
@@ -632,9 +671,10 @@ async function showWriter(id, params) {
     toolbarButton('✓ Style', 'British style: Oxford spelling, conventions, formal register, your own rules, and an AI check (Ctrl+Alt+S)', () => styleP.toggle(), () => styleP && styleP.isOpen()),
     toolbarButton('Aa Lexicon', 'Your words and their meanings beside the text: click one to put it in (Ctrl+Alt+L)', () => lexP.toggle(), () => lexP && lexP.isOpen()),
     toolbarButton('TeX PDF', 'The document set by LaTeX, beside the text; it follows as you write (Ctrl+Alt+P)', () => texP.toggle(), () => texP && texP.isOpen()),
+    toolbarButton('\\TeX', 'Insert LaTeX that is kept as it is (your own commands, spacing, environments)', () => rawTexDialog(editor, null)),
   ];
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
-  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]], ['LaTeX', [31]]];
+  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]], ['LaTeX', [31, 32]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
@@ -647,6 +687,40 @@ async function showWriter(id, params) {
   styleP = stylePanel(styleC, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
   wbody.append(styleP.el);
   // LaTeX: the document as .tex (Pandoc), with the cited sources as a .bib, the pictures and your class.
+  // The document as .tex for the LaTeX view: with markers for the comments, and what is needed to read it back.
+  const texExport = async (set, markers) => {
+    const doc = editor.getJSON();
+    let keyed = null;
+    try {
+      const info = await resolveCiteKeys(citing, doc);
+      if (Object.keys(info.keys).length) keyed = { keys: info.keys, method: 'biblatex', style: set.style || biblatexStyleFor(citing), bibName: 'references.bib' };
+    } catch (e) { console.warn('citation keys', e); }
+    const sink = {};
+    const tex = await (await exportBlob(doc, title, 'tex', docId, citing, commenting.settings(), keyed, sink, Object.assign({}, set, { markers }))).text();
+    const keyRev = {}; if (keyed) Object.entries(keyed.keys).forEach(([id, k]) => { keyRev[k] = id; });
+    const srcRev = {}; Object.entries(sink.map || {}).forEach(([src, name]) => { srcRev[name] = src; });
+    return { doc, tex, keyed, sink, back: { keyRev, srcRev, bibLevel: sink.bibLevel || 1 } };
+  };
+  /** To LaTeX and back again: does the document come back the same? */
+  const roundTripCheck = async () => {
+    toast('Converting to LaTeX and back…', 0);
+    try {
+      const x = await texExport(texP.settings(), true);
+      const back = await texToPm(x.tex, x.back);
+      const a = pmSignature(x.doc, citing), b = pmSignature({ type: 'doc', content: back.content.content || [] }, citing);
+      const diff = signatureDiff(a, b);
+      toast('', 1);
+      const short = s => s == null ? '—' : s.length > 220 ? s.slice(0, 220) + '…' : s;
+      modal((box, close) => {
+        box.classList.add('wide');
+        box.append(h('h2', null, 'Round-trip check'),
+          h('p', null, diff.length ? `${diff.length >= 12 ? 'At least 12' : diff.length} block${diff.length === 1 ? '' : 's'} changed on the way to LaTeX and back (of ${a.length}):` : `All ${a.length} blocks came back the same — text, formatting, citations, footnotes, formulas, comments and LaTeX boxes.`),
+          diff.length ? h('div', { class: 'rtdiff' }, diff.map(d => h('div', null, h('div', { class: 'muted mono', style: { fontSize: '11px' } }, 'Block ' + d.at), h('div', null, h('del', null, short(d.was))), h('div', null, h('ins', null, short(d.now)))))) : null,
+          back.unknown && back.unknown.length ? h('p', { class: 'muted' }, 'Citation keys not found: ' + back.unknown.join(', ')) : null,
+          h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: () => saveBlob(new Blob([x.tex], { type: 'text/plain' }), 'roundtrip.tex') }, 'The .tex'), h('button', { class: 'btn fill', onclick: close }, 'Close')));
+      });
+    } catch (e) { toast('', 1); fail(e); }
+  };
   const texSource = async set => {
     const doc = editor.getJSON();
     let keyed = null;
@@ -664,6 +738,7 @@ async function showWriter(id, params) {
   };
   texP = latexPanel(texSource, (d.settings || {}).latex, () => { dirty = true; scheduleSave(); }, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); });
   wbody.append(texP.el);
+  texP.addTool('Round-trip check', 'Convert to LaTeX and back, and show what (if anything) changed', roundTripCheck);
   try { new ResizeObserver(() => styleC.paintSoon()).observe(wbody.querySelector('.wsheet')); } catch (_) {}
   const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } if (lexP) { lexP.el.style.top = t + 'px'; lexP.el.style.height = `calc(100vh - ${t}px)`; } if (styleP) { styleP.el.style.top = t + 'px'; styleP.el.style.height = `calc(100vh - ${t}px)`; } if (texP) { texP.el.style.top = t + 'px'; texP.el.style.height = `calc(100vh - ${t}px)`; } };
   window.addEventListener('resize', placeNotes);
@@ -793,7 +868,7 @@ async function showWriter(id, params) {
           chosen = await api(`writing/${encodeURIComponent(docId)}/versions/${encodeURIComponent(v.name)}`);
           if (viewer) viewer.destroy();
           clear(preview);
-          viewer = new T.Editor({ element: preview, editable: false, extensions: [T.StarterKit, T.Underline, T.Superscript, T.Subscript, T.Link, T.Image.configure({ inline: true }), T.Table, T.TableRow, T.TableHeader, T.TableCell, footnoteExtension(T, () => {}), commentMarkExtension(T), mathExtension(T, () => {}), ...new Citing(T, citing.settings()).extensions], content: chosen.content });
+          viewer = new T.Editor({ element: preview, editable: false, extensions: [T.StarterKit, T.Underline, T.Superscript, T.Subscript, T.Link, T.Image.configure({ inline: true }), T.Table, T.TableRow, T.TableHeader, T.TableCell, footnoteExtension(T, () => {}), commentMarkExtension(T), mathExtension(T, () => {}), ...rawTexExtensions(T, () => {}), ...new Citing(T, citing.settings()).extensions], content: chosen.content });
           restore.disabled = false;
         } catch (er) { fail(er); }
       } }, h('b', null, new Date(v.time).toLocaleString()), v.label ? h('span', null, ' · ' + v.label) : null)));

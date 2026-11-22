@@ -140,17 +140,17 @@ async function bibFile(citing, keys, bibtex) {
  * it, whose words become the title of the list LaTeX prints itself).
  */
 function stripBibliography(doc) {
-  let title = '';
+  let title = '', level = 1;
   const content = [];
   (doc.content || []).forEach(n => {
     if (n.type === 'bibliography') {
       const prev = content[content.length - 1];
-      if (prev && prev.type === 'heading') { title = (prev.content || []).map(t => t.text || '').join(''); content.pop(); }
+      if (prev && prev.type === 'heading') { title = (prev.content || []).map(t => t.text || '').join(''); level = (prev.attrs && prev.attrs.level) || 1; content.pop(); }
       return;
     }
     content.push(n);
   });
-  return { doc: Object.assign({}, doc, { content }), title };
+  return { doc: Object.assign({}, doc, { content }), title, level };
 }
 
 /** A Pandoc citation suffix (", pp. 33-35 and passim") → { locator, label, suffix }. */
@@ -179,18 +179,21 @@ function citeToPm(x) {
  * After an import: finds the sources of the keys in the library and Zotero. Citations whose keys
  * are all known become live; the others stay as text. Returns { content, sources, unknown }.
  */
-async function resolveImportedKeys(content) {
+async function resolveImportedKeys(content, localKeys) {
   const keys = new Set();
   const scan = n => { if (!n) return; if (n.type === 'citation') (n.attrs.items || []).forEach(i => { if (String(i.id).startsWith('key:')) keys.add(i.id.slice(4)); }); if (n.type === 'footnote') scan(n.attrs.content); (n.content || []).forEach(scan); };
   scan(content);
   if (!keys.size) return { content, sources: [], unknown: [] };
+  // Keys this document gave out itself (from the LaTeX view) are known without asking.
   let found = {};
-  try { found = await api('writing/citekey-lookup', { method: 'POST', json: { keys: [...keys] } }); } catch (_) {}
+  const ask = [...keys].filter(k => !(localKeys && localKeys[k]));
+  if (ask.length) { try { found = await api('writing/citekey-lookup', { method: 'POST', json: { keys: ask } }); } catch (_) {} }
+  if (localKeys) [...keys].forEach(k => { if (localKeys[k]) found[k] = { id: localKeys[k], local: true }; });
   const sources = {}, unknown = new Set();
   const fix = n => {
     if (!n) return n;
     if (n.type === 'citation' && (n.attrs.items || []).some(i => String(i.id).startsWith('key:'))) {
-      const items = n.attrs.items.map(i => { const e = found[i.id.slice(4)]; if (!e) { unknown.add(i.id.slice(4)); return null; } sources[e.id] = e; return Object.assign({}, i, { id: e.id }); });
+      const items = n.attrs.items.map(i => { const e = found[i.id.slice(4)]; if (!e) { unknown.add(i.id.slice(4)); return null; } if (!e.local) sources[e.id] = e; return Object.assign({}, i, { id: e.id }); });
       if (items.some(i => !i)) return { type: 'text', text: n.attrs.keyText };
       return { type: 'citation', attrs: { citationID: n.attrs.citationID, items } };
     }
@@ -235,4 +238,136 @@ async function typstPdf(source, files) {
     throw new Error('The PDF could not be made' + (why ? ': ' + why.slice(0, 400) : ''));
   }
   return new Blob([r.result], { type: 'application/pdf' });
+}
+
+// ------------------------------------------------------------------ LaTeX kept as it is
+
+/** The preamble line that makes Marginalia's markers do nothing (left out when a file comes back). */
+const TEX_MARKER_DEFS = '\\providecommand{\\mlbegin}[1]{}\\providecommand{\\mlend}[1]{}% marginalia';
+
+/**
+ * LaTeX the editor has no form of its own for (your own commands, \vspace, special environments):
+ * kept exactly as written, shown as a grey box, edited as text.
+ */
+function rawTexExtensions(T, onEdit) {
+  const view = (block) => ({ node, getPos }) => {
+    const dom = h(block ? 'pre' : 'code', { class: block ? 'wrawb' : 'wraw', title: 'LaTeX, kept as it is — click to edit', contenteditable: 'false' }, node.attrs.tex);
+    dom.addEventListener('click', e => { e.preventDefault(); onEdit(typeof getPos === 'function' ? getPos() : null); });
+    return { dom, update: n => { if (n.type.name !== node.type.name) return false; dom.textContent = n.attrs.tex; return true; } };
+  };
+  return [
+    T.Node.create({
+      name: 'rawTex', group: 'inline', inline: true, atom: true, selectable: true,
+      addAttributes() { return { tex: { default: '' } }; },
+      parseHTML() { return [{ tag: 'code[data-tex]', getAttrs: el => ({ tex: el.getAttribute('data-tex') || '' }) }]; },
+      renderHTML({ node }) { return ['code', { 'data-tex': node.attrs.tex }, node.attrs.tex]; },
+      addNodeView() { return view(false); },
+    }),
+    T.Node.create({
+      name: 'rawTexBlock', group: 'block', atom: true, selectable: true,
+      addAttributes() { return { tex: { default: '' } }; },
+      parseHTML() { return [{ tag: 'pre[data-tex]', getAttrs: el => ({ tex: el.getAttribute('data-tex') || '' }) }]; },
+      renderHTML({ node }) { return ['pre', { 'data-tex': node.attrs.tex }, node.attrs.tex]; },
+      addNodeView() { return view(true); },
+    }),
+  ];
+}
+/** Insert LaTeX at the cursor, or edit the box at [pos]. */
+function rawTexDialog(editor, pos) {
+  const node = pos != null ? editor.state.doc.nodeAt(pos) : null;
+  const editing = node && /^rawTex/.test(node.type.name);
+  const sel = editor.state.selection;
+  modal((box, close) => {
+    const ta = h('textarea', { rows: 6, class: 'wmathsrc', spellcheck: 'false', placeholder: '\\vspace{1em}  or  \\begin{center} … \\end{center}' });
+    ta.value = editing ? node.attrs.tex : '';
+    const blk = h('input', { type: 'checkbox', checked: editing ? node.type.name === 'rawTexBlock' : false });
+    const go = () => {
+      const tex = ta.value.replace(/\s+$/, '');
+      if (!tex.trim()) { toast('Write the LaTeX first'); return; }
+      const n = { type: blk.checked ? 'rawTexBlock' : 'rawTex', attrs: { tex } };
+      if (editing) editor.chain().focus().insertContentAt({ from: pos, to: pos + node.nodeSize }, n).run();
+      else editor.chain().focus().insertContentAt({ from: sel.from, to: sel.to }, n).run();
+      close();
+    };
+    ta.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); go(); } });
+    box.append(h('h2', null, 'LaTeX'),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Goes into the .tex file and the LaTeX PDF as it is. Word, LibreOffice and the Typst PDF leave it out.'),
+      ta, h('label', { class: 'row', style: { gap: '6px', fontSize: '13px', margin: '6px 0' } }, blk, 'A block of its own (an environment, spacing between paragraphs)'),
+      h('div', { class: 'foot' },
+        editing ? h('button', { class: 'btn quiet', onclick: () => { editor.chain().focus().deleteRange({ from: pos, to: pos + node.nodeSize }).run(); close(); } }, 'Remove') : null,
+        h('span', { class: 'muted', style: { flex: 1, fontSize: '12px' } }, 'Ctrl+Enter inserts.'),
+        h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: go }, editing ? 'Update' : 'Insert')));
+    setTimeout(() => ta.focus(), 40);
+  });
+}
+
+// ------------------------------------------------------------------ LaTeX → the editor (for the LaTeX view)
+
+/** Splits a .tex file at \begin{document}: { preamble, body, end }. */
+function texSplit(tex) {
+  const b = tex.search(/\\begin\{document\}/), e = tex.search(/\\end\{document\}/);
+  if (b < 0) return { preamble: '', body: tex, end: '' };
+  const bodyStart = b + '\\begin{document}'.length;
+  return { preamble: tex.slice(0, bodyStart), body: tex.slice(bodyStart, e < 0 ? tex.length : e), end: e < 0 ? '' : tex.slice(e) };
+}
+/**
+ * A .tex file → the editor's form. [back] is what the matching export gave out: keyRev (citation key →
+ * source), srcRev (picture file → picture), bibLevel. Comments come back by their markers.
+ */
+async function texToPm(tex, back) {
+  back = back || {};
+  const pd = await ensurePandoc('Reading the LaTeX.');
+  const clean = String(tex).split('\n').filter(l => !/% marginalia\s*$/.test(l)).join('\n');
+  let r = null;
+  for (const from of ['latex+raw_tex-latex_macros', 'latex+raw_tex', 'latex']) {
+    try { r = await pd.convert({ from, to: 'json' }, clean, {}); } catch (_) { r = null; }
+    if (r && r.stdout) break;
+  }
+  if (!r || !r.stdout) throw new Error('Pandoc could not read the LaTeX' + (r && r.stderr ? ': ' + r.stderr.slice(0, 300) : ''));
+  const ast = JSON.parse(r.stdout);
+  const cm = { open: [], ids: {}, data: {} };
+  const pm = pandocToPm(ast, { keys: true, cm, bibLevel: back.bibLevel, mapSrc: s => (back.srcRev && back.srcRev[s]) || s });
+  const keyed = await resolveImportedKeys(pm, back.keyRev || {});
+  return { content: keyed.content, title: pandocTitle(ast), unknown: keyed.unknown, sources: keyed.sources };
+}
+
+/** What a document holds, block by block, for comparing two versions of it. */
+function pmSignature(doc, citing) {
+  const out = [];
+  const inl = n => {
+    if (!n) return '';
+    if (n.type === 'text') { const c = (n.marks || []).filter(m => m.type === 'comment').map(m => m.attrs.id).sort().join(','); const f = (n.marks || []).filter(m => m.type !== 'comment').map(m => m.type).sort().join(''); return (f || c) ? `⟨${f}${c ? '#' + c : ''}⟩${n.text}⟨/⟩` : n.text; }
+    if (n.type === 'citation') return '⟦cite ' + (n.attrs.items || []).map(i => i.id + (i.locator ? ':' + i.locator : '')).join(';') + '⟧';
+    if (n.type === 'footnote') return '⟦note ' + (n.attrs.content ? pmSignature(n.attrs.content, citing).join(' | ') : '') + '⟧';
+    if (n.type === 'math') return '⟦$' + n.attrs.tex + '⟧';
+    if (n.type === 'rawTex') return '⟦tex ' + n.attrs.tex + '⟧';
+    if (n.type === 'image') return '⟦img⟧';
+    if (n.type === 'hardBreak') return '↵';
+    return (n.content || []).map(inl).join('');
+  };
+  const norm = s => s.replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').replace(/⟨\/⟩⟨[^⟩]*⟩/g, '').trim();
+  const walk = (n, depth) => {
+    for (const c of n.content || []) {
+      if (['paragraph', 'heading'].includes(c.type)) { const t = norm((c.content || []).map(inl).join('')); out.push((c.type === 'heading' ? 'h' + c.attrs.level + ' ' : '') + t); }
+      else if (c.type === 'rawTexBlock') out.push('⟦texblock ' + c.attrs.tex.trim() + '⟧');
+      else if (c.type === 'bibliography' || c.type === 'horizontalRule' || c.type === 'image') out.push('⟦' + c.type + '⟧');
+      else walk(c, depth + 1);
+    }
+  };
+  walk(doc, 0);
+  return out.filter(x => x !== '');
+}
+/** The differences between two signatures: [{ at, was, now }] (at most [max]). */
+function signatureDiff(a, b, max = 12) {
+  const out = [];
+  let i = 0, j = 0;
+  while ((i < a.length || j < b.length) && out.length < max) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    // Look a little ahead for the same block again (something added or left out).
+    const ai = b.indexOf(a[i], j), bj = a.indexOf(b[j], i);
+    if (ai > j && (bj < 0 || ai - j <= bj - i) && ai - j < 6) { for (; j < ai; j++) out.push({ at: i + 1, was: null, now: b[j] }); continue; }
+    if (bj > i && bj - i < 6) { for (; i < bj; i++) out.push({ at: i + 1, was: a[i], now: null }); continue; }
+    out.push({ at: i + 1, was: a[i] === undefined ? null : a[i], now: b[j] === undefined ? null : b[j] }); i++; j++;
+  }
+  return out;
 }

@@ -329,6 +329,7 @@ function latexPanel(source, settings, onSettings, onToggle) {
   const pages = h('div', { class: 'wtexpages' });
   const problems = h('div', { class: 'wtexprob', hidden: true });
   const logBox = h('pre', { class: 'texlog', hidden: true });
+  let toolRow = null;
   let lastPdf = null, lastTex = '', timer = 0, running = false, again = false, width = +localGet('ml.wtexWidth', '0') || 0;
   const grip = h('div', { class: 'wtexgrip', title: 'Drag to make the panel wider or narrower' });
   grip.addEventListener('pointerdown', e => {
@@ -351,7 +352,8 @@ function latexPanel(source, settings, onSettings, onToggle) {
     problems, pages,
     h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } },
       h('button', { class: 'btn quiet', style: { fontSize: '11.5px' }, onclick: () => { logBox.hidden = !logBox.hidden; } }, 'Log'),
-      h('button', { class: 'btn quiet', style: { fontSize: '11.5px' }, onclick: () => { if (lastTex) saveBlob(new Blob([lastTex], { type: 'text/plain' }), 'main.tex'); } }, 'The .tex')),
+      h('button', { class: 'btn quiet', style: { fontSize: '11.5px' }, onclick: () => { if (lastTex) saveBlob(new Blob([lastTex], { type: 'text/plain' }), 'main.tex'); } }, 'The .tex'),
+      toolRow = h('span', { class: 'row', style: { gap: '6px' } })),
     logBox);
 
   let shownDoc = null, redrawTimer = 0;
@@ -453,6 +455,7 @@ function latexPanel(source, settings, onSettings, onToggle) {
   }
   const api_ = {
     el,
+    addTool(label, title, run) { toolRow.append(h('button', { class: 'btn quiet', style: { fontSize: '11.5px' }, title, onclick: run }, label)); },
     isOpen: () => !el.hidden,
     settings: () => set,
     open() { el.hidden = false; localSet('ml.wtexOpen', '1'); onToggle && onToggle(true); compile(); },

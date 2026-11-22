@@ -53,6 +53,7 @@ function commentTextInlines(text) {
 }
 /** Pandoc inlines that open the comment [id] (and its replies, as further comments on the same words). */
 function commentStartInlines(id, cx, format) {
+  if (format === 'texmarks') return [{ t: 'RawInline', c: ['latex', `\\mlbegin{${id}}`] }];
   const c = cx.data[id], all = [c].concat(c.replies || []);
   return all.map((x, i) => {
     const text = (i === 0 && c.resolved ? RESOLVED_TAG : '') + (x.text || '');
@@ -61,6 +62,7 @@ function commentStartInlines(id, cx, format) {
   });
 }
 function commentEndInlines(id, cx, format) {
+  if (format === 'texmarks') return [{ t: 'RawInline', c: ['latex', `\\mlend{${id}}`] }];
   return cx.numbers[id].map(n => format === 'odt'
     ? { t: 'RawInline', c: ['opendocument', `<office:annotation-end office:name="cm${n}"/>`] }
     : { t: 'Span', c: [['', ['comment-end'], [['id', String(n)]]], []] }).reverse();
