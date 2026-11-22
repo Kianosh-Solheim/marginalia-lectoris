@@ -50,6 +50,51 @@ object PenMarks {
         return chosen.minOf { it.wordIndex }..chosen.maxOf { it.wordIndex }
     }
 
+    /**
+     * A loop drawn round some text (a lasso): the stroke ends near where it began and encloses an area.
+     * A loop that is not quite closed still counts when its ends are close compared with its size.
+     */
+    fun isLoop(points: List<Pair<Float, Float>>): Boolean {
+        if (points.size < 8) return false
+        val xs = points.map { it.first }; val ys = points.map { it.second }
+        val w = xs.max() - xs.min(); val h = ys.max() - ys.min()
+        if (w < 0.03f || h < 0.012f) return false
+        val diag = kotlin.math.hypot(w, h)
+        val (x0, y0) = points.first(); val (x1, y1) = points.last()
+        val gap = kotlin.math.hypot(x1 - x0, y1 - y0)
+        var length = 0f
+        for (i in 1 until points.size) length += kotlin.math.hypot(points[i].first - points[i - 1].first, points[i].second - points[i - 1].second)
+        // Closed enough, and the path goes most of the way round (not a line back and forth).
+        return gap <= maxOf(0.04f, diag * 0.28f) && length >= diag * 1.8f && kotlin.math.abs(area(points)) >= w * h * 0.25f
+    }
+
+    /** The words inside a loop (their middles within it): first..last word index, or null. */
+    fun lasso(words: List<PdfPageWord>, points: List<Pair<Float, Float>>): IntRange? {
+        val inside = words.filter { w ->
+            val cx = (w.leftRatio + w.rightRatio) / 2f; val cy = (w.topRatio + w.bottomRatio) / 2f
+            contains(points, cx, cy)
+        }
+        if (inside.isEmpty()) return null
+        return inside.minOf { it.wordIndex }..inside.maxOf { it.wordIndex }
+    }
+
+    private fun area(p: List<Pair<Float, Float>>): Float {
+        var a = 0f
+        for (i in p.indices) { val (x0, y0) = p[i]; val (x1, y1) = p[(i + 1) % p.size]; a += x0 * y1 - x1 * y0 }
+        return a / 2f
+    }
+    /** Is (x, y) inside the polygon [p] (closed from its last point to its first)? */
+    private fun contains(p: List<Pair<Float, Float>>, x: Float, y: Float): Boolean {
+        var inside = false
+        var j = p.size - 1
+        for (i in p.indices) {
+            val (xi, yi) = p[i]; val (xj, yj) = p[j]
+            if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / ((yj - yi).takeIf { it != 0f } ?: 1e-6f) + xi) inside = !inside
+            j = i
+        }
+        return inside
+    }
+
     /** At least a third of the word lies within the stroke's width (a word cut by the very tip still counts when short). */
     private fun overlap(word: PdfPageWord, minX: Float, maxX: Float): Boolean {
         val ww = (word.rightRatio - word.leftRatio).coerceAtLeast(0.0001f)

@@ -1112,7 +1112,10 @@ fun PdfReaderPagerContent(
                                                 return@pen
                                             }
                                             val norm = pts.map { toNormalized(it) }
+                                            // A loop round the text (a lasso): everything inside it, as a selection of its own.
+                                            val lassoed = if (com.example.reader.PenMarks.isLoop(norm)) com.example.reader.PenMarks.lasso(words, norm) else null
                                             val range: IntRange = when {
+                                                lassoed != null -> lassoed
                                                 com.example.reader.PenMarks.isDot(norm) -> {
                                                     val (rx, ry) = norm.first()
                                                     val i = findClosestPdfWordIndex(words, rx, ry) ?: return@pen
@@ -1128,7 +1131,7 @@ fun PdfReaderPagerContent(
                                             val now = System.currentTimeMillis()
                                             val cur = currentSelectedRange
                                             // Underlines made one after another (within a few seconds) make one selection.
-                                            val merged = if (cur != null && activeSelectionPageIdx == pageIndex && now - lastPenAt < 3000L)
+                                            val merged = if (lassoed == null && cur != null && activeSelectionPageIdx == pageIndex && now - lastPenAt < 3000L)
                                                 Pair(minOf(cur.first, range.first), maxOf(cur.second, range.last))
                                             else Pair(range.first, range.last)
                                             lastPenAt = now
