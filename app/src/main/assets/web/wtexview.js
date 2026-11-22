@@ -38,7 +38,8 @@ function texView(o) {
   const host = h('div', { class: 'wtexcode', hidden: true });
   const info = h('div', { class: 'wtexinfo muted' });
   const resetPre = h('button', { class: 'btn quiet', hidden: true, title: 'Use the preamble made from the ⚙ LaTeX settings again', onclick: () => resetPreamble() }, 'Reset the preamble');
-  const head = h('div', { class: 'wtexhead' }, h('b', null, 'LaTeX'), info, h('span', { style: { flex: 1 } }), resetPre,
+  const splitBtn = h('button', { class: 'btn quiet', onclick: () => api_.toggleSplit() }, 'Side by side');
+  const head = h('div', { class: 'wtexhead' }, h('b', null, 'LaTeX'), info, h('span', { style: { flex: 1 } }), resetPre, splitBtn,
     h('button', { class: 'btn quiet', title: 'Back to the visual view (Ctrl+Alt+X)', onclick: () => api_.toVisual() }, 'Visual ⇄'));
   const area = h('div', { class: 'wtexarea' });
   host.append(head, area);
@@ -61,7 +62,9 @@ function texView(o) {
       },
     });
     cm.on('change', () => {
+      if (applying) return;
       st.src = cm.getValue();
+      if (st.mode === 'split') { pending = 'latex'; schedule(); }
       clearTimeout(saveTimer); saveTimer = setTimeout(save, 800);
       o.onChange && o.onChange();
     });
@@ -117,44 +120,70 @@ function texView(o) {
     return found;
   }
 
-  async function toLatex(opts) {
-    if (busy || st.mode === 'latex' && !(opts && opts.force)) return;
+  /** The LaTeX from the visual view as it is now (your own preamble kept). */
+  async function freshTex() {
+    const x = await o.exportTex();
+    const parts = texSplit(x.tex);
+    st.genPreamble = parts.preamble; st.back = x.back;
+    return (st.preamble != null ? st.preamble : parts.preamble) + parts.body + parts.end;
+  }
+  /** Reads the LaTeX into the visual view, if it changed since the two were last the same. */
+  async function readBack(text) {
+    if (hashText(text) === st.synced) return false;
+    const parts = texSplit(text);
+    st.preamble = parts.preamble.trim() !== (st.genPreamble || '').trim() ? parts.preamble : null;
+    applying = true;
+    try { await o.importTex(text, st.back); } finally { applying = false; }
+    return true;
+  }
+  const markSynced = text => { st.src = text; st.base = docHash(); st.synced = hashText(text); };
+  const preSay = () => { resetPre.hidden = st.preamble == null; say(st.preamble != null ? 'your own preamble' : 'preamble from ⚙'); };
+  function setText(text, keepView) {
+    applying = true;
+    try {
+      if (keepView) { const sc = cm.getScrollInfo(), cur = cm.getCursor(); cm.setValue(text); cm.scrollTo(sc.left, sc.top); cm.setCursor({ line: Math.min(cur.line, cm.lineCount() - 1), ch: 0 }, null, { scroll: false }); }
+      else { cm.setValue(text); cm.clearHistory(); }
+    } finally { applying = false; }
+  }
+
+  /** To the LaTeX view (mode 'latex': LaTeX only; 'split': both side by side). */
+  async function toLatex(mode) {
+    mode = mode === 'split' ? 'split' : 'latex';
+    if (busy || st.mode === mode) return;
     busy = true;
     try {
-      say('writing the LaTeX…');
       await makeEditor();
-      const x = await o.exportTex();
-      const parts = texSplit(x.tex);
-      st.genPreamble = parts.preamble;
-      st.back = x.back;
+      if (st.mode === 'split' || st.mode === 'latex') {
+        // Between the two LaTeX layouts: bring the other side up to date first.
+        await syncNow();
+        st.mode = mode; show(); cm.refresh(); save(); return;
+      }
+      say('writing the LaTeX…');
       const h0 = docHash();
       // Unchanged in the visual view since: the LaTeX exactly as it was left.
-      const text = st.src && st.base === h0 ? st.src : (st.preamble != null ? st.preamble : parts.preamble) + parts.body + parts.end;
-      st.src = text; st.base = h0; st.mode = 'latex'; st.synced = hashText(text);
+      const text = st.src && st.base === h0 ? (await freshTex(), st.src) : await freshTex();
+      markSynced(text);
+      st.mode = mode;
       const line = lineForEditorPlace(text);
-      enter();
-      cm.setValue(text); cm.clearHistory();
-      cm.refresh(); cm.focus();
-      cm.setCursor({ line, ch: 0 }); cm.scrollIntoView({ line, ch: 0 }, 160);
-      resetPre.hidden = st.preamble == null;
-      say(st.preamble != null ? 'your own preamble' : 'preamble from ⚙');
-      save();
+      show();
+      setText(text);
+      cm.refresh(); if (mode === 'latex') cm.focus();
+      cm.setCursor({ line, ch: 0 }, null, { scroll: false }); cm.scrollIntoView({ line, ch: 0 }, 160);
+      preSay(); save();
     } catch (e) { fail(e); say(''); } finally { busy = false; }
   }
   async function toVisual() {
-    if (busy || st.mode !== 'latex') return;
+    if (busy || st.mode === 'visual') return;
     busy = true;
+    clearTimeout(syncTimer); pending = null;
     try {
       const text = cm.getValue();
       const line = cm.getCursor().line;
-      if (hashText(text) !== st.synced) {
-        say('reading the LaTeX…');
-        const parts = texSplit(text);
-        st.preamble = parts.preamble.trim() !== (st.genPreamble || '').trim() ? parts.preamble : null;
-        await o.importTex(text, st.back);
-      }
-      st.mode = 'visual'; st.src = text; st.base = docHash(); st.synced = hashText(text);
-      leave();
+      say('reading the LaTeX…');
+      await readBack(text);
+      markSynced(text);
+      st.mode = 'visual';
+      show();
       const pos = editorPlaceForLine(text, line);
       if (pos != null) { try { o.editor.chain().focus().setTextSelection(pos).scrollIntoView().run(); } catch (_) { o.editor.commands.focus(); } }
       else o.editor.commands.focus();
@@ -164,21 +193,68 @@ function texView(o) {
       say('');
     } finally { busy = false; }
   }
-  function enter() { host.hidden = false; o.sheet.hidden = true; o.wrap.classList.add('texmode'); o.onMode && o.onMode('latex'); }
-  function leave() { host.hidden = true; o.sheet.hidden = false; o.wrap.classList.remove('texmode'); o.onMode && o.onMode('visual'); }
+  function show() {
+    const m = st.mode;
+    host.hidden = m === 'visual';
+    o.sheet.hidden = m === 'latex';
+    o.wrap.classList.toggle('texmode', m === 'latex');
+    o.wrap.classList.toggle('texsplit', m === 'split');
+    splitBtn.textContent = m === 'split' ? 'LaTeX only' : 'Side by side';
+    splitBtn.title = m === 'split' ? 'Only the LaTeX (Ctrl+Alt+Shift+X)' : 'The visual view and the LaTeX side by side (Ctrl+Alt+Shift+X)';
+    o.onMode && o.onMode(m);
+  }
+
+  // ---- side by side: the side you write in leads; the other follows when you pause.
+  let pending = null, syncTimer = 0, applying = false;
+  const schedule = () => { clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), 1500); };
+  async function syncNow() {
+    clearTimeout(syncTimer);
+    const what = pending; pending = null;
+    if (!what || !cm) return;
+    if (syncing) { pending = what; schedule(); return; }
+    syncing = true;
+    try {
+      if (what === 'visual') {
+        say('following the visual view…');
+        const text = await freshTex();
+        if (pending === 'latex') return;          // you began writing in the LaTeX meanwhile
+        setText(text, true);
+        markSynced(text);
+      } else {
+        say('following the LaTeX…');
+        const text = cm.getValue();
+        const sc = document.scrollingElement ? document.scrollingElement.scrollTop : 0;
+        const inner = o.sheet.closest('.wscroll'), st2 = inner ? inner.scrollTop : 0;
+        await readBack(text);
+        markSynced(text);
+        if (document.scrollingElement) document.scrollingElement.scrollTop = sc; if (inner) inner.scrollTop = st2;
+      }
+      preSay(); save();
+    } catch (e) {
+      say(what === 'latex' ? 'the LaTeX could not be read: ' + String(e.message || e).slice(0, 120) : 'could not write the LaTeX');
+    } finally { syncing = false; if (pending) schedule(); }
+  }
+  let syncing = false;
 
   const api_ = {
     get mode() { return st.mode; },
-    toLatex, toVisual,
+    toLatex: () => toLatex('latex'), toVisual, toSplit: () => toLatex('split'),
     toggle() {
       // One press is one switch (the key can reach both the LaTeX editor and the page).
       const now = Date.now(); if (busy || now - lastToggle < 600) return; lastToggle = now;
-      return st.mode === 'latex' ? toVisual() : toLatex();
+      return st.mode === 'visual' ? toLatex('latex') : toVisual();
     },
-    text: () => (cm && st.mode === 'latex' ? cm.getValue() : null),
+    toggleSplit() {
+      const now = Date.now(); if (busy || now - lastToggle < 600) return; lastToggle = now;
+      return st.mode === 'split' ? toLatex('latex') : toLatex('split');
+    },
+    /** The visual text changed (side by side: the LaTeX follows). */
+    visualChanged() { if (st.mode !== 'split' || applying) return; pending = 'visual'; schedule(); },
+    /** The LaTeX to typeset: what is written there, unless the visual side has changes the LaTeX has not followed yet. */
+    text: () => (cm && (st.mode === 'latex' || (st.mode === 'split' && pending !== 'visual')) ? cm.getValue() : null),
     /** Opens the LaTeX view at a line (from an error in the PDF panel). */
     async gotoLine(n) {
-      if (st.mode !== 'latex') await toLatex();
+      if (st.mode === 'visual') await toLatex('latex');
       if (!cm) return;
       const l = Math.max(0, n - 1);
       cm.focus(); cm.setCursor({ line: l, ch: 0 }); cm.scrollIntoView({ line: l, ch: 0 }, 160);
@@ -187,16 +263,15 @@ function texView(o) {
     state: () => Object.assign({}, st),
     flush,
   };
-  // Opened in the LaTeX view last time: open there again, with the text as it was.
-  if (st.mode === 'latex' && st.src) {
+  // Opened in a LaTeX layout last time: open there again, with the text as it was.
+  if ((st.mode === 'latex' || st.mode === 'split') && st.src) {
+    const want = st.mode;
     st.mode = 'visual';
     setTimeout(async () => {
       await makeEditor();
       const keep = st.src;
-      st.mode = 'latex';
-      try { const x = await o.exportTex(); st.genPreamble = texSplit(x.tex).preamble; st.back = x.back; } catch (_) {}
-      enter(); cm.setValue(keep); cm.clearHistory(); cm.refresh();
-      resetPre.hidden = st.preamble == null; say(st.preamble != null ? 'your own preamble' : 'preamble from ⚙');
+      try { await freshTex(); } catch (_) {}
+      st.mode = want; show(); setText(keep); cm.refresh(); preSay();
     }, 50);
   }
   return api_;

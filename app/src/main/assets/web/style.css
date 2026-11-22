@@ -1442,3 +1442,7 @@ html[data-theme="dark"] .wtexarea .cm-tag { color: #8fb4ff; } html[data-theme="d
 html[data-theme="dark"] .wtexarea .cm-string, html[data-theme="dark"] .wtexarea .cm-string-2 { color: #7fd1a0; } html[data-theme="dark"] .wtexarea .cm-bracket { color: #e0c070; }
 html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .cm-number { color: #f0a060; }
 .texmode .wstylepop, .texmode .wstylelayer { display: none !important; }
+
+.texsplit .wsheetrow { justify-content: flex-start; padding-left: 8px; }
+.texsplit .wtexcode { flex: 1 1 0; min-width: 360px; max-width: none; margin: 0; position: sticky; top: 0; align-self: flex-start; }
+.texsplit .wtexarea .CodeMirror { height: calc(100vh - 150px); }

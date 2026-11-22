@@ -620,7 +620,7 @@ async function showWriter(id, params) {
         insertImages(fs, p ? p.pos : null); return true;
       },
     },
-    onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); recomputeSoon(); if (notesP) notesP.refresh(); if (texP) texP.changed(); },
+    onUpdate: () => { dirty = true; lastTyping = Date.now(); status.textContent = 'Editing…'; scheduleSave(); refresh(); recomputeSoon(); if (notesP) notesP.refresh(); if (texP) texP.changed(); if (texV) texV.visualChanged(); },
     onSelectionUpdate: () => { refreshBar(); if (commenting) commenting.selectionChanged(); if (outlineP) outlineP.refresh(); },
   });
 
@@ -693,9 +693,10 @@ async function showWriter(id, params) {
     toolbarButton('TeX PDF', 'The document set by LaTeX, beside the text; it follows as you write (Ctrl+Alt+P)', () => texP.toggle(), () => texP && texP.isOpen()),
     toolbarButton('\\TeX', 'Insert LaTeX that is kept as it is (your own commands, spacing, environments)', () => rawTexDialog(editor, null)),
     toolbarButton('LaTeX ⇄', 'Edit the whole .tex file; switch back and forth with the visual view (Ctrl+Alt+X)', () => texV.toggle(), () => texV && texV.mode === 'latex'),
+    toolbarButton('⫴ Side by side', 'The visual view and the LaTeX next to each other; the one you write in leads (Ctrl+Alt+Shift+X)', () => (texV.mode === 'split' ? texV.toVisual() : texV.toSplit()), () => texV && texV.mode === 'split'),
   ];
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
-  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]], ['LaTeX', [33, 31, 32]]];
+  const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]], ['LaTeX', [33, 34, 31, 32]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
@@ -892,7 +893,7 @@ async function showWriter(id, params) {
     if (e.ctrlKey && e.altKey && e.code === 'KeyS') { e.preventDefault(); styleP.toggle(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyL') { e.preventDefault(); lexP.toggle(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyP') { e.preventDefault(); texP.toggle(); }
-    if (e.ctrlKey && e.altKey && e.code === 'KeyX') { e.preventDefault(); texV.toggle(); }
+    if (e.ctrlKey && e.altKey && e.code === 'KeyX') { e.preventDefault(); if (e.shiftKey) texV.toggleSplit(); else texV.toggle(); }
     if (e.ctrlKey && e.altKey && e.key === 'Enter') { e.preventDefault(); if (!texP.isOpen()) texP.open(); else texP.compile(); }
     if (e.ctrlKey && e.altKey && e.code === 'KeyD') { e.preventDefault(); const mic = bar.querySelector('.wdict .dmic'); if (mic) mic.click(); }
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N' || e.code === 'KeyN')) { e.preventDefault(); notesP.toggle(); }
