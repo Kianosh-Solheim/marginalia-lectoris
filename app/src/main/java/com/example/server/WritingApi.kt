@@ -478,16 +478,22 @@ object CtanPackages {
         val info = client.newCall(Request.Builder().url("https://www.ctan.org/json/2.0/pkg/$name").build()).execute().use { r ->
             if (r.code == 404) throw NoSuchElementException("CTAN has no package called $name")
             check(r.isSuccessful) { "CTAN answered HTTP ${r.code}" }
-            JSONObject(r.body?.string().orEmpty())
+            runCatching { JSONObject(r.body?.string().orEmpty()) }.getOrElse { JSONObject() }
         }
-        if (info.has("errors") || (!info.has("ctan") && !info.has("install"))) throw NoSuchElementException("CTAN has no package called $name")
-        val install = info.opt("install").let { if (it is JSONObject) it.optString("path") else (it as? String).orEmpty() }
-        val ctanPath = info.optJSONObject("ctan")?.optString("path").orEmpty()
-        val urls = buildList {
+        if (info.has("errors")) throw NoSuchElementException("CTAN has no package called $name")
+        // The fields come as an object ({path, file}) or as a plain path, depending on the API version.
+        fun pathOf(v: Any?): String = when (v) { is JSONObject -> v.optString("path"); is String -> v; else -> "" }
+        val install = pathOf(info.opt("install"))
+        val ctanPath = pathOf(info.opt("ctan"))
+        val single = (info.opt("ctan") as? JSONObject)?.optBoolean("file") == true
+        val urls = LinkedHashSet<String>().apply {
             if (install.isNotBlank()) add("https://mirrors.ctan.org/install/" + install.trimStart('/'))
-            if (ctanPath.isNotBlank() && info.optJSONObject("ctan")?.optBoolean("file") != true) add("https://mirrors.ctan.org/" + ctanPath.trimStart('/') + ".zip")
-        }
-        check(urls.isNotEmpty()) { "CTAN gives no download for $name" }
+            if (ctanPath.isNotBlank()) add("https://mirrors.ctan.org/" + ctanPath.trimStart('/').removeSuffix("/") + if (single) "" else ".zip")
+            // Where most packages live, if CTAN did not say.
+            add("https://mirrors.ctan.org/macros/latex/contrib/$name.zip")
+            if (name.startsWith("biblatex-")) add("https://mirrors.ctan.org/macros/latex/contrib/biblatex-contrib/$name.zip")
+        }.toList()
+        Log.i(TAG, "CTAN $name: install=$install ctan=$ctanPath keys=${info.keys().asSequence().toList()}")
         val part = File(dir(ctx), "$name.part").apply { deleteRecursively(); mkdirs() }
         var kept = 0; var lastError = ""
         try {
@@ -495,7 +501,12 @@ object CtanPackages {
                 part.listFiles()?.forEach { it.delete() }; kept = 0
                 try {
                     client.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                        check(r.isSuccessful) { "Download failed (HTTP ${r.code})" }
+                        check(r.isSuccessful) { "Download failed (HTTP ${r.code}) from $url" }
+                        if (!url.endsWith(".zip")) {
+                            val fname = url.substringAfterLast('/')
+                            if (KEEP.containsMatchIn(fname)) { File(part, fname).outputStream().use { o -> r.body!!.byteStream().copyTo(o) }; kept++ }
+                            return@use
+                        }
                         var total = 0L
                         java.util.zip.ZipInputStream(r.body!!.byteStream().buffered(1 shl 16)).use { zip ->
                             while (true) {
