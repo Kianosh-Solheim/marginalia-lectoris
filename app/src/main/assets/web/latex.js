@@ -392,6 +392,8 @@ function latexPanel(source, settings, onSettings, onToggle) {
     pr.errors.slice(0, 4).forEach(e => items.push(h('div', null, h('b', null, e.line ? `Line ${e.line}: ` : ''), e.text,
       e.line && lines[e.line - 1] ? h('code', { class: 'wtexline' }, lines[e.line - 1].slice(0, 140)) : null)));
     if (r.styleNote) items.unshift(h('div', null, r.styleNote));
+    if (r.diagNote) items.unshift(h('div', null, r.diagNote));
+    if (!(r.pdf && r.pdf.length) && !pr.errors.length && !missing.length) items.push(h('div', null, 'LaTeX gave no message. Open the Log, or save “The .tex” and send it to be looked at.'));
     problems.hidden = !items.length;
     problems.append(...items);
   }
@@ -412,6 +414,17 @@ function latexPanel(source, settings, onSettings, onToggle) {
         r = await latexCompile({ files: src.files, main: 'main.tex', engine: set.engine, biber: true, onPrint });
         r.styleNote = `The biblatex style “${style.replace(/\.\w+$/, '')}” is not on the tablet yet, so the citations are shown in authoryear for now.`;
         r.missingFirst = [style];
+      }
+      // No PDF with the bibliography: once more without Biber, which also shows LaTeX's own error message
+      // (the runs before Biber are silent), and gives the pages with the citations unresolved.
+      if (!(r.pdf && r.pdf.length) && src.biber) {
+        const first = r;
+        const r2 = await latexCompile({ files: src.files, main: 'main.tex', engine: set.engine, biber: false, onPrint });
+        r2.log = (r2.log || '') + '\n\n==== the run with the bibliography ====\n\n' + (first.log || '');
+        r2.diagNote = r2.pdf && r2.pdf.length
+          ? 'The bibliography could not be made, so these pages have the citations unresolved. The message below says why, if LaTeX gave one.'
+          : 'LaTeX stopped. Its message is below, if it gave one.';
+        r = r2;
       }
       lastTex = src.tex;
       logBox.textContent = r.log || (r.logs || []).map(l => [l.cmd, l.stdout, l.stderr].filter(Boolean).join('\n')).join('\n\n');

@@ -122,7 +122,10 @@ function pmBlocksToPandoc(nodes, ctx, tight) {
   const out = [];
   for (const n of nodes || []) {
     switch (n.type) {
-      case 'paragraph': out.push({ t: tight ? 'Plain' : 'Para', c: pmInlinesToPandoc(n.content, ctx) }); break;
+      case 'paragraph':
+        // In the LaTeX view an empty line (a paragraph of nothing but line breaks) is kept as a marker of its own.
+        if (ctx && ctx.texMarkers && (n.content || []).length && n.content.every(c => c.type === 'hardBreak')) { out.push({ t: 'RawBlock', c: ['latex', '\\mlblank'.repeat(n.content.length)] }); break; }
+        out.push({ t: tight ? 'Plain' : 'Para', c: pmInlinesToPandoc(n.content, ctx) }); break;
       case 'heading': out.push({ t: 'Header', c: [n.attrs.level || 1, P.attr(), pmInlinesToPandoc(n.content, ctx)] }); break;
       case 'blockquote': out.push({ t: 'BlockQuote', c: pmBlocksToPandoc(n.content, ctx) }); break;
       case 'bulletList': out.push({ t: 'BulletList', c: (n.content || []).map(li => pmBlocksToPandoc(li.content, ctx, (li.content || []).length === 1)) }); break;
@@ -220,6 +223,7 @@ function pandocInlinesToPm(inls, marks, ctx) {
         const t = x.c[1]; let m;
         if ((m = /^\\mlbegin\{([^}]*)\}\s*$/.exec(t))) { if (ctx && ctx.cm) { ctx.cm.open.push(m[1]); ctx.cm.justStarted = null; } break; }
         if ((m = /^\\mlend\{([^}]*)\}\s*$/.exec(t))) { if (ctx && ctx.cm) ctx.cm.open = ctx.cm.open.filter(i => i !== m[1]); break; }
+        if (/^(\\mlblank\s*)+$/.test(t.trim())) { (t.match(/\\mlblank/g) || []).forEach(() => out.push({ type: 'hardBreak' })); break; }
         if (/^\\printbibliography/.test(t)) break;
         if (t.trim()) out.push({ type: 'rawTex', attrs: { tex: t } });
         break;
@@ -267,6 +271,7 @@ function pandocBlocksToPm(blocks, ctx) {
           out.push({ type: 'bibliography' }); break;
         }
         if (/^\\(mlbegin|mlend)\{/.test(t.trim())) break;
+        if (/^(\\mlblank\s*)+$/.test(t.trim())) { const k = (t.match(/\\mlblank/g) || []).length; out.push({ type: 'paragraph', content: Array.from({ length: k }, () => ({ type: 'hardBreak' })) }); break; }
         if (t.trim()) out.push({ type: 'rawTexBlock', attrs: { tex: t } });
         break;
       }
@@ -715,7 +720,7 @@ async function showWriter(id, params) {
         box.classList.add('wide');
         box.append(h('h2', null, 'Round-trip check'),
           h('p', null, diff.length ? `${diff.length >= 12 ? 'At least 12' : diff.length} block${diff.length === 1 ? '' : 's'} changed on the way to LaTeX and back (of ${a.length}):` : `All ${a.length} blocks came back the same — text, formatting, citations, footnotes, formulas, comments and LaTeX boxes.`),
-          ...[diff.length ? h('div', { class: 'rtdiff' }, diff.map(d => h('div', null, h('div', { class: 'muted mono', style: { fontSize: '11px' } }, 'Block ' + d.at), h('div', null, h('del', null, short(d.was))), h('div', null, h('ins', null, short(d.now)))))) : null].filter(Boolean),
+          ...[diff.length ? h('div', { class: 'rtdiff' }, diff.map(d => { const f = d.was != null && d.now != null ? firstDifference(d.was, d.now) : null; return h('div', null, h('div', { class: 'muted mono', style: { fontSize: '11px' } }, 'Block ' + d.at + (f ? ` · differs at character ${f.at}: …${f.before}[${f.was} → ${f.now}]` : '')), h('div', null, h('del', null, short(d.was))), h('div', null, h('ins', null, short(d.now)))); })) : null].filter(Boolean),
           ...[back.unknown && back.unknown.length ? h('p', { class: 'muted' }, 'Citation keys not found: ' + back.unknown.join(', ')) : null].filter(Boolean),
           h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: () => saveBlob(new Blob([x.tex], { type: 'text/plain' }), 'roundtrip.tex') }, 'The .tex'), h('button', { class: 'btn fill', onclick: close }, 'Close')));
       });

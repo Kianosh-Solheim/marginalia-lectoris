@@ -243,7 +243,7 @@ async function typstPdf(source, files) {
 // ------------------------------------------------------------------ LaTeX kept as it is
 
 /** The preamble line that makes Marginalia's markers do nothing (left out when a file comes back). */
-const TEX_MARKER_DEFS = '\\providecommand{\\mlbegin}[1]{}\\providecommand{\\mlend}[1]{}% marginalia';
+const TEX_MARKER_DEFS = '\\providecommand{\\mlbegin}[1]{}\\providecommand{\\mlend}[1]{}\\providecommand{\\mlblank}{\\par\\vspace{\\baselineskip}}% marginalia';
 
 /**
  * LaTeX the editor has no form of its own for (your own commands, \vspace, special environments):
@@ -350,7 +350,8 @@ function pmSignature(doc, citing) {
     if (n.type === 'hardBreak') return '↵';
     return (n.content || []).map(inl).join('');
   };
-  const norm = s => s.replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').replace(/⟨\/⟩⟨[^⟩]*⟩/g, '').trim();
+  const norm = s => s.replace(/[\u2018\u2019\u02BC]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/\u2026/g, '...').replace(/[\u00A0\u2009\u202F\u2007]/g, ' ')
+    .replace(/[\u200B\u00AD\uFEFF]/g, '').replace(/\s+/g, ' ').replace(/⟨([^⟩]*)⟩([^⟨]*)⟨\/⟩⟨\1⟩/g, '⟨$1⟩$2').replace(/ ⟨\/⟩/g, '⟨/⟩ ').replace(/⟨[^⟩/]+⟩⟨\/⟩/g, '').trim();
   const walk = (n, depth) => {
     for (const c of n.content || []) {
       if (['paragraph', 'heading'].includes(c.type)) { const t = norm((c.content || []).map(inl).join('')); out.push((c.type === 'heading' ? 'h' + c.attrs.level + ' ' : '') + t); }
@@ -375,4 +376,12 @@ function signatureDiff(a, b, max = 12) {
     out.push({ at: i + 1, was: a[i] === undefined ? null : a[i], now: b[j] === undefined ? null : b[j] }); i++; j++;
   }
   return out;
+}
+
+/** Where two versions of a block part: "…context [was → now]…" with invisible characters named. */
+function firstDifference(a, b) {
+  a = a || ''; b = b || '';
+  let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  const name = c => c === undefined ? '(end)' : (/\s/.test(c) || c.charCodeAt(0) > 126) ? `${c.trim() ? c + ' ' : ''}U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}` : c;
+  return { at: i, before: a.slice(Math.max(0, i - 40), i), was: name(a[i]), now: name(b[i]) };
 }
