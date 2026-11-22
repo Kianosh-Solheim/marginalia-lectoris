@@ -396,7 +396,21 @@ async function exportBlob(doc, title, ext, docId, citing, comments, keyed, sink,
     if (citing && JSON.stringify(doc).includes('"citation"')) { try { out = await citing.addZoteroPrefs(out, ext); } catch (e) { console.warn('Zotero preferences', e); } }
     return out;
   }
-  return new Blob([r.stdout || ''], { type: ext === 'html' ? 'text/html' : 'text/plain' });
+  let text = r.stdout || '';
+  if (ext === 'tex' && keyed && keyed.method === 'biblatex') text = texBiblatexPackage(text, keyed.style);
+  return new Blob([text], { type: ext === 'html' ? 'text/html' : 'text/plain' });
+}
+/**
+ * Chicago is loaded through its own package (biblatex-chicago), as its documentation asks: loaded as a
+ * plain biblatex style, \autocite and the like are left undefined.
+ */
+function texBiblatexPackage(tex, style) {
+  const m = /^chicago-(authordate|notes)(-trad)?$/.exec(style || '');
+  if (!m) return tex;
+  return tex.replace(/\\usepackage(\[([^\]]*)\])?\{biblatex\}/, (all, _o, opts) => {
+    const rest = String(opts || '').split(',').map(x => x.trim()).filter(x => x && !/^style=/.test(x));
+    return `\\usepackage[${[m[1] + (m[2] ? '-trad' : '')].concat(rest).join(',')}]{biblatex-chicago}`;
+  });
 }
 function saveBlob(blob, name) {
   const a = h('a', { href: URL.createObjectURL(blob), download: name });
