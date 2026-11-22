@@ -87,6 +87,57 @@ function latexWorker(collection, onPrint) {
   return latex.ready;
 }
 
+// ------------------------------------------------------------------ packages from CTAN
+
+/** The files of the packages fetched from CTAN, kept for this page (they go with every compile). */
+const ctanCache = { list: null, files: new Map() };
+async function ctanPackages(fresh) {
+  if (!ctanCache.list || fresh) ctanCache.list = (await api('writing/latex-pkgs')).packages || [];
+  return ctanCache.list;
+}
+async function ctanFiles() {
+  let list; try { list = await ctanPackages(); } catch (_) { return []; }
+  const out = [];
+  for (const p of list) for (const f of p.files) {
+    const k = p.name + '/' + f;
+    if (!ctanCache.files.has(k)) {
+      const r = await fetch(`/api/writing/latex-pkg-file?name=${encodeURIComponent(p.name)}&file=${encodeURIComponent(f)}`, { credentials: 'same-origin' });
+      if (!r.ok) continue;
+      ctanCache.files.set(k, new Uint8Array(await r.arrayBuffer()));
+    }
+    out.push({ path: f, content: ctanCache.files.get(k) });
+  }
+  return out;
+}
+/** Fetches a package from CTAN to the tablet (only when asked). */
+async function ctanFetch(name) {
+  toast(`Fetching ${name} from CTAN…`, 0);
+  const r = await api('writing/latex-pkg', { method: 'POST', json: { name }, timeout: 120000 });
+  ctanCache.list = r.packages || []; ctanCache.files.clear();
+  const p = ctanCache.list.find(x => x.name === name);
+  toast(p ? `${name} is ready (${p.files.length} files)` : `${name} fetched`, 2500);
+  return p;
+}
+/** The CTAN package a missing file probably belongs to. */
+function ctanGuess(file) {
+  const stem = file.replace(/\.[^.]+$/, '');
+  if (/\.(bbx|cbx|lbx|dbx)$/.test(file)) {
+    if (/^chicago/.test(stem)) return 'biblatex-chicago';
+    if (/^(apa|apa6)$/.test(stem)) return 'biblatex-' + stem;
+    return 'biblatex-' + stem.split('-')[0];
+  }
+  if (/^cms-/.test(stem)) return 'biblatex-chicago';
+  return stem;
+}
+/** The biblatex style that matches the citation style chosen in the writing program. */
+function biblatexStyleFor(citing) {
+  const l = String((citing && citing.styleLabel) || '');
+  if (/chicago/i.test(l)) return /author[- ]?date/i.test(l) ? 'chicago-authordate' : 'chicago-notes';
+  if (/apa|american psychological/i.test(l)) return 'apa';
+  if (/\bmla\b|modern language/i.test(l)) return 'mla';
+  return citing && citing.isNote ? 'verbose' : 'authoryear';
+}
+
 const LATEX_DRIVERS = { pdflatex: 'pdftex_bibtex8', xelatex: 'xetex_bibtex8_dvipdfmx', lualatex: 'luahbtex_bibtex8' };
 
 /**
@@ -97,6 +148,9 @@ function latexCompile({ files, main = 'main.tex', engine = 'pdflatex', bibtex = 
   const run = async () => {
     const st = await ensureLatex('LaTeX is needed to make this PDF.');
     const t0 = performance.now();
+    const extra = await ctanFiles();
+    const have = new Set(files.map(f => f.path));
+    files = files.concat(extra.filter(f => !have.has(f.path)));
     const w = await latexWorker(st.collection, onPrint);
     latex.progress = onPrint || null;
     return new Promise((resolve, reject) => {
@@ -214,6 +268,21 @@ function latexSettingsSection() {
   const sec = h('section', { class: 'set-group', id: 'set-latex' }, h('h2', null, 'LaTeX'));
   const body = h('div');
   sec.append(h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Real LaTeX (TeX Live 2026) for PDFs from your writing. It is kept on the tablet and compiles in your browser.'), body);
+  const ctanList = h('div', { class: 'ctanlist' });
+  const ctanIn = h('input', { placeholder: 'CTAN name, e.g. biblatex-chicago', spellcheck: 'false', style: { maxWidth: '240px' } });
+  const ctanAdd = async () => { const n = ctanIn.value.trim(); if (!n) return; try { await ctanFetch(n); ctanIn.value = ''; drawCtan(); } catch (e) { fail(e); } };
+  ctanIn.addEventListener('keydown', e => { if (e.key === 'Enter') ctanAdd(); });
+  const drawCtan = async () => {
+    clear(ctanList);
+    let list = []; try { list = await ctanPackages(true); } catch (_) {}
+    if (!list.length) ctanList.append(h('div', { class: 'muted', style: { fontSize: '12px' } }, 'None yet.'));
+    list.forEach(p => ctanList.append(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', fontSize: '13px' } },
+      h('b', null, p.name), h('span', { class: 'muted mono', style: { fontSize: '11px' } }, `${p.version ? 'v' + p.version + ' · ' : ''}${p.files.length} files · ${Math.max(1, Math.round(p.bytes / 1024))} KB`),
+      h('button', { class: 'btn quiet', onclick: async () => { try { ctanCache.list = (await api('writing/latex-pkg?name=' + encodeURIComponent(p.name), { method: 'DELETE' })).packages; ctanCache.files.clear(); drawCtan(); } catch (e) { fail(e); } } }, 'Remove'))));
+  };
+  const ctanRow = h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Packages from CTAN'), h('div', { class: 'muted' }, 'Packages that are not in the collection, such as biblatex-chicago. Fetched when you press, kept on the tablet, and used in every compile.')),
+    h('div', null, ctanList, h('div', { class: 'row', style: { gap: '6px', marginTop: '6px' } }, ctanIn, h('button', { class: 'btn', onclick: ctanAdd }, 'Fetch'))));
+  drawCtan();
   const draw = st => {
     clear(body);
     const col = LATEX_COLLECTIONS.find(c => c[0] === st.collection);
@@ -225,6 +294,7 @@ function latexSettingsSection() {
           h('span', null, st.running ? `Downloading (${st.installing})… ${Math.round(st.done / 1048576)} of ${Math.round((st.total || 0) / 1048576)} MB` : col ? `${col[1]} collection (${st.sizes[col[0]]} MB)` : '—'),
           h('button', { class: 'btn', disabled: st.running, onclick: async () => { try { draw(await ensureLatex()); } catch (e) { if (!/needed/.test(e.message)) fail(e); } } }, st.installed ? 'Change collection…' : 'Download…'),
           st.installed ? h('button', { class: 'btn', onclick: latexTest }, 'Compile a test') : null)),
+      ctanRow,
       h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('b', null, 'Packages online'), h('div', { class: 'muted' }, 'A TeX Live server that missing packages are fetched from while compiling (only then). In this browser.')), remote));
   };
   api('writing/latex-status').then(draw).catch(() => body.append(h('div', { class: 'muted' }, 'Could not ask the tablet.')));
@@ -310,8 +380,13 @@ function latexPanel(source, settings, onSettings, onToggle) {
     clear(problems);
     const lines = tex.split('\n');
     const items = [];
-    if (pr.missing.length) items.push(h('div', null, h('b', null, 'Missing: '), pr.missing.join(', '), '. ', set.clsFile ? '' : 'Not in your LaTeX collection, and not found online.',
-      latex.collection !== 'extra' ? h('button', { class: 'btn quiet', onclick: () => ensureLatex(null, 'extra').then(() => api_.compile()).catch(fail) }, 'Get the Full collection') : null));
+    const missing = r.missingFirst || pr.missing;
+    if (missing.length) {
+      const guesses = [...new Set(missing.map(ctanGuess))];
+      items.push(h('div', null, h('b', null, 'Missing: '), missing.join(', '), '. Not in your LaTeX collection, and not found online. ',
+        ...guesses.map(g => h('button', { class: 'btn quiet', title: 'Fetch it from CTAN to the tablet; it is used in every compile from then on', onclick: () => ctanFetch(g).then(() => api_.compile()).catch(fail) }, `Fetch ${g} from CTAN`)),
+        latex.collection !== 'extra' ? h('button', { class: 'btn quiet', onclick: () => ensureLatex(null, 'extra').then(() => api_.compile()).catch(fail) }, 'Get the Full collection') : null));
+    }
     pr.errors.slice(0, 4).forEach(e => items.push(h('div', null, h('b', null, e.line ? `Line ${e.line}: ` : ''), e.text,
       e.line && lines[e.line - 1] ? h('code', { class: 'wtexline' }, lines[e.line - 1].slice(0, 140)) : null)));
     if (r.styleNote) items.unshift(h('div', null, r.styleNote));
@@ -333,7 +408,8 @@ function latexPanel(source, settings, onSettings, onToggle) {
       if (style && src.biber) {
         src = await source(Object.assign({}, set, { style: 'authoryear' }));
         r = await latexCompile({ files: src.files, main: 'main.tex', engine: set.engine, biber: true, onPrint });
-        r.styleNote = `The biblatex style “${style.replace(/\.\w+$/, '')}” is not available here, so the citations are shown in authoryear. Choose another style under ⚙.`;
+        r.styleNote = `The biblatex style “${style.replace(/\.\w+$/, '')}” is not on the tablet yet, so the citations are shown in authoryear for now.`;
+        r.missingFirst = [style];
       }
       lastTex = src.tex;
       logBox.textContent = r.log || (r.logs || []).map(l => [l.cmd, l.stdout, l.stderr].filter(Boolean).join('\n')).join('\n\n');

@@ -652,7 +652,7 @@ async function showWriter(id, params) {
     let keyed = null;
     try {
       const info = await resolveCiteKeys(citing, doc);
-      if (Object.keys(info.keys).length) keyed = { keys: info.keys, method: 'biblatex', style: set.style || localGet('ml.wbiblatexStyle', /apa|american psychological/i.test(citing.styleLabel) ? 'apa' : citing.isNote ? 'verbose' : 'authoryear'), bibName: 'references.bib' };
+      if (Object.keys(info.keys).length) keyed = { keys: info.keys, method: 'biblatex', style: set.style || biblatexStyleFor(citing), bibName: 'references.bib' };
     } catch (e) { console.warn('citation keys', e); }
     const sink = {};
     const tex = await (await exportBlob(doc, title, 'tex', docId, citing, commenting.settings(), keyed, sink, set)).text();
@@ -888,7 +888,7 @@ async function showWriter(id, params) {
         : ext === 'md' ? [['keys', 'Citation keys — [@key, p. 275]', 'For Pandoc, Quarto, Obsidian and Zettlr, with the .bib file.'], ['text', 'Formatted text', 'The citations as they look here, no keys.']] : [['biblatex', 'BibLaTeX', 'For biblatex and biber.'], ['natbib', 'BibTeX', 'For natbib and bibtex.']];
       let method = choices.some(c => c[0] === last) ? last : choices[0][0];
       const list = h('div', { class: 'wnmodes' });
-      const style = h('input', { value: localGet('ml.wbiblatexStyle', /apa|american psychological/i.test(citing.styleLabel) ? 'apa' : citing.isNote ? 'verbose' : 'authoryear'), style: { width: '160px' } });
+      const style = h('input', { value: localGet('ml.wbiblatexStyle', biblatexStyleFor(citing)), style: { width: '160px' } });
       const styleRow = h('label', { class: 'row', style: { gap: '6px', fontSize: '13px', alignItems: 'center', marginBottom: '8px' } }, 'biblatex style', style, h('span', { class: 'muted' }, 'e.g. apa, authoryear, verbose, chicago-authordate'));
       const draw = () => {
         clear(list); choices.forEach(([k, l, d]) => list.append(h('button', { class: 'wnmode' + (k === method ? ' on' : ''), onclick: () => { method = k; draw(); } }, h('b', null, l), h('div', { class: 'muted' }, d))));

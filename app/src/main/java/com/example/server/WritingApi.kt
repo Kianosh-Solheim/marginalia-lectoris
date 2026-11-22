@@ -106,6 +106,10 @@ class WritingApi(private val context: Context) {
                 }
                 HttpResponse.FileBody(f, type).header("Cache-Control", "max-age=31536000, immutable")
             }
+            first == "latex-pkgs" -> HttpResponse.json(CtanPackages.list(context).toString())
+            first == "latex-pkg" && m == "POST" -> HttpResponse.json(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { CtanPackages.fetch(context, JSONObject(req.bodyText()).optString("name").trim()) }.toString())
+            first == "latex-pkg" && m == "DELETE" -> { CtanPackages.remove(context, req.query["name"].orEmpty()); HttpResponse.json(CtanPackages.list(context).toString()) }
+            first == "latex-pkg-file" -> HttpResponse.FileBody(CtanPackages.file(context, req.query["name"].orEmpty(), req.query["file"].orEmpty()), "application/octet-stream")
             first == "pandoc-status" -> HttpResponse.json(Pandoc.status(context).toString())
             first == "pandoc-install" && m == "POST" -> { Pandoc.install(context); HttpResponse.json(Pandoc.status(context).toString()) }
             first == "pandoc.wasm" -> {
@@ -433,5 +437,91 @@ object LatexEngine {
     private fun skipN(i: java.io.InputStream, n: Long) {
         val buf = ByteArray(1 shl 16); var left = n
         while (left > 0) { val r = i.read(buf, 0, minOf(buf.size.toLong(), left).toInt()); if (r < 0) break; left -= r }
+    }
+}
+
+
+/**
+ * LaTeX packages from CTAN that are not in the TeX Live collection (biblatex-chicago, for one): fetched
+ * by name when asked, kept on the tablet, and handed to the browser with every compile.
+ */
+object CtanPackages {
+    private const val TAG = "CtanPackages"
+    private val NAME = Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
+    private val KEEP = Regex("\\.(sty|cls|clo|bbx|cbx|lbx|dbx|def|cfg|fd|ldf|tex|bst|bib|lua|ist|csv)$", RegexOption.IGNORE_CASE)
+    private const val MAX_BYTES = 40L shl 20
+    fun dir(ctx: Context) = File(ctx.filesDir, "latex/ctan")
+    private fun pkgDir(ctx: Context, name: String): File { require(NAME.matches(name)) { "Not a CTAN package name: $name" }; return File(dir(ctx), name) }
+
+    fun list(ctx: Context): JSONObject {
+        val arr = JSONArray()
+        dir(ctx).listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }?.forEach { d ->
+            val files = d.listFiles()?.filter { it.isFile && it.name != "about.json" }?.sortedBy { it.name }.orEmpty()
+            val about = File(d, "about.json").takeIf { it.isFile }?.let { runCatching { JSONObject(it.readText()) }.getOrNull() }
+            arr.put(JSONObject().put("name", d.name).put("version", about?.optString("version").orEmpty())
+                .put("files", JSONArray(files.map { it.name })).put("bytes", files.sumOf { it.length() }))
+        }
+        return JSONObject().put("packages", arr)
+    }
+
+    fun file(ctx: Context, name: String, file: String): File {
+        require(!file.contains('/') && !file.contains('\\') && !file.startsWith(".")) { "Bad file name" }
+        return File(pkgDir(ctx, name), file).takeIf { it.isFile && it.name != "about.json" } ?: throw NoSuchElementException("No such file")
+    }
+
+    fun remove(ctx: Context, name: String) { pkgDir(ctx, name).deleteRecursively() }
+
+    /** Fetches [name] from CTAN (its TDS zip when there is one, otherwise the package folder). */
+    fun fetch(ctx: Context, name: String): JSONObject {
+        val target = pkgDir(ctx, name)
+        val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).followRedirects(true).build()
+        val info = client.newCall(Request.Builder().url("https://www.ctan.org/json/2.0/pkg/$name").build()).execute().use { r ->
+            if (r.code == 404) throw NoSuchElementException("CTAN has no package called $name")
+            check(r.isSuccessful) { "CTAN answered HTTP ${r.code}" }
+            JSONObject(r.body?.string().orEmpty())
+        }
+        if (info.has("errors") || (!info.has("ctan") && !info.has("install"))) throw NoSuchElementException("CTAN has no package called $name")
+        val install = info.opt("install").let { if (it is JSONObject) it.optString("path") else (it as? String).orEmpty() }
+        val ctanPath = info.optJSONObject("ctan")?.optString("path").orEmpty()
+        val urls = buildList {
+            if (install.isNotBlank()) add("https://mirrors.ctan.org/install/" + install.trimStart('/'))
+            if (ctanPath.isNotBlank() && info.optJSONObject("ctan")?.optBoolean("file") != true) add("https://mirrors.ctan.org/" + ctanPath.trimStart('/') + ".zip")
+        }
+        check(urls.isNotEmpty()) { "CTAN gives no download for $name" }
+        val part = File(dir(ctx), "$name.part").apply { deleteRecursively(); mkdirs() }
+        var kept = 0; var lastError = ""
+        try {
+            for (url in urls) {
+                part.listFiles()?.forEach { it.delete() }; kept = 0
+                try {
+                    client.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                        check(r.isSuccessful) { "Download failed (HTTP ${r.code})" }
+                        var total = 0L
+                        java.util.zip.ZipInputStream(r.body!!.byteStream().buffered(1 shl 16)).use { zip ->
+                            while (true) {
+                                val e = zip.nextEntry ?: break
+                                val path = e.name
+                                // From a TDS zip only what TeX reads (tex/, bibtex/); from a folder zip the files themselves.
+                                val inTds = path.startsWith("tex/") || path.startsWith("bibtex/")
+                                val wanted = !e.isDirectory && KEEP.containsMatchIn(path) && (url.contains("/install/") == inTds || !url.contains("/install/")) &&
+                                    !path.contains("/doc/") && !path.substringAfterLast('/').startsWith(".")
+                                if (wanted) {
+                                    val out = File(part, path.substringAfterLast('/'))
+                                    out.outputStream().use { o -> total += zip.copyTo(o) }
+                                    check(total <= MAX_BYTES) { "$name is too large" }
+                                    kept++
+                                }
+                            }
+                        }
+                    }
+                    if (kept > 0) break
+                } catch (e: Exception) { lastError = e.message ?: e.toString(); Log.w(TAG, "fetch $url", e) }
+            }
+            check(kept > 0) { if (lastError.isNotBlank()) lastError else "$name has no files LaTeX can use directly (it may need to be built from its source)" }
+            File(part, "about.json").writeText(JSONObject().put("version", info.optJSONObject("version")?.optString("number").orEmpty()).put("license", info.opt("license")?.toString().orEmpty()).toString())
+            target.deleteRecursively()
+            check(part.renameTo(target)) { "Could not put the files in place" }
+        } finally { part.deleteRecursively() }
+        return list(ctx)
     }
 }
