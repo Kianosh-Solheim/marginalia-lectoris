@@ -129,6 +129,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 }
             }
             s == listOf("style-check") && m == "POST" -> return styleCheck(req)
+            s == listOf("rephrase") && m == "POST" -> return rephrase(req)
             s == listOf("highlights") && m == "GET" -> return HttpResponse.json(allHighlights().toString())
             s == listOf("tags") && m == "GET" -> {
                 val t = com.example.ui.TagIndex.load(context)
@@ -901,6 +902,42 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 text, maxTokens = 4000, maxChars = 14000)
         } catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The AI check failed.") }
         return HttpResponse.json(JSONObject().put("issues", o.optJSONArray("issues") ?: JSONArray()).toString()).header("Cache-Control", "no-store")
+    }
+
+    /**
+     * Other words for a word, or other ways to put a passage, in formal British academic English (only when asked).
+     * Tokens like ⟦1⟧ stand for citations, footnotes and formulas and are kept as they are.
+     */
+    private fun rephrase(req: HttpRequest): HttpResponse {
+        val b = runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject())
+        val text = b.optString("text").trim()
+        require(text.isNotBlank()) { "Select a word or a passage first." }
+        require(text.length <= 3000) { "Select less text (a sentence or a short paragraph)." }
+        val before = b.optString("before").takeLast(400); val after = b.optString("after").take(400)
+        val words = b.optJSONArray("lexicon")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }.take(150) }.orEmpty()
+        val latex = b.optBoolean("latex")
+        val avoid = b.optJSONArray("avoid")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty().take(40)
+        val style = "formal British academic English with Oxford spelling (-ize where Oxford uses it: organize, recognize; but analyse, colour, centre, travelled), no contractions, no colloquialisms"
+        val lex = if (words.isNotEmpty()) " The writer keeps a list of favourite words; where one of them fits naturally, prefer it: ${words.joinToString(", ")}." else ""
+        val keep = (if (text.contains('⟦')) " Tokens such as ⟦1⟧ stand for citations, footnotes or formulas: keep each of them exactly once, unchanged, in a sensible place." else "") +
+            (if (latex) " The text is LaTeX source: keep every LaTeX command, its arguments and the citation commands exactly as they are." else "")
+        val again = if (avoid.isNotEmpty()) " Do not repeat any of these earlier suggestions: ${avoid.joinToString(" | ")}." else ""
+        val passage = "Text before: «$before»\nSELECTED: «$text»\nText after: «$after»"
+        val o = try {
+            if (b.optString("kind") == "synonyms") com.example.reader.NoteAiAssistant.askJson(context,
+                "You are a careful editor of academic prose. Suggest up to 14 words or short phrases that could replace the SELECTED word or phrase in this sentence, " +
+                    "keeping its meaning in this context, in $style. Give each in the grammatical form that fits the sentence as it stands " +
+                    "(same number, tense and part of speech), ordered from the best fit. For each add a short note (a few words) on its nuance or register.$lex$again " +
+                    "Return only JSON: {\"synonyms\": [{\"text\": string, \"note\": string}]}.",
+                passage, maxTokens = 1200, maxChars = 6000)
+            else com.example.reader.NoteAiAssistant.askJson(context,
+                "You are a careful editor of academic prose. Rewrite the SELECTED passage in five to seven different ways, in $style, each fitting the text around it " +
+                    "and keeping its meaning, claims and hedging. Label each with what it does, for example: Shorter, More formal, Clearer, More precise, " +
+                    "Different emphasis, Active voice, Smoother flow. Give only the replacement for the selected passage, not the text around it.$keep$lex$again " +
+                    "Return only JSON: {\"variants\": [{\"label\": string, \"text\": string}]}.",
+                passage, maxTokens = 2400, maxChars = 6000)
+        } catch (e: IllegalStateException) { throw IllegalArgumentException(e.message ?: "The AI could not be asked.") }
+        return HttpResponse.json(JSONObject().put("synonyms", o.optJSONArray("synonyms") ?: JSONArray()).put("variants", o.optJSONArray("variants") ?: JSONArray()).toString()).header("Cache-Control", "no-store")
     }
 
     /** The tablet's screen in the browser: status, start/stop, the newest picture, and input. */

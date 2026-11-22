@@ -794,6 +794,36 @@ async function showWriter(id, params) {
     onCompile: () => { if (!texP.isOpen()) texP.open(); else texP.compile(); },
   });
   texP.onLine = n => texV.gotoLine(n);
+  // Right-click on selected text: other words, other phrasings (wrephrase.js).
+  editor.view.dom.addEventListener('contextmenu', e => {
+    const sel = editor.state.selection;
+    if (sel.empty || !sel.$from.sameParent(sel.$to) || !sel.$from.parent.isTextblock) return;
+    const from = sel.from, to = sel.to, atoms = [];
+    let text = '';
+    editor.state.doc.nodesBetween(from, to, (n, pos) => {
+      if (n.isText) text += n.text.slice(Math.max(0, from - pos), to - pos);
+      else if (n.isInline) { atoms.push(n.toJSON()); text += `⟦${atoms.length}⟧`; }
+      return true;
+    });
+    const par = sel.$from.parent, start = sel.$from.start();
+    const before = par.textBetween(0, from - start, ' ', ' ').slice(-300), after = par.textBetween(to - start, par.content.size, ' ', ' ').slice(0, 300);
+    const marks = (editor.state.doc.nodeAt(from) || { marks: [] }).marks.map(m => m.toJSON());
+    let range = { from, to };
+    phraseMenu(e, { text, before, after, latex: false, replace: t2 => {
+      // Text with the citations, notes and formulas put back where their tokens are.
+      const content = [];
+      t2.split(/(⟦\d+⟧)/).forEach(part => {
+        const m = /^⟦(\d+)⟧$/.exec(part);
+        if (m) { const a = atoms[+m[1] - 1]; if (a) content.push(a); }
+        else if (part) content.push(Object.assign({ type: 'text', text: part }, marks.length ? { marks } : {}));
+      });
+      // Tokens the new text left out are added at its end, so nothing is lost.
+      atoms.forEach((a, i) => { if (!t2.includes(`⟦${i + 1}⟧`)) content.push(a); });
+      const size = content.reduce((s, c) => s + (c.type === 'text' ? c.text.length : 1), 0);
+      editor.chain().focus().insertContentAt(range, content).setTextSelection({ from: range.from, to: range.from + size }).run();
+      range = { from: range.from, to: range.from + size };
+    } });
+  });
   try { new ResizeObserver(() => styleC.paintSoon()).observe(wbody.querySelector('.wsheet')); } catch (_) {}
   const placeNotes = () => { const t = (app.querySelector('.wtop') || {}).offsetHeight + bar.offsetHeight || 90; notesP.el.style.top = t + 'px'; notesP.el.style.height = `calc(100vh - ${t}px)`; if (outlineP) { outlineP.el.style.top = t + 'px'; outlineP.el.style.height = `calc(100vh - ${t}px)`; } if (lexP) { lexP.el.style.top = t + 'px'; lexP.el.style.height = `calc(100vh - ${t}px)`; } if (styleP) { styleP.el.style.top = t + 'px'; styleP.el.style.height = `calc(100vh - ${t}px)`; } if (texP) { texP.el.style.top = t + 'px'; texP.el.style.height = `calc(100vh - ${t}px)`; } };
   window.addEventListener('resize', placeNotes);

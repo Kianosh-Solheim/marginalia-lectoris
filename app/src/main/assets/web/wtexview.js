@@ -61,6 +61,14 @@ function texView(o) {
         'Ctrl-/': c => toggleComment(c), 'Cmd-/': c => toggleComment(c),
       },
     });
+    // Right-click on selected LaTeX: other words, other phrasings.
+    cm.getWrapperElement().addEventListener('contextmenu', e => {
+      if (!cm.somethingSelected()) return;
+      let from = cm.getCursor('from'), to = cm.getCursor('to');
+      const line = cm.getLine(from.line);
+      phraseMenu(e, { text: cm.getSelection(), before: line.slice(0, from.ch), after: cm.getLine(to.line).slice(to.ch), latex: true,
+        replace: t2 => { cm.replaceRange(t2, from, to); const end = cm.posFromIndex(cm.indexFromPos(from) + t2.length); cm.setSelection(from, end); to = end; } });
+    });
     cm.on('change', () => {
       if (applying) return;
       st.src = cm.getValue();

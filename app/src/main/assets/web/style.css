@@ -1446,3 +1446,21 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .texsplit .wsheetrow { justify-content: flex-start; padding-left: 8px; }
 .texsplit .wtexcode { flex: 1 1 0; min-width: 360px; max-width: none; margin: 0; position: sticky; top: 0; align-self: flex-start; }
 .texsplit .wtexarea .CodeMirror { height: calc(100vh - 150px); }
+
+/* Other words, other phrasings */
+.phrasepop { position: fixed; z-index: 200; width: 420px; max-height: min(70vh, 560px); overflow: auto; background: var(--paper); color: var(--ink); border: 1.5px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); padding: 0 12px 12px; font-size: 13px; }
+.phrasehead { position: sticky; top: 0; background: var(--paper); display: flex; align-items: center; gap: 8px; padding: 8px 0 6px; border-bottom: 1px solid var(--line); z-index: 1; }
+.phrasefor { font-family: var(--serif, Georgia, serif); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.phrasesec { margin-top: 10px; }
+.phraselabel { font: 600 10.5px var(--mono, monospace); text-transform: uppercase; letter-spacing: .05em; opacity: .65; margin-bottom: 4px; }
+.phrasesense { margin: 6px 0 8px; }
+.phrasegloss { font-size: 12px; opacity: .8; margin-bottom: 3px; }
+.phrasechips { display: flex; flex-wrap: wrap; gap: 4px; }
+.phrasechip { border: 1px solid var(--line); background: var(--card); color: inherit; padding: 2px 8px; font: inherit; cursor: pointer; border-radius: 3px; text-align: left; }
+.phrasechip:hover { border-color: var(--ink); }
+.phrasenote { display: block; font-size: 11px; opacity: .6; }
+.phrasebtns { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.phraselist { display: grid; gap: 6px; margin-top: 10px; }
+.phrasevar { display: grid; gap: 2px; text-align: left; border: 1px solid var(--line); background: var(--card); color: inherit; padding: 6px 8px; cursor: pointer; font: inherit; }
+.phrasevar:hover { border-color: var(--ink); }
+.phrasetext { font-family: var(--serif, Georgia, serif); font-size: 14px; line-height: 1.4; }
