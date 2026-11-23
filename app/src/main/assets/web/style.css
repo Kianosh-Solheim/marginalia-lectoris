@@ -1520,3 +1520,8 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .crsbar { width: 220px; height: 8px; border: 1px solid var(--ink); display: flex; } .crsbar .d { background: var(--green); } .crsbar .s { background: var(--amber); opacity: .6; }
 .crspill { position: fixed; left: 14px; bottom: 44px; z-index: 60; display: flex; align-items: center; gap: 8px; background: var(--paper); border: 1.5px solid var(--ink); box-shadow: 2px 2px 0 var(--ink); padding: 3px 4px 3px 10px; font-size: 12.5px; }
 .crspill a { font: 700 12px var(--mono); color: inherit; } .crspill .btn.on { background: var(--green); color: #fff; }
+
+.crsfound { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; border-bottom: 1px dotted var(--line); font-size: 13px; }
+.crsrevsess { border: 1px solid var(--line); padding: 8px 10px; margin: 6px 0; font-size: 13px; background: var(--card); }
+.crsrevread { display: grid; grid-template-columns: 1fr minmax(200px, 40%); gap: 8px; align-items: center; padding: 4px 0 4px 12px; border-top: 1px dashed var(--line); }
+.crsrevread select { font-size: 12px; }

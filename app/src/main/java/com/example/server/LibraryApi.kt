@@ -157,6 +157,18 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 val b = JSONObject(req.bodyText())
                 return HttpResponse.json(com.example.reader.Courses.write(context, b.getJSONObject("data"), b.optLong("version", -1)).toString())
             }
+            s.size == 2 && s[0] == "courses" && m == "POST" -> {
+                val b = runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject())
+                val out = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    when (s[1]) {
+                        "fetch-page" -> com.example.reader.Courses.fetchCourse(context, b.optString("url").trim())
+                        "fetch-person" -> com.example.reader.Courses.fetchPerson(context, b.optString("url").trim())
+                        "parse-outline" -> com.example.reader.Courses.parseOutline(context, b.optString("text"), b.optString("year"))
+                        else -> throw NoSuchElementException("No such action")
+                    }
+                }
+                return HttpResponse.json(out.toString()).header("Cache-Control", "no-store")
+            }
             s.size == 2 && s[0] == "course-photo" && m == "GET" -> return HttpResponse.FileBody(com.example.reader.Courses.photo(context, s[1]), if (s[1].endsWith(".png")) "image/png" else "image/jpeg").header("Cache-Control", "max-age=31536000, immutable")
             s == listOf("course-photo") && m == "POST" -> return HttpResponse.json(JSONObject().put("name", com.example.reader.Courses.savePhoto(context, req.body.readBytes().also { require(it.size <= 6 * 1024 * 1024) { "The picture is too large" } }, req.header("content-type"))).toString())
             s == listOf("search") && m == "GET" -> return searchAll(req)

@@ -185,6 +185,8 @@ async function showCourse(id) {
   main.append(h('div', { class: 'crshead' },
     h('div', null, h('div', { class: 'crskind' }, [c.code, c.credits ? c.credits + ' credits' : '', c.grade ? 'grade ' + c.grade : '', s.name].filter(Boolean).join(' · ')), h('h1', null, c.title || c.code)),
     h('span', { style: { flex: 1 } }),
+    h('button', { class: 'btn quiet', title: 'Fill in the course from its web page (your AI reads the page)', onclick: () => coursePageDialog(c, save) }, 'From the course page…'),
+    h('button', { class: 'btn quiet', title: 'Paste the course outline or reading list; your AI makes the sessions and readings', onclick: () => outlinePasteDialog(s, c, docs, save) }, 'Paste the outline…'),
     h('button', { class: 'btn quiet', onclick: () => courseDialog(s, c) }, 'Edit'),
     h('button', { class: 'btn quiet', onclick: () => confirmBox('Delete the course?', `“${c.title || c.code}” with its outline. The books and notes stay in the library.`, 'Delete', () => { s.courses = s.courses.filter(x => x !== c); coursesSave().then(() => { location.hash = `#/courses/${p.id}/${s.id}`; }); }) }, 'Delete')));
   if (c.description) main.append(h('p', { class: 'crsdesc' }, c.description));
@@ -262,7 +264,7 @@ function teacherDialog(c, t, save) {
     const n = Object.assign({}, v, { photo: photo || '' });
     if (t) Object.assign(t, n); else { c.teachers = c.teachers || []; c.teachers.push(Object.assign({ id: cid() }, n)); }
     save();
-  }, () => {
+  }, inputs => {
     const img = h('div', { class: 'crsphoto' + (photo ? '' : ' none') });
     const show = () => { clear(img); img.classList.toggle('none', !photo); if (photo) img.append(h('img', { src: '/api/course-photo/' + photo, alt: '' })); else img.append('photo'); };
     show();
@@ -275,7 +277,19 @@ function teacherDialog(c, t, save) {
         photo = j.name; show();
       } catch (e) { fail(e); }
     });
-    return h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', margin: '8px 0' } }, img, h('button', { class: 'btn', onclick: () => file.click() }, 'Choose a photo…'),
+    const fetchBtn = h('button', { class: 'btn', title: 'Read the profile page (address above): photo, title, email, phone, office', onclick: async () => {
+      const url = inputs.profile.value.trim();
+      if (!/^https?:\/\//.test(url)) { toast('Put the address of the profile page in “Profile page” first'); inputs.profile.focus(); return; }
+      fetchBtn.disabled = true; fetchBtn.textContent = 'Reading the page…';
+      try {
+        const r = await api('courses/fetch-person', { method: 'POST', json: { url }, timeout: 120000 });
+        ['name', 'title', 'email', 'phone', 'office'].forEach(k => { if (r[k] && !inputs[k].value.trim()) inputs[k].value = r[k]; else if (r[k] && k !== 'name') inputs[k].value = r[k]; });
+        if (r.photoName) { photo = r.photoName; show(); }
+        toast(r.note ? 'Filled in what the page says plainly (' + r.note + ')' : 'Filled in from the profile page — check it', 3500);
+      } catch (e) { fail(e); }
+      fetchBtn.disabled = false; fetchBtn.textContent = 'Fetch from the profile page';
+    } }, 'Fetch from the profile page');
+    return h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', margin: '8px 0', flexWrap: 'wrap' } }, img, fetchBtn, h('button', { class: 'btn', onclick: () => file.click() }, 'Choose a photo…'),
       h('button', { class: 'btn quiet', onclick: () => { photo = ''; show(); } }, 'No photo'), file);
   });
 }
@@ -413,4 +427,106 @@ function readingNotes(r, notes, tag) {
   return notes.filter(n => n.documentId === r.docId && (
     splitTags(n.tags || '').some(t => t.toLowerCase() === tag.toLowerCase()) ||
     (range && (() => { const pr = parseInt(String(n.printedPageLabel || '').split(/[–-]/)[0], 10); const pg = isNaN(pr) ? n.pageNumber : pr; return pg >= range[0] && pg <= range[1]; })())));
+}
+
+// ------------------------------------------------------------------ filling in from the web and from pasted text
+
+/** Library items that may be a reading: by title words, author surname and year. [{ d, score }] best first. */
+function libMatch(rd, docs) {
+  const words = s => norm(s || '').split(/[^a-z0-9]+/).filter(w => w.length >= 4);
+  const tw = new Set(words(rd.title || rd.text));
+  const surn = norm(rd.author || '').split(/[^a-z]+/).filter(w => w.length >= 3);
+  return docs.map(d => {
+    const dw = words(d.title); if (!dw.length || !tw.size) return { d, score: 0 };
+    const hit = dw.filter(w => tw.has(w)).length;
+    let score = hit / Math.max(3, Math.min(dw.length, tw.size));
+    if (surn.length && surn.some(a => norm(d.author || '').includes(a))) score += 0.3;
+    if (rd.year && String(d.year || '').includes(String(rd.year))) score += 0.1;
+    if (rd.container && words(rd.container).filter(w => dw.includes(w)).length >= 2) score += 0.25;   // a chapter in an edited volume
+    return { d, score };
+  }).filter(x => x.score >= 0.45).sort((a, b) => b.score - a.score).slice(0, 4);
+}
+
+function coursePageDialog(c, save) {
+  const guess = ((c.links || []).find(l => /course|emne|uib\.no/i.test(l.label + l.url)) || {}).url || '';
+  modal((box, close) => {
+    const url = h('input', { placeholder: 'https://www.uib.no/en/course/SAMPOL390', value: guess });
+    const out = h('div');
+    const go = h('button', { class: 'btn fill', onclick: async () => {
+      if (!/^https?:\/\//.test(url.value.trim())) { toast('Give the address of the course page'); return; }
+      go.disabled = true; clear(out).append(h('p', { class: 'muted' }, 'The tablet is reading the page with your AI…'));
+      try {
+        const r = await api('courses/fetch-page', { method: 'POST', json: { url: url.value.trim() }, timeout: 150000 });
+        review(r);
+      } catch (e) { clear(out); fail(e); }
+      go.disabled = false;
+    } }, 'Read the page');
+    // What was found, each part with a box: only the ticked parts are put in.
+    const review = r => {
+      clear(out);
+      const rows = [];
+      const tick = (label, value, apply, on = true) => { if (!value || (Array.isArray(value) && !value.length)) return; const cb = h('input', { type: 'checkbox', checked: on }); rows.push([cb, apply]);
+        out.append(h('label', { class: 'crsfound' }, cb, h('div', null, h('b', null, label), h('div', null, Array.isArray(value) ? value.map(v => h('div', null, v)) : value)))); };
+      tick('Code', r.code, () => { c.code = r.code; }, !c.code);
+      tick('Title', r.title, () => { c.title = r.title; }, !c.title);
+      tick('Credits', r.credits ? String(r.credits) : '', () => { c.credits = String(r.credits); }, !c.credits);
+      tick('About the course', r.description, () => { c.description = r.description; }, !c.description);
+      const have = new Set((c.teachers || []).map(t => norm(t.name)));
+      const newT = (r.teachers || []).filter(t => t.name && !have.has(norm(t.name)));
+      tick('Teachers', newT.map(t => [t.name, t.role, t.email].filter(Boolean).join(' · ')), () => { c.teachers = c.teachers || []; newT.forEach(t => c.teachers.push({ id: cid(), name: t.name, role: t.role || 'Lecturer', email: t.email || '', profile: t.profile || '', photo: '' })); });
+      const haveL = new Set((c.links || []).map(l => l.url));
+      const newL = [{ label: 'Course page', url: r.url }].concat(r.links || []).filter(l => l.url && /^https?:/.test(l.url) && !haveL.has(l.url));
+      tick('Links', newL.map(l => `${l.label || ''} — ${l.url}`), () => { c.links = c.links || []; newL.forEach(l => c.links.push({ label: l.label || '', url: l.url })); });
+      if (!rows.length) { out.append(h('p', { class: 'muted' }, 'Nothing new was found on the page.')); return; }
+      out.append(h('p', { class: 'muted', style: { fontSize: '12px' } }, 'Teachers’ photos and details: open a teacher and press “Fetch from the profile page”.'),
+        h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: () => { rows.forEach(([cb, f]) => { if (cb.checked) f(); }); close(); save(); } }, 'Put in the ticked')));
+    };
+    box.classList.add('wide');
+    box.append(h('h2', null, 'From the course page'), h('p', { class: 'muted', style: { fontSize: '13px' } }, 'The tablet fetches the page and your AI (Settings → AI) picks out the course details. You choose what goes in.'),
+      h('div', { class: 'row', style: { gap: '8px' } }, url, go), out);
+    setTimeout(() => url.focus(), 30);
+  });
+}
+
+/** Pasted course outline or reading list → sessions and readings, matched with the library, checked before they go in. */
+function outlinePasteDialog(s, c, docs, save) {
+  modal((box, close) => {
+    box.classList.add('wide');
+    const ta = h('textarea', { rows: 12, placeholder: 'Paste the course outline, the lecture plan or the reading list here (from the course page, Canvas or the syllabus PDF)…' });
+    const year = h('input', { value: (s.start || '').slice(0, 4) || String(new Date().getFullYear()), style: { width: '80px' }, title: 'The year, for dates written without one' });
+    const out = h('div');
+    const go = h('button', { class: 'btn fill', onclick: async () => {
+      if (!ta.value.trim()) { toast('Paste something first'); return; }
+      go.disabled = true; clear(out).append(h('p', { class: 'muted' }, 'Your AI is reading the outline… (this can take half a minute)'));
+      try { const r = await api('courses/parse-outline', { method: 'POST', json: { text: ta.value, year: year.value.trim() }, timeout: 180000 }); review(r.sessions || []); }
+      catch (e) { clear(out); fail(e); }
+      go.disabled = false;
+    } }, 'Read with AI');
+    const review = sessions => {
+      clear(out);
+      if (!sessions.length) { out.append(h('p', { class: 'muted' }, 'No sessions were found in the text.')); return; }
+      const picks = [];
+      sessions.forEach((x, i) => {
+        const card = h('div', { class: 'crsrevsess' }, h('div', null, h('b', null, courseDate(x.date) || 'No date'), ' ', h('span', { class: 'muted' }, [x.time, x.room, x.kind].filter(Boolean).join(' · ')), ' — ', x.topic || ''));
+        (x.readings || []).forEach(rd => {
+          const m = libMatch(rd, docs);
+          const sel = h('select', { title: 'The library item this reading is' }, [h('option', { value: '' }, 'Not in the library (keep as text)'), ...m.map((y, k) => h('option', { value: String(y.d.id), selected: k === 0 }, `${y.d.title}${y.d.author ? ' — ' + y.d.author : ''}`))]);
+          picks.push({ rd, sel, x });
+          card.append(h('div', { class: 'crsrevread' }, h('div', null, rd.text || [rd.author, rd.year, rd.title].filter(Boolean).join(', '), rd.pages ? h('span', { class: 'muted' }, ' · pp. ' + rd.pages) : null, rd.required === false ? h('span', { class: 'muted' }, ' · optional') : null), sel));
+        });
+        out.append(card);
+      });
+      const mode = h('select', { style: { width: 'auto' } }, [['add', 'Add to the outline'], ['replace', 'Replace the outline']].map(([v, l]) => h('option', { value: v }, l)));
+      out.append(h('div', { class: 'foot' }, mode, h('span', { style: { flex: 1 } }), h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: () => {
+        const made = sessions.map(x => ({ id: cid(), date: /^\d{4}-\d{2}-\d{2}$/.test(x.date || '') ? x.date : '', time: x.time || '', room: x.room || '', kind: x.kind || 'Lecture', topic: x.topic || '', note: '',
+          readings: picks.filter(p => p.x === x).map(p => ({ id: cid(), docId: p.sel.value ? +p.sel.value : null, chapter: p.rd.chapter || (p.sel.value && p.rd.container ? p.rd.title : '') || '', pages: p.rd.pages || '',
+            text: p.rd.text || [p.rd.author, p.rd.year, p.rd.title, p.rd.container].filter(Boolean).join(', '), required: p.rd.required === false ? 'optional' : 'required', status: 'unread' })) }));
+        c.sessions = mode.value === 'replace' ? made : (c.sessions || []).concat(made);
+        close(); save(); toast(`${made.length} sessions put in`, 2500);
+      } }, 'Put them in')));
+    };
+    box.append(h('h2', null, 'Paste the course outline'), h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Your AI turns it into sessions with dates and readings; the readings are matched with your library. You check everything before it goes in.'),
+      ta, h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginTop: '6px' } }, h('span', { class: 'muted' }, 'Year for dates without one'), year, h('span', { style: { flex: 1 } }), go), out);
+    setTimeout(() => ta.focus(), 30);
+  });
 }
