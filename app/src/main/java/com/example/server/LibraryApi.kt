@@ -64,6 +64,12 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
 
     fun handle(req: HttpRequest): HttpResponse {
         val p = req.path
+        // Where Google sends the browser after “Sign in with Google” (http://127.0.0.1:<port>/?code=…&state=…). Needs no
+        // PIN: it only acts on a sign-in that a signed-in page started (the state is a secret only that page was given).
+        if (p == "/" && req.method == "GET" && req.query["state"]?.let { com.example.reader.GoogleCalendar.isPending(it) } == true) {
+            val html = runBlocking(Dispatchers.IO) { com.example.reader.GoogleCalendar.callbackPage(context, req.query) }
+            return HttpResponse.text(200, html, "text/html; charset=utf-8").header("Cache-Control", "no-store")
+        }
         if (!p.startsWith("/api/")) return static(p)
 
         if (p == "/api/login" && req.method == "POST") return login(req)
@@ -137,6 +143,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             }
             s == listOf("upload") && m == "POST" -> return upload(req)
             s.firstOrNull() == "zotero" -> return zoteroApi.route(req, s.drop(1))
+            s.firstOrNull() == "gcal" -> return gcalRoute(req, s.drop(1))
             s.firstOrNull() == "writing" -> return writingApi.route(req, s.drop(1))
             // The arrangement of the overview pages in the notes view (headings and the order of the notes), by page key.
             s == listOf("note-pages") && m == "GET" -> return HttpResponse.json(notePagesFile().let { if (it.isFile) it.readText() else "{}" })
@@ -156,6 +163,12 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s == listOf("courses") && m == "PUT" -> {
                 val b = JSONObject(req.bodyText())
                 return HttpResponse.json(com.example.reader.Courses.write(context, b.getJSONObject("data"), b.optLong("version", -1)).toString())
+            }
+            // A syllabus PDF → its text (for the outline dialog; nothing leaves the tablet).
+            s == listOf("courses", "pdf-text") && m == "POST" -> {
+                val bytes = req.body.readBytes(); require(bytes.size in 1..40 * 1024 * 1024) { "The file is empty or too large (40 MB at most)." }
+                val text = kotlinx.coroutines.withContext(Dispatchers.IO) { com.example.reader.Courses.pdfText(context, bytes) }
+                return HttpResponse.json(JSONObject().put("text", text).toString()).header("Cache-Control", "no-store")
             }
             s.size == 2 && s[0] == "courses" && m == "POST" -> {
                 val b = runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject())
@@ -515,6 +528,30 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         .joinToString(" ").replaceFirstChar { it.titlecase(Locale.ROOT) }
 
     // ------------------------------------------------------------------------------- static page
+
+    /** Google Calendar (read and write); every call to Google is made here on the tablet. */
+    private suspend fun gcalRoute(req: HttpRequest, s: List<String>): HttpResponse {
+        val g = com.example.reader.GoogleCalendar
+        val m = req.method
+        val b = if (m == "GET" || m == "DELETE") JSONObject() else runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject())
+        val out: JSONObject = kotlinx.coroutines.withContext(Dispatchers.IO) {
+            when {
+                s == listOf("status") && m == "GET" -> g.status(context)
+                s == listOf("client") && m == "POST" -> g.setClient(context, b.optString("id"), b.optString("secret"))
+                s == listOf("client") && m == "DELETE" -> g.removeClient(context)
+                s == listOf("auth") && m == "POST" -> g.startAuth(context, WebServer.port() ?: 8080)
+                s == listOf("finish") && m == "POST" -> g.finish(context, b.optString("answer"), b.optString("state"))
+                s == listOf("auth") && m == "DELETE" -> g.disconnect(context)
+                s == listOf("calendars") && m == "GET" -> g.calendars(context)
+                s == listOf("calendars") && m == "PUT" -> g.setChoice(context, b.optJSONArray("shown")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList(), b.optString("writeTo"), b.optJSONObject("names"))
+                s == listOf("events") && m == "GET" -> if (req.query["cached"] == "1") g.cached(context) else g.events(context, req.query["from"].orEmpty(), req.query["to"].orEmpty())
+                s == listOf("event") && m == "POST" -> g.save(context, b)
+                s == listOf("event") && m == "DELETE" -> g.delete(context, req.query["cal"].orEmpty(), req.query["id"].orEmpty())
+                else -> throw NoSuchElementException("No such action")
+            }
+        }
+        return HttpResponse.json(out.toString()).header("Cache-Control", "no-store")
+    }
 
     private fun static(path: String): HttpResponse {
         val clean = path.trimStart('/').ifBlank { "index.html" }

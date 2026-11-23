@@ -1525,3 +1525,39 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .crsrevsess { border: 1px solid var(--line); padding: 8px 10px; margin: 6px 0; font-size: 13px; background: var(--card); }
 .crsrevread { display: grid; grid-template-columns: 1fr minmax(200px, 40%); gap: 8px; align-items: center; padding: 4px 0 4px 12px; border-top: 1px dashed var(--line); }
 .crsrevread select { font-size: 12px; }
+
+/* Calendar page, Google Calendar settings, events ↔ sessions */
+.calpage { max-width: 1300px; margin: 0 auto; padding: 14px 16px 60px; }
+.caltool { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.caltool h1 { margin: 0; font-family: var(--serif, Georgia, serif); font-weight: normal; font-size: 24px; }
+.calnote { margin: 0 0 10px; font-size: 13px; }
+.calweek { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.calday { border: 1px solid var(--line); border-radius: 6px; min-height: 340px; padding: 6px; background: var(--card); display: flex; flex-direction: column; gap: 4px; }
+.calday.today, .calcell.today { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.calhead { font-size: 13px; border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-bottom: 2px; }
+.calmonth { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.calwd { font: 600 11px var(--mono, monospace); text-transform: uppercase; text-align: center; padding: 2px 0; }
+.calcell { border: 1px solid var(--line); border-radius: 5px; min-height: 104px; padding: 4px; background: var(--card); display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+.calcell.other { opacity: .5; }
+.calnum { font: 12px var(--mono, monospace); }
+.calmore { font-size: 11px; cursor: pointer; }
+.calitem { border-left: 3px solid var(--soft); padding: 2px 5px; font-size: 12.5px; line-height: 1.3; cursor: pointer; border-radius: 3px; background: var(--wash); display: flex; flex-direction: column; }
+.calmonth .calitem { flex-direction: row; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; }
+.calitem.session { border-left-color: var(--ink); background: transparent; border: 1px dashed var(--line); border-left: 3px solid var(--ink); }
+.calitem.allday { font-weight: 600; }
+.calitem:hover { background: var(--paper); }
+.caltime { font-size: 11px; opacity: .75; }
+.caltitle { overflow: hidden; text-overflow: ellipsis; }
+.calsub { font-size: 11px; }
+.calchip { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; vertical-align: middle; }
+.calmark { font: 600 10px var(--mono, monospace); text-transform: uppercase; letter-spacing: .04em; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-left: 6px; opacity: .75; white-space: nowrap; }
+.caldesc { white-space: pre-wrap; font-size: 14px; max-height: 40vh; overflow: auto; border-top: 1px solid var(--line); padding-top: 8px; }
+.calcourse .calrow, .calpickrow { display: grid; grid-template-columns: 14px 130px 100px 1fr; gap: 8px; align-items: center; padding: 4px 2px; border-bottom: 1px solid var(--line); font-size: 13.5px; cursor: pointer; }
+.calpick { max-height: 52vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; }
+.calpickrow { grid-template-columns: 18px 130px 100px 1fr; cursor: default; }
+.calpickrow.dup { opacity: .6; }
+.gcalsteps { margin: 0 0 10px; padding-left: 20px; font-size: 13.5px; line-height: 1.5; }
+.gcalcals { display: flex; flex-direction: column; gap: 4px; }
+.gcalcal { display: flex; align-items: center; gap: 8px; }
+.gcalpaste { margin-top: 10px; }
+@media (max-width: 800px) { .calweek { grid-template-columns: 1fr; } .calday { min-height: 0; } .calcourse .calrow, .calpickrow { grid-template-columns: 14px 1fr; } .calcourse .calrow > :nth-child(n+3), .calpickrow > :nth-child(n+3) { grid-column: 2; } }

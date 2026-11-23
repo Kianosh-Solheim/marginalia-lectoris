@@ -46,6 +46,19 @@ object Courses {
         return File(photos(ctx), name).takeIf { it.isFile } ?: throw NoSuchElementException("No such picture")
     }
 
+    /** The text of a syllabus PDF, page by page. */
+    fun pdfText(ctx: Context, bytes: ByteArray): String {
+        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(ctx.applicationContext)
+        val text = try {
+            com.tom_roush.pdfbox.pdmodel.PDDocument.load(bytes).use { doc ->
+                com.tom_roush.pdfbox.text.PDFTextStripper().apply { sortByPosition = true; endPage = minOf(doc.numberOfPages, 60) }.getText(doc)
+            }
+        } catch (e: java.io.IOException) { throw IllegalArgumentException("This does not look like a readable PDF.") }
+        val clean = text.replace(Regex("[ \\t\\u00A0]+"), " ").replace(Regex("\\n\\s*\\n\\s*\\n+"), "\n\n").trim()
+        require(clean.length > 40) { "The PDF has no text layer (a scanned page). Open it in the library and run text recognition first, or paste the text." }
+        return clean
+    }
+
     // ---------------------------------------------------------------- from the web and from pasted text (only when asked)
 
     private val http by lazy {

@@ -231,6 +231,7 @@ function route() {
   if (parts[0] === 'screen') { state.tab = 'screen'; return showScreen(); }
   if (parts[0] === 'lexicon') { state.tab = 'lexicon'; return showLexicon(); }
   if (parts[0] === 'courses') { state.tab = 'courses'; return showCourses(parts); }
+  if (parts[0] === 'calendar') { state.tab = 'calendar'; return showCalendar(parts); }
   if (parts[0] === 'course' && parts[1]) { state.tab = 'courses'; return showCourse(decodeURIComponent(parts[1])); }
   if (parts[0] === 'matrix') { state.tab = 'matrix'; return parts[1] ? showMatrix(parts[1]) : showMatrices(); }
   if (parts[0] === 'writing') { state.tab = 'writing'; return showWriting(params); }
@@ -295,7 +296,7 @@ function themeButton() {
 }
 function header() {
   // The main places first; the kinds of library item sit in a second row when you are in the library.
-  const places = [['library', 'Library', '#/'], ['notes', 'Notes', '#/notes'], ['writing', 'Writing', '#/writing'], ['courses', 'Courses', '#/courses'], ['matrix', 'Matrix', '#/matrix'], ['lexicon', 'Lexicon', '#/lexicon'], ['search', 'Search', '#/search']];
+  const places = [['library', 'Library', '#/'], ['notes', 'Notes', '#/notes'], ['writing', 'Writing', '#/writing'], ['courses', 'Courses', '#/courses'], ['calendar', 'Calendar', '#/calendar'], ['matrix', 'Matrix', '#/matrix'], ['lexicon', 'Lexicon', '#/lexicon'], ['search', 'Search', '#/search']];
   const shelves = [['all', 'Everything', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero']];
   const inLibrary = shelves.some(s => s[0] === state.tab);
   const place = inLibrary ? 'library' : state.tab;
@@ -1197,6 +1198,7 @@ function renderSettings(main, data) {
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-notes-export').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Notes export'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-search').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Search'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-zotero').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Zotero'),
+    h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-gcal').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Google Calendar'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-storage').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Storage & backup'));
   const body = h('div', { class: 'set-body' });
   data.groups.forEach(g => {
@@ -1211,6 +1213,7 @@ function renderSettings(main, data) {
   body.appendChild(notesExportSettingsSection());
   body.appendChild(searchSettingsSection());
   body.appendChild(zoteroSettingsSection());
+  body.appendChild(gcalSettingsSection());
   body.appendChild(storageSection(data.info));
   main.append(h('div', { class: 'set-head' }, h('h1', null, 'Settings'),
     h('p', { class: 'muted' }, 'The same settings as on the tablet. Changes are saved there straight away.')),

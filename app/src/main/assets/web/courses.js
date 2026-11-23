@@ -223,16 +223,18 @@ async function showCourse(id) {
     rd.append(h('button', { class: 'btn quiet crsaddread', onclick: () => readingDialog(x, null, docs, save) }, '+ Reading'));
     outline.append(h('div', { class: 'crssession' + (x === next ? ' next' : '') + (x.date && x.date < today ? ' past' : '') },
       h('div', { class: 'crswhen' }, h('div', { class: 'crsdate' }, courseDate(x.date) || 'No date'), h('div', { class: 'muted' }, [x.time, x.room].filter(Boolean).join(' · ')),
-        x === next ? h('span', { class: 'crsnext' }, 'Next') : null),
+        x === next ? h('span', { class: 'crsnext' }, 'Next') : null,
+        x.gcal ? h('span', { class: 'calmark', title: x.gcal.linked ? 'Made from a Google Calendar event' : 'Sent to Google Calendar' }, x.gcal.linked ? 'from Google' : 'in Google') : null),
       h('div', { class: 'crswhat' },
         h('div', { class: 'crstopic' }, h('span', { class: 'crskindtag' }, x.kind || 'Lecture'), ' ', x.topic || h('span', { class: 'muted' }, '(no topic)'),
           h('span', { style: { flex: 1 } }),
           h('button', { class: 'btn quiet', title: 'Edit the session', onclick: () => sessionDialog(c, x, save) }, 'Edit'),
-          h('button', { class: 'btn quiet', title: 'Delete the session', onclick: () => confirmBox('Delete the session?', x.topic || courseDate(x.date), 'Delete', () => { c.sessions = c.sessions.filter(y => y !== x); save(); }) }, '×')),
+          h('button', { class: 'btn quiet', title: 'Delete the session', onclick: () => confirmBox('Delete the session?', (x.topic || courseDate(x.date)) + (x.gcal && !x.gcal.linked ? ' — its Google Calendar event is deleted too.' : ''), 'Delete', () => { c.sessions = c.sessions.filter(y => y !== x); sessionGoogleDelete(x); save(); }) }, '×')),
         x.note ? h('div', { class: 'crsnote' }, x.note) : null, rd)));
   });
   main.append(h('section', { class: 'crssec' }, h('div', { class: 'row', style: { alignItems: 'center', gap: '8px' } }, h('h2', null, 'Course outline'), h('span', { style: { flex: 1 } }),
     h('button', { class: 'btn', onclick: () => sessionDialog(c, null, save) }, '+ Session')), outline));
+  main.append(courseCalendarSection(c, s, save));
   if (next) setTimeout(() => { const el = main.querySelector('.crssession.next'); if (el && location.hash === `#/course/${id}`) el.scrollIntoView({ block: 'center' }); }, 200);
 }
 
@@ -304,6 +306,9 @@ function sessionDialog(c, x, save) {
     { key: 'note', label: 'Notes', type: 'textarea', rows: 3, value: x && x.note, wide: true },
   ], v => {
     if (x) Object.assign(x, v); else { c.sessions = c.sessions || []; c.sessions.push(Object.assign({ id: cid(), readings: [] }, v)); }
+    // A session sent to Google Calendar is changed there too.
+    if (x && x.gcal && !x.gcal.linked && /^\d{4}-\d{2}-\d{2}$/.test(x.date || '')) api('gcal/event', { method: 'POST', json: Object.assign(sessionEvent(c, x), { id: x.gcal.id, cal: x.gcal.cal }), timeout: 60000 })
+      .then(r => { x.gcal = { id: r.id, cal: r.cal, link: r.link }; toast('Changed in Google Calendar too'); }).catch(e => toast('Not changed in Google Calendar: ' + e.message, 4000));
     save();
   });
 }
@@ -495,6 +500,24 @@ function outlinePasteDialog(s, c, docs, save) {
     const ta = h('textarea', { rows: 12, placeholder: 'Paste the course outline, the lecture plan or the reading list here (from the course page, Canvas or the syllabus PDF)…' });
     const year = h('input', { value: (s.start || '').slice(0, 4) || String(new Date().getFullYear()), style: { width: '80px' }, title: 'The year, for dates written without one' });
     const out = h('div');
+    // A syllabus file: a PDF's text is read on the tablet, a text file here; either lands in the box to check before the AI reads it.
+    const fileIn = h('input', { type: 'file', accept: '.pdf,.txt,.md,.ics,application/pdf,text/plain,text/calendar', style: { display: 'none' } });
+    const fileBtn = h('button', { class: 'btn quiet', title: 'A syllabus PDF or a text file (a calendar .ics file goes straight to sessions)', onclick: () => fileIn.click() }, 'From a file…');
+    fileIn.addEventListener('change', async () => {
+      const f = fileIn.files[0]; fileIn.value = ''; if (!f) return;
+      if (/\.ics$/i.test(f.name) || f.type === 'text/calendar') { const evs = icsParse(await f.text()); if (!evs.length) { toast('No events in that file'); return; } close(); eventsToSessionsDialog(evs, c, () => save(), f.name); return; }
+      if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf') {
+        fileBtn.disabled = true; toast('Reading the PDF on the tablet…', 0);
+        try {
+          const r = await fetch('/api/courses/pdf-text', { method: 'POST', body: f, headers: { 'X-Marginalia': '1', 'Content-Type': 'application/pdf' }, credentials: 'same-origin' });
+          const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+          ta.value = j.text; toast(`${f.name}: ${j.text.length.toLocaleString()} characters read. Check them, then press “Read with AI”.`, 4000);
+        } catch (e) { fail(e); }
+        fileBtn.disabled = false; return;
+      }
+      ta.value = await f.text();
+    });
+    box.append(fileIn);
     const go = h('button', { class: 'btn fill', onclick: async () => {
       if (!ta.value.trim()) { toast('Paste something first'); return; }
       go.disabled = true; clear(out).append(h('p', { class: 'muted' }, 'Your AI is reading the outline… (this can take half a minute)'));
@@ -526,7 +549,7 @@ function outlinePasteDialog(s, c, docs, save) {
       } }, 'Put them in')));
     };
     box.append(h('h2', null, 'Paste the course outline'), h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Your AI turns it into sessions with dates and readings; the readings are matched with your library. You check everything before it goes in.'),
-      ta, h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginTop: '6px' } }, h('span', { class: 'muted' }, 'Year for dates without one'), year, h('span', { style: { flex: 1 } }), go), out);
+      ta, h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginTop: '6px' } }, fileBtn, h('span', { class: 'muted' }, 'Year for dates without one'), year, h('span', { style: { flex: 1 } }), go), out);
     setTimeout(() => ta.focus(), 30);
   });
 }
