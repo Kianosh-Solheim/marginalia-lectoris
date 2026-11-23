@@ -85,6 +85,8 @@ object BackupManager {
             addFile("files/note_pages.json", File(app.filesDir, "note_pages.json"))
             addFile("files/page_numbers.json", File(app.filesDir, "page_numbers.json"))
             addFile("files/lexicon.json", File(app.filesDir, "lexicon.json"))
+            addFile("files/courses.json", File(app.filesDir, "courses.json"))
+            File(app.filesDir, "courses_photos").listFiles()?.forEach { addFile("files/courses_photos/${it.name}", it) }
             File(app.filesDir, "sketches").listFiles()?.forEach { addFile("files/sketches/${it.name}", it) }
 
             // Books and covers, with their original locations
@@ -149,6 +151,7 @@ object BackupManager {
             File(app.filesDir, "note_pages.json").lastModified(),
             File(app.filesDir, "page_numbers.json").lastModified(),
             File(app.filesDir, "lexicon.json").lastModified(),
+            File(app.filesDir, "courses.json").lastModified(),
             File(app.filesDir, "sketches").listFiles()?.sumOf { it.lastModified() } ?: 0L,
             File(app.applicationInfo.dataDir, "shared_prefs").listFiles()?.sumOf { it.lastModified() } ?: 0L
         )
@@ -287,6 +290,8 @@ object BackupManager {
         File(staging, "files/page_numbers.json").takeIf { it.isFile }?.copyTo(File(app.filesDir, "page_numbers.json"), overwrite = true)
         File(staging, "files/lexicon.json").takeIf { it.isFile }?.copyTo(File(app.filesDir, "lexicon.json"), overwrite = true)
         com.example.reader.Lexicon.reload()
+        File(staging, "files/courses.json").takeIf { it.isFile }?.copyTo(File(app.filesDir, "courses.json"), overwrite = true)
+        File(staging, "files/courses_photos").takeIf { it.isDirectory }?.copyRecursively(File(app.filesDir, "courses_photos"), overwrite = true)
         File(staging, "files/sketches").takeIf { it.isDirectory }?.copyRecursively(File(app.filesDir, "sketches"), overwrite = true)
         staging.deleteRecursively()
     }

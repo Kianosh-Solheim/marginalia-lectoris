@@ -230,6 +230,8 @@ function route() {
   if (parts[0] === 'search') { state.tab = 'search'; return showTextSearch(params); }
   if (parts[0] === 'screen') { state.tab = 'screen'; return showScreen(); }
   if (parts[0] === 'lexicon') { state.tab = 'lexicon'; return showLexicon(); }
+  if (parts[0] === 'courses') { state.tab = 'courses'; return showCourses(parts); }
+  if (parts[0] === 'course' && parts[1]) { state.tab = 'courses'; return showCourse(decodeURIComponent(parts[1])); }
   if (parts[0] === 'matrix') { state.tab = 'matrix'; return parts[1] ? showMatrix(parts[1]) : showMatrices(); }
   if (parts[0] === 'writing') { state.tab = 'writing'; return showWriting(params); }
   if (parts[0] === 'write' && parts[1]) { state.tab = 'writing'; return showWriter(decodeURIComponent(parts[1]), params); }
@@ -293,7 +295,7 @@ function themeButton() {
 }
 function header() {
   // The main places first; the kinds of library item sit in a second row when you are in the library.
-  const places = [['library', 'Library', '#/'], ['notes', 'Notes', '#/notes'], ['writing', 'Writing', '#/writing'], ['matrix', 'Matrix', '#/matrix'], ['lexicon', 'Lexicon', '#/lexicon'], ['search', 'Search', '#/search']];
+  const places = [['library', 'Library', '#/'], ['notes', 'Notes', '#/notes'], ['writing', 'Writing', '#/writing'], ['courses', 'Courses', '#/courses'], ['matrix', 'Matrix', '#/matrix'], ['lexicon', 'Lexicon', '#/lexicon'], ['search', 'Search', '#/search']];
   const shelves = [['all', 'Everything', '#/'], ['books', 'Books', '#/books'], ['articles', 'Articles', '#/articles'], ['presentations', 'Presentations', '#/presentations'], ['zotero', 'Zotero', '#/zotero']];
   const inLibrary = shelves.some(s => s[0] === state.tab);
   const place = inLibrary ? 'library' : state.tab;
