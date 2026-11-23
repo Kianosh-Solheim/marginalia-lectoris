@@ -3044,6 +3044,8 @@ async function openReader(id, params) {
     const msg = document.getElementById('rloadmsg'); if (msg) msg.textContent = 'Could not open the book: ' + (e.message || e);
     return;
   }
+  // Opened from a course: notes get the course's tag, and the reading's progress follows.
+  if (params.get('course') && typeof courseReaderContext === 'function') courseReaderContext(ctx, d, params.get('course'), params.get('reading')).catch(console.warn);
   const ld = document.getElementById('rload'); if (ld) ld.remove();
   drawSide();
   const hl = +params.get('hl');
@@ -3346,7 +3348,7 @@ function selectionBar(ctx, sel, onDone) {
 function noteDialog(ctx, sel, color, onDone) {
   modal((box, close) => {
     const dr = sel.draft || {};
-    const t = h('input', { placeholder: 'Leave empty for an automatic title', value: dr.title || '' }), body = h('textarea', { rows: 7, placeholder: 'Your thoughts…' }), g = tagInput(dr.tags || '', true);
+    const t = h('input', { placeholder: 'Leave empty for an automatic title', value: dr.title || '' }), body = h('textarea', { rows: 7, placeholder: 'Your thoughts…' }), g = tagInput(dr.tags || (ctx.course ? ctx.course.tag : ''), true);
     body.value = dr.userNotes || '';
     // The quotation can be tidied before it is saved (a stray page number, a running header).
     const quote = h('textarea', { class: 'quote quoteedit', rows: Math.min(10, Math.max(3, Math.ceil(sel.text.length / 90))), title: 'The quotation — you can edit it' }); quote.value = sel.text;
@@ -3625,7 +3627,7 @@ async function openPdf(ctx, params) {
     const mid = scroll.scrollTop + scroll.clientHeight * 0.35;
     let p = 1;
     for (const el of pages) { if (el.offsetTop <= mid) p = +el.dataset.page; else break; }
-    if (p !== current) { current = p; slider.value = p; saveProgress(); }
+    if (p !== current) { current = p; slider.value = p; saveProgress(); if (ctx.course && ctx.course.onPage) ctx.course.onPage(p); }
     const lab = labels && labels[p - 1];
     where.textContent = `${lab && lab !== String(p) ? 'p. ' + lab + ' · ' : ''}PDF ${p} / ${n}`;
     ctx.placeS.textContent = [chapterOf(p), `PDF page ${p} of ${n}`].filter(Boolean).join(' · ');
@@ -3780,6 +3782,7 @@ async function openPdf(ctx, params) {
         printed: printedOk(lab) ? (b > a && printedOk(labB) ? `${lab}–${labB}` : lab) : '',
         loc: { page: a, chapter: chapterOf(a) },
         save: async extra => {
+          extra = courseTags(ctx, extra);
           const r = await api(`doc/${d.id}/highlights`, { method: 'POST', json: Object.assign({ text: fullText, page: a, endPage: b, chapter: chapterOf(a), printedLabel: lab && /\d|^[ivxlc]+$/i.test(lab) && lab !== String(a) ? lab : '' }, extra) });
           ctx.notes.push(r);
           return r;
@@ -3810,7 +3813,10 @@ async function openPdf(ctx, params) {
     return readerContext(ctx, e, inSel);
   });
 
-  const startPage = +params.get('page') || d.currentPage || 1;
+  /** The PDF page that carries a printed page number (when the PDF knows its page numbers). */
+  const pdfOfPrinted = pr => { if (!labels || pr == null || pr === '') return null; const i = labels.findIndex(l => String(l) === String(pr)); return i >= 0 ? i + 1 : null; };
+  ctx.pdfOfPrinted = pdfOfPrinted;
+  const startPage = pdfOfPrinted(params.get('pp')) || +params.get('page') || d.currentPage || 1;
   requestAnimationFrame(() => { goPage(startPage); updatePlace(); pages.forEach(p => io.observe(p)); });
 
   return {
@@ -4148,6 +4154,7 @@ async function openEpub(ctx, params) {
       where: [t ? t.title : '', label ? (/[–-]/.test(label) ? 'pp. ' : 'p. ') + label : ''].filter(Boolean).join(' · '),
       loc: { href, progression, chapter: t ? t.title : '' },
       save: async extra => {
+        extra = courseTags(ctx, extra);
         const r = await api(`doc/${d.id}/highlights`, { method: 'POST', json: Object.assign({ text, href, progression, cfi: cfiRange, pageLabel: label, chapter: t ? t.title : '' }, extra) });
         ctx.notes.push(r);
         painted.set(r.id, cfiRange);

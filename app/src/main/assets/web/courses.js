@@ -172,7 +172,9 @@ async function showCourse(id) {
   app.appendChild(header());
   const main = h('main', { class: 'crspage crscourse' }); app.appendChild(main);
   let docs = [];
+  let notes = [];
   try { await coursesLoad(true); docs = await loadLibrary(); } catch (e) { fail(e); return; }
+  try { notes = (await api('highlights')).highlights || []; } catch (_) {}
   const f = courseFind(id);
   if (!f) { main.append(h('div', { class: 'empty' }, h('h2', null, 'Course not found'), h('a', { href: '#/courses' }, 'All courses'))); return; }
   const { p, s, c } = f;
@@ -186,6 +188,11 @@ async function showCourse(id) {
     h('button', { class: 'btn quiet', onclick: () => courseDialog(s, c) }, 'Edit'),
     h('button', { class: 'btn quiet', onclick: () => confirmBox('Delete the course?', `“${c.title || c.code}” with its outline. The books and notes stay in the library.`, 'Delete', () => { s.courses = s.courses.filter(x => x !== c); coursesSave().then(() => { location.hash = `#/courses/${p.id}/${s.id}`; }); }) }, 'Delete')));
   if (c.description) main.append(h('p', { class: 'crsdesc' }, c.description));
+  const all = (c.sessions || []).flatMap(x => x.readings || []), done = all.filter(r => r.status === 'done').length, started = all.filter(r => r.status === 'started').length;
+  const tagged = notes.filter(n => splitTags(n.tags || '').some(t => t.toLowerCase() === courseTag(c).toLowerCase())).length;
+  if (all.length || tagged) main.append(h('div', { class: 'crsprogress' },
+    all.length ? h('div', { class: 'crsbar', title: `${done} done, ${started} started, ${all.length - done - started} unread` }, h('span', { class: 'd', style: { width: (100 * done / all.length) + '%' } }), h('span', { class: 's', style: { width: (100 * started / all.length) + '%' } })) : null,
+    h('span', { class: 'muted' }, [all.length ? `${done} of ${all.length} readings done${started ? ', ' + started + ' started' : ''}` : '', tagged ? `${tagged} note${tagged === 1 ? '' : 's'} tagged #${courseTag(c)}` : ''].filter(Boolean).join(' · '))));
 
   // Links
   const links = h('div', { class: 'crslinks' });
@@ -210,7 +217,7 @@ async function showCourse(id) {
   if (!sessions.length) outline.append(h('p', { class: 'muted' }, 'No sessions yet. Add the lectures and seminars with their readings.'));
   sessions.forEach((x, k) => {
     const rd = h('div', { class: 'crsreads' });
-    (x.readings || []).forEach((r, j) => rd.append(readingRow(r, byId.get(r.docId), c, () => readingDialog(x, r, docs, save), () => { x.readings.splice(j, 1); save(); }, save)));
+    (x.readings || []).forEach((r, j) => rd.append(readingRow(r, byId.get(r.docId), c, () => readingDialog(x, r, docs, save), () => { x.readings.splice(j, 1); save(); }, save, notes)));
     rd.append(h('button', { class: 'btn quiet crsaddread', onclick: () => readingDialog(x, null, docs, save) }, '+ Reading'));
     outline.append(h('div', { class: 'crssession' + (x === next ? ' next' : '') + (x.date && x.date < today ? ' past' : '') },
       h('div', { class: 'crswhen' }, h('div', { class: 'crsdate' }, courseDate(x.date) || 'No date'), h('div', { class: 'muted' }, [x.time, x.room].filter(Boolean).join(' · ')),
@@ -288,13 +295,16 @@ function sessionDialog(c, x, save) {
 }
 
 const READ_STATUS = [['unread', 'Unread'], ['started', 'Started'], ['done', 'Done']];
-function readingRow(r, d, c, onEdit, onRemove, save) {
+function readingRow(r, d, c, onEdit, onRemove, save, notes) {
   const status = h('select', { class: 'crsstatus s-' + (r.status || 'unread'), title: 'How far you have come' }, READ_STATUS.map(([v, l]) => h('option', { value: v, selected: (r.status || 'unread') === v }, l)));
   status.addEventListener('change', () => { r.status = status.value; status.className = 'crsstatus s-' + r.status; coursesSave(); });
   const where = [r.chapter, r.pages ? 'pp. ' + r.pages : ''].filter(Boolean).join(' · ');
   const page = +r.startPage || +(String(r.pages || '').match(/\d+/) || [])[0] || 0;
-  const href = d ? `#/read/${d.id}?${page ? `page=${page}&pos=${page}&` : ''}course=${encodeURIComponent(c.id)}` : null;
-  return h('div', { class: 'crsread' + (r.required === 'optional' ? ' optional' : '') },
+  const href = d ? `#/read/${d.id}?${page ? `pp=${page}&page=${page}&pos=${page}&` : ''}course=${encodeURIComponent(c.id)}&reading=${encodeURIComponent(r.id)}` : null;
+  const mine = notes ? readingNotes(r, notes, courseTag(c)) : [];
+  const noteList = mine.length ? h('details', { class: 'crsrnotes' }, h('summary', null, `${mine.length} note${mine.length === 1 ? '' : 's'}`),
+    ...mine.map(n => h('a', { class: 'crsrnote', href: `#/read/${n.documentId}?page=${n.pageNumber}&pos=${n.pageNumber}&hl=${n.id}` }, h('b', null, n.title || 'Note'), ' ', h('span', { class: 'muted' }, (n.printedPageLabel ? 'p. ' + n.printedPageLabel + ' · ' : '') + String(n.highlightedText || '').slice(0, 120))))) : null;
+  return h('div', { class: 'crsreadwrap' }, h('div', { class: 'crsread' + (r.required === 'optional' ? ' optional' : '') },
     d ? h('img', { class: 'crscover', src: coverUrl(d), alt: '', loading: 'lazy', onerror: e => { e.target.style.visibility = 'hidden'; } }) : h('div', { class: 'crscover none' }, '?'),
     h('div', { class: 'crsrinfo' },
       h('div', { class: 'crsrtitle' }, d ? d.title : (r.text || '(a reading)'), r.required === 'optional' ? h('span', { class: 'muted' }, ' · optional') : null),
@@ -302,7 +312,7 @@ function readingRow(r, d, c, onEdit, onRemove, save) {
     status,
     href ? h('a', { class: 'btn', href, title: 'Read it' + (page ? ' from page ' + page : '') }, 'Open') : null,
     h('button', { class: 'btn quiet', onclick: onEdit }, 'Edit'),
-    h('button', { class: 'btn quiet', title: 'Remove the reading', onclick: onRemove }, '×'));
+    h('button', { class: 'btn quiet', title: 'Remove the reading', onclick: onRemove }, '×')), noteList);
 }
 
 /** A reading: a book or article from the library (searched by title or author), with chapter and pages. */
@@ -339,4 +349,68 @@ function readingDialog(x, r, docs, save) {
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: go }, r ? 'Save' : 'Add')));
     setTimeout(() => q.focus(), 30);
   });
+}
+
+// ------------------------------------------------------------------ reading from a course
+
+/** The tag a course gives its notes (its code, or its title, without spaces). */
+const courseTag = c => String(c.code || c.title || 'course').trim().replace(/\s+/g, '-').replace(/[#,]/g, '');
+/** Notes saved while reading for a course get its tag. */
+function courseTags(ctx, extra) {
+  if (!ctx || !ctx.course) return extra;
+  const e = Object.assign({}, extra || {});
+  const tags = splitTags(e.tags || '');
+  if (!tags.some(t => t.toLowerCase() === ctx.course.tag.toLowerCase())) tags.push(ctx.course.tag);
+  e.tags = tags.join(', ');
+  return e;
+}
+/** The first and last page of a reading ("45–78" → [45, 78]). */
+const readingRange = r => { const m = String(r.pages || '').match(/(\d+)\s*(?:[–-]\s*(\d+))?/); return m ? [+m[1], +(m[2] || m[1])] : null; };
+
+/**
+ * The reader opened from a course: its tag for the notes, the reading marked as started, and as done when
+ * you reach its last page (or press Done in the bar at the bottom).
+ */
+async function courseReaderContext(ctx, d, courseId, readingId) {
+  await coursesLoad(true);
+  const f = courseFind(courseId); if (!f) return;
+  const c = f.c;
+  let reading = null;
+  (c.sessions || []).forEach(x => (x.readings || []).forEach(r => { if (r.id === readingId || (!readingId && !reading && r.docId === d.id)) reading = r; }));
+  ctx.course = { id: c.id, code: c.code, tag: courseTag(c), reading };
+  const mark = async status => {
+    const g = courseFind(courseId); if (!g) return;
+    let rr = null; (g.c.sessions || []).forEach(x => (x.readings || []).forEach(r => { if (reading && r.id === reading.id) rr = r; }));
+    if (!rr || rr.status === status || (status === 'started' && rr.status === 'done')) return;
+    rr.status = status; reading.status = status;
+    if (await coursesSave()) { if (status === 'done') toast(`Reading done · ${c.code || c.title}`, 2500); drawPill(); }
+  };
+  const pill = h('div', { class: 'crspill' });
+  const drawPill = () => {
+    clear(pill).append(h('a', { href: `#/course/${c.id}`, title: 'Back to the course' }, c.code || c.title),
+      h('span', { class: 'muted' }, reading ? [reading.chapter, reading.pages ? 'pp. ' + reading.pages : ''].filter(Boolean).join(' · ') || 'reading' : 'notes get #' + ctx.course.tag),
+      reading ? h('button', { class: 'btn quiet' + (reading.status === 'done' ? ' on' : ''), title: reading.status === 'done' ? 'Marked as done' : 'Mark the reading as done', onclick: () => mark(reading.status === 'done' ? 'started' : 'done') }, reading.status === 'done' ? '✓ Done' : 'Done?') : null,
+      h('button', { class: 'btn quiet', title: 'Stop tagging notes with the course', onclick: () => { ctx.course = null; pill.remove(); } }, '×'));
+  };
+  drawPill();
+  document.body.append(pill);
+  const gone = new MutationObserver(() => { if (!document.body.contains(ctx.side)) { pill.remove(); gone.disconnect(); } });
+  gone.observe(document.getElementById('app'), { childList: true });
+  if (!reading) return;
+  mark('started');
+  // Done on reaching the reading's last page (PDF: by its printed page number where the PDF has them).
+  const range = readingRange(reading);
+  if (range) ctx.course.onPage = p => {
+    const end = (ctx.pdfOfPrinted && ctx.pdfOfPrinted(range[1])) || range[1];
+    if (p >= end && reading.status !== 'done') mark('done');
+  };
+}
+
+/** The notes that belong to a reading: made in its book within its pages, or tagged with the course. */
+function readingNotes(r, notes, tag) {
+  if (!r.docId) return [];
+  const range = readingRange(r);
+  return notes.filter(n => n.documentId === r.docId && (
+    splitTags(n.tags || '').some(t => t.toLowerCase() === tag.toLowerCase()) ||
+    (range && (() => { const pr = parseInt(String(n.printedPageLabel || '').split(/[–-]/)[0], 10); const pg = isNaN(pr) ? n.pageNumber : pr; return pg >= range[0] && pg <= range[1]; })())));
 }

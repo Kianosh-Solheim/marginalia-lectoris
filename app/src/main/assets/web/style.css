@@ -1512,3 +1512,11 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .crsres { text-align: left; border: 1px solid var(--line); background: var(--card); color: inherit; font: inherit; padding: 4px 8px; cursor: pointer; }
 .crspicked { margin-bottom: 8px; }
 @media (max-width: 700px) { .crssession { grid-template-columns: 1fr; } .crsform { grid-template-columns: 1fr; } }
+
+.crsreadwrap { border-top: 1px dashed var(--line); } .crsreadwrap .crsread { border-top: 0; }
+.crsrnotes { margin: 0 0 6px 46px; font-size: 12.5px; } .crsrnotes summary { cursor: pointer; opacity: .75; }
+.crsrnote { display: block; color: inherit; text-decoration: none; padding: 3px 0; border-bottom: 1px dotted var(--line); } .crsrnote:hover { background: var(--wash); }
+.crsprogress { display: flex; align-items: center; gap: 10px; margin: 4px 0 6px; font-size: 13px; }
+.crsbar { width: 220px; height: 8px; border: 1px solid var(--ink); display: flex; } .crsbar .d { background: var(--green); } .crsbar .s { background: var(--amber); opacity: .6; }
+.crspill { position: fixed; left: 14px; bottom: 44px; z-index: 60; display: flex; align-items: center; gap: 8px; background: var(--paper); border: 1.5px solid var(--ink); box-shadow: 2px 2px 0 var(--ink); padding: 3px 4px 3px 10px; font-size: 12.5px; }
+.crspill a { font: 700 12px var(--mono); color: inherit; } .crspill .btn.on { background: var(--green); color: #fff; }
