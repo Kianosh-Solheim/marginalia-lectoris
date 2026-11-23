@@ -1464,3 +1464,7 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .phrasevar { display: grid; gap: 2px; text-align: left; border: 1px solid var(--line); background: var(--card); color: inherit; padding: 6px 8px; cursor: pointer; font: inherit; }
 .phrasevar:hover { border-color: var(--ink); }
 .phrasetext { font-family: var(--serif, Georgia, serif); font-size: 14px; line-height: 1.4; }
+
+/* A note opened from a link: marked for a moment */
+.hl-layer .hl-flash { outline: 3px solid #e65100; outline-offset: 1px; animation: hlflash 1s ease-in-out 3; }
+@keyframes hlflash { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }

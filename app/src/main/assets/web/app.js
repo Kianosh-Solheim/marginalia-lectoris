@@ -3582,9 +3582,21 @@ async function openPdf(ctx, params) {
       ks.forEach(k => {
         const div = el._text.divs[k]; if (!div || !div.textContent.trim()) return;
         const r = div.getBoundingClientRect();
-        layer.append(h('div', { style: { left: (r.left - base.left) + 'px', top: (r.top - base.top) + 'px', width: r.width + 'px', height: r.height + 'px', background: note.colorHex || '#FFEB3B' }, title: note.title }));
+        layer.append(h('div', { 'data-note': note.id, style: { left: (r.left - base.left) + 'px', top: (r.top - base.top) + 'px', width: r.width + 'px', height: r.height + 'px', background: note.colorHex || '#FFEB3B' }, title: note.title }));
       });
     });
+    if (focusNote) flashNote(el);
+  }
+  /** The note asked for (from a link to it): brought into view and marked for a moment. */
+  let focusNote = null;
+  function flashNote(el) {
+    const marks = [...el.querySelectorAll(`.hl-layer [data-note="${focusNote}"]`)];
+    if (!marks.length) return;
+    focusNote = null;
+    const top = Math.min(...marks.map(m => m.offsetTop));
+    scroll.scrollTo({ top: Math.max(0, el.offsetTop + top - scroll.clientHeight / 3), behavior: 'smooth' });
+    marks.forEach(m => { m.classList.remove('hl-flash'); void m.offsetWidth; m.classList.add('hl-flash'); });
+    setTimeout(() => marks.forEach(m => m.classList.remove('hl-flash')), 3200);
   }
 
   const visible = new Set();
@@ -3803,7 +3815,14 @@ async function openPdf(ctx, params) {
     kind: 'pdf',
     next: () => goPage(current + 1, true),
     prev: () => goPage(current - 1, true),
-    goToNote: note => { goPage(note.pageNumber, true); },
+    goToNote: note => {
+      focusNote = note.id;
+      goPage(note.pageNumber, true);
+      // Already drawn: mark it now; otherwise when the page is drawn.
+      const el = pages[note.pageNumber - 1];
+      setTimeout(() => { if (focusNote === note.id && el) { paintHighlights(note.pageNumber); } }, 500);
+      setTimeout(() => { if (focusNote === note.id) focusNote = null; }, 8000);
+    },
     goToHit: (hit, q, whole) => {
       goPage(hit.loc, true);
       pages.forEach(el => { if (el._textDiv) markFindInTextLayer(el._textDiv, q, whole); });
@@ -4214,9 +4233,20 @@ async function openEpub(ctx, params) {
     markFind: () => {},
     clearFind: () => { if (findCfi) { try { rendition.annotations.remove(findCfi, 'highlight'); } catch (_) {} findCfi = null; } },
     goToNote: async note => {
-      const cfi = painted.get(note.id);
-      if (cfi) { await rendition.display(cfi); return; }
-      await goTo(locatePos(note.pageNumber));
+      let cfi = painted.get(note.id);
+      if (!cfi) {
+        await goTo(locatePos(note.pageNumber));
+        // Drawn once its chapter is shown.
+        await new Promise(r => setTimeout(r, 400));
+        cfi = painted.get(note.id);
+        if (!cfi) return;
+      }
+      await rendition.display(cfi);
+      // Marked for a moment (a second mark over the highlight, taken away again).
+      try {
+        rendition.annotations.underline(cfi, { id: note.id }, null, 'ml-flash', { stroke: '#e65100', 'stroke-width': '3', 'stroke-opacity': '0.9' });
+        setTimeout(() => { try { rendition.annotations.remove(cfi, 'underline'); } catch (_) {} }, 3200);
+      } catch (_) {}
     },
     notesChanged: () => {
       painted.forEach((cfi) => { try { rendition.annotations.remove(cfi, 'highlight'); } catch (_) {} });
