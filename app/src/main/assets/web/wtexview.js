@@ -70,6 +70,7 @@ function texView(o) {
         replace: t2 => { cm.replaceRange(t2, from, to); const end = cm.posFromIndex(cm.indexFromPos(from) + t2.length); cm.setSelection(from, end); to = end; } });
     });
     cm.on('focus', () => { lastFocus = 'latex'; });
+    cm.on('cursorActivity', () => { o.onCursor && o.onCursor(); });
     o.editor.on('focus', () => { lastFocus = 'visual'; });
     cm.on('change', () => {
       if (applying) return;
@@ -338,6 +339,20 @@ function texView(o) {
     /** Puts the editor's content (a note being inserted, say) into the LaTeX at the cursor. */
     async insertPm(nodes, block) { const keys = await keysFor(nodes); insert(pmToTex(nodes, keys), block); },
     citeKeys: () => Object.assign({}, st.citeKeys),
+    /** For the outline, in the LaTeX view: the lines, where the cursor is, going to a line, moving lines. */
+    outline: () => (cm && st.mode === 'latex' ? {
+      lines: cm.getValue().split('\n'), cursorLine: cm.getCursor().line,
+      goto: line => { cm.focus(); cm.setCursor({ line, ch: 0 }); cm.scrollTo(null, cm.heightAtLine(line, 'local') - 20); },
+      moveLines: (from, to, target) => {
+        const text = cm.getRange({ line: from, ch: 0 }, { line: to, ch: 0 });
+        cm.operation(() => {
+          if (target > from) { cm.replaceRange(text, { line: target, ch: 0 }); cm.replaceRange('', { line: from, ch: 0 }, { line: to, ch: 0 }); }
+          else { cm.replaceRange('', { line: from, ch: 0 }, { line: to, ch: 0 }); cm.replaceRange(text, { line: target, ch: 0 }); }
+        });
+        const at = target > from ? target - (to - from) : target;
+        cm.setCursor({ line: at, ch: 0 }); cm.scrollIntoView({ line: at, ch: 0 }, 120);
+      },
+    } : null),
     get mode() { return st.mode; },
     toLatex: () => toLatex('latex'), toVisual, toSplit: () => toLatex('split'),
     toggle() {

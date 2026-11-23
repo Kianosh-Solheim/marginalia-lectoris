@@ -705,14 +705,14 @@ async function showWriter(id, params) {
   });
   styleSel.classList.add('texok');
   styleSel.addEventListener('change', e => { if (texV && texV.latexActive()) { e.stopImmediatePropagation(); texV.cmd('heading', styleSel.value); styleSel.value = 'p'; } }, true);
-  [22, 24, 25, 31, 33, 34].forEach(i => btns[i] && btns[i].classList && btns[i].classList.add('texok'));   // notes, citation style, keys, the LaTeX buttons
+  [22, 24, 25, 27, 31, 33, 34].forEach(i => btns[i] && btns[i].classList && btns[i].classList.add('texok'));   // notes, citation style, keys, the LaTeX buttons
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
   const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]], ['LaTeX', [33, 34, 31, 32]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
   commenting = new Commenting(editor, (d.settings || {}).comments, cmCol, () => { dirty = true; scheduleSave(); });
   notesP = notesPanel(editor, citing, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
   wbody.append(notesP.el);
-  outlineP = outlinePanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); });
+  outlineP = outlinePanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); }, () => texV && texV.outline());
   wbody.prepend(outlineP.el);
   lexP = lexiconPanel(editor, () => { placeNotes(); refreshBar(); commenting.renderSoon(); styleC.paintSoon(); }, () => { if (!styleP.isOpen()) styleP.open(); return styleC; });
   wbody.append(lexP.el);
@@ -803,8 +803,9 @@ async function showWriter(id, params) {
       if (r.unknown && r.unknown.length) toast('Not found in the library: ' + r.unknown.join(', '), 5000);
     },
     saveState: () => { dirty = true; scheduleSave(); },
-    onMode: () => { placeNotes(); refreshBar(); commenting.renderSoon(); },
-    onChange: () => texP.changed(),
+    onMode: () => { placeNotes(); refreshBar(); commenting.renderSoon(); outlineP.refresh(); },
+    onChange: () => { texP.changed(); outlineP.refresh(); },
+    onCursor: () => outlineP.refresh(),
     onCompile: () => { if (!texP.isOpen()) texP.open(); else texP.compile(); },
   });
   texP.onLine = n => texV.gotoLine(n);
