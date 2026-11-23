@@ -110,7 +110,12 @@ function notesPanel(editor, citing, onToggle) {
         h('span', { class: 'muted' }, noteLocus(n, { fileType: n.fileType }) || ''),
         isUsed ? h('span', { class: 'wnused', title: 'This note is cited in the text' }, '✓ used') : null,
         h('span', { style: { flex: 1 } }),
-        h('a', { class: 'btn quiet', href: `#/read/${n.documentId}?page=${n.pageNumber}&pos=${n.pageNumber}&hl=${n.id}`, target: '_blank', title: 'Open the book at this note (in a new tab); the note is marked there', onclick: e => e.stopPropagation() }, '↗'),
+        h('a', { class: 'btn quiet', href: `#/read/${n.documentId}?page=${n.pageNumber}&pos=${n.pageNumber}&hl=${n.id}`, title: 'Open the book at this note in a new tab; the note is marked there (Alt+click: in the other pane)', onclick: e => {
+          e.preventDefault(); e.stopPropagation();
+          const hash = `#/read/${n.documentId}?page=${n.pageNumber}&pos=${n.pageNumber}&hl=${n.id}`;
+          // Among the tabs: a new tab beside this one. Otherwise: a new browser tab with its own address.
+          if (EMBEDDED) paletteOpenTab(hash, e.altKey); else window.open(location.pathname + hash, '_blank');
+        } }, '↗'),
         h('button', { class: 'btn quiet', title: 'Put it at the cursor', onclick: e => { e.stopPropagation(); insertNote(editor, citing, n, null); } }, 'Insert')));
     c.addEventListener('dragstart', e => {
       e.dataTransfer.setData(NOTE_MIME, String(n.id));

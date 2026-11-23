@@ -4266,7 +4266,15 @@ async function openEpub(ctx, params) {
     if (!s.signedIn) return showLogin();
     if (tabsOn()) return showWorkspace(location.hash);
     route();
+    setTimeout(() => { try { sessionStorage.removeItem('ml.reloadedFor'); } catch (_) {} }, 3000);
   } catch (e) {
-    clear(document.getElementById('app')).append(h('div', { class: 'login' }, h('div', { class: 'box' }, h('h1', null, 'Marginalia Lectoris'), h('p', null, e.message))));
+    // A part of the page that did not arrive from the tablet (busy, or the connection dropped): load it again, once.
+    if (e instanceof ReferenceError) {
+      let tried = false; try { tried = sessionStorage.getItem('ml.reloadedFor') === location.href; sessionStorage.setItem('ml.reloadedFor', location.href); } catch (_) {}
+      if (!tried) { location.reload(); return; }
+    }
+    clear(document.getElementById('app')).append(h('div', { class: 'login' }, h('div', { class: 'box' }, h('h1', null, 'Marginalia Lectoris'),
+      h('p', null, e instanceof ReferenceError ? 'Part of the page did not load from the tablet (' + e.message + ').' : e.message),
+      h('button', { class: 'btn', onclick: () => location.reload() }, 'Load again'))));
   }
 })();
