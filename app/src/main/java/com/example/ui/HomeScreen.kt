@@ -43,6 +43,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.FolderOpen
@@ -206,6 +207,7 @@ fun HomeScreen(
     TextSearchHost(onOpenDocument = onOpenDocument, onOpenDocumentAtPage = onOpenDocumentAtPage)
     SpeechHost()
     LexiconHost()
+    CoursesHost(onOpenDocument = onOpenDocument, onOpenDocumentAtPage = onOpenDocumentAtPage)
     PlaceholderHost()
     var tileScalePref by remember { mutableStateOf(TileScalePreference.AUTO) }
     var libraryViewMode by remember {
@@ -423,6 +425,24 @@ fun HomeScreen(
                     onClick = {
                         coroutineScope.launch { drawerState.close() }
                         lexiconOpen.value = true
+                    },
+                    shape = RoundedCornerShape(0.dp),
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.White,
+                        unselectedTextColor = Color.Black
+                    ),
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 3.dp)
+                        .border(1.dp, Color.Black)
+                )
+
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.School, contentDescription = null, tint = Color.Black) },
+                    label = { Text("Courses", fontWeight = FontWeight.Medium) },
+                    selected = false,
+                    onClick = {
+                        coroutineScope.launch { drawerState.close() }
+                        coursesOpen.value = true
                     },
                     shape = RoundedCornerShape(0.dp),
                     colors = NavigationDrawerItemDefaults.colors(

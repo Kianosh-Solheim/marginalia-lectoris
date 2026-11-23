@@ -315,10 +315,11 @@ fun ReadMarkApp(
                 highlights = remember(activeHighlights, doc.filePath) { activeHighlights.filter { com.example.reader.ItemFiles.noteFile(context, doc.id, it.id) == null } },
                 settings = settings,
                 pageTurnTrigger = viewModel.pageTurnTrigger,
-                onNavigateBack = { viewModel.closeDocument() },
+                onNavigateBack = { com.example.reader.ActiveCourse.current.value = null; viewModel.closeDocument() },
                 onProgressUpdate = { page, total ->
                     readerPlace = page to total
                     viewModel.updateReadingProgress(doc.id, page, total)
+                    com.example.reader.ActiveCourse.onPage(context, doc.id, page)
                 },
                 onAddHighlight = { title, quote, notes, page, printedPage, chapter, colorHex, tags, paragraphCitation, pageEquivalent, epubCfi ->
                     viewModel.addHighlight(

@@ -2251,6 +2251,9 @@ fun ReaderScreen(
         }
     }
 
+    // Opened from a course: the course, the reading, Done.
+    CourseReadingPill(document.id)
+
     // Add Highlight & Note Dialog
     if (showAddHighlightDialog && !relayNow) {
         val isPdfDoc = document.fileType.equals("PDF", ignoreCase = true)
@@ -2258,7 +2261,7 @@ fun ReaderScreen(
         CreateHighlightDialog(
             initialTitle = cont?.title ?: "",
             initialNotes = cont?.notes ?: "",
-            initialTags = cont?.tags ?: "",
+            initialTags = cont?.tags ?: com.example.reader.ActiveCourse.tagFor(document.id),
             initialQuote = if (cont != null) com.example.reader.NoteContinuation.join(cont.quote, highlightQuoteText) else highlightQuoteText,
             initialPage = cont?.startPage ?: highlightPageNumber,
             initialPrintedPageLabel = if (cont != null) com.example.reader.NoteContinuation.span(cont, highlightPageNumber, highlightPrintedPageLabel) else highlightPrintedPageLabel,

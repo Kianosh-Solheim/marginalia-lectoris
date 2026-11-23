@@ -32,6 +32,33 @@ object Courses {
         JSONObject().put("ok", true).put("version", f.lastModified())
     }
 
+    /** Sets one reading's status (unread, started, done) — from the tablet, which has no page open to merge with. */
+    fun setStatus(ctx: Context, courseId: String, readingId: String, status: String): Boolean = synchronized(lock) {
+        val f = file(ctx); if (!f.isFile) return false
+        val data = JSONObject(f.readText())
+        var changed = false
+        forEachCourse(data) { c ->
+            if (c.optString("id") != courseId) return@forEachCourse
+            val ss = c.optJSONArray("sessions") ?: return@forEachCourse
+            for (i in 0 until ss.length()) {
+                val rs = ss.getJSONObject(i).optJSONArray("readings") ?: continue
+                for (j in 0 until rs.length()) rs.getJSONObject(j).takeIf { it.optString("id") == readingId && it.optString("status") != status }?.let { it.put("status", status); changed = true }
+            }
+        }
+        if (changed) { val now = f.lastModified(); val tmp = File(f.parentFile, f.name + ".tmp"); tmp.writeText(data.toString()); tmp.renameTo(f); if (f.lastModified() <= now) f.setLastModified(now + 1) }
+        changed
+    }
+
+    fun forEachCourse(data: JSONObject, each: (JSONObject) -> Unit) {
+        val ps = data.optJSONArray("programmes") ?: return
+        for (a in 0 until ps.length()) { val ss = ps.getJSONObject(a).optJSONArray("semesters") ?: continue
+            for (b in 0 until ss.length()) { val cs = ss.getJSONObject(b).optJSONArray("courses") ?: continue
+                for (c in 0 until cs.length()) each(cs.getJSONObject(c)) } }
+    }
+
+    /** The whole document (programmes → semesters → courses), for the tablet's own screen. */
+    fun data(ctx: Context): JSONObject = JSONObject(read(ctx)).getJSONObject("data")
+
     fun savePhoto(ctx: Context, bytes: ByteArray, type: String): String {
         require(bytes.isNotEmpty() && bytes.size <= 6 * 1024 * 1024) { "The picture is empty or too large (6 MB at most)." }
         val ext = if (type.contains("png")) "png" else "jpg"
@@ -146,4 +173,49 @@ object Courses {
             "\"readings\": [{\"author\": string, \"year\": string, \"title\": string, \"container\": string, \"chapter\": string, \"pages\": string, \"required\": boolean, \"text\": string}]}]}.",
             text.take(30000), 8000)
     }
+}
+
+/**
+ * A course reading opened from the tablet's Courses screen: notes made in it get the course's tag, it is
+ * marked as started, and as done when you reach its last page (or tap Done in the reader).
+ */
+object ActiveCourse {
+    data class Reading(val docId: Long, val courseId: String, val readingId: String, val code: String, val tag: String, val label: String, val endPage: Int?, val done: Boolean)
+    val current = androidx.compose.runtime.mutableStateOf<Reading?>(null)
+
+    /** The course tag for a note in [docId], or "" when that book was not opened from a course. */
+    fun tagFor(docId: Long): String = current.value?.takeIf { it.docId == docId }?.tag.orEmpty()
+
+    fun onPage(ctx: Context, docId: Long, page: Int) {
+        val r = current.value ?: return
+        if (r.docId != docId || r.done || r.endPage == null || page < r.endPage) return
+        current.value = r.copy(done = true)
+        Thread { runCatching { Courses.setStatus(ctx, r.courseId, r.readingId, "done") } }.start()
+    }
+
+    fun toggleDone(ctx: Context) {
+        val r = current.value ?: return
+        current.value = r.copy(done = !r.done)
+        Thread { runCatching { Courses.setStatus(ctx, r.courseId, r.readingId, if (r.done) "started" else "done") } }.start()
+    }
+}
+
+/** The tag a course gives notes (the same rule as the web view): its code, spaces as hyphens. */
+fun courseTag(c: JSONObject): String = (c.optString("code").trim().ifBlank { c.optString("title").trim() }.ifBlank { "course" })
+    .replace(Regex("\\s+"), "-").replace(Regex("[#,]"), "")
+
+/** "45–78" → 45 to 78. */
+fun readingRange(pages: String): Pair<Int, Int>? = Regex("(\\d+)\\s*(?:[–-]\\s*(\\d+))?").find(pages)?.let { m ->
+    val a = m.groupValues[1].toInt(); a to (m.groupValues[2].toIntOrNull() ?: a)
+}
+
+/** The PDF page that carries printed page [printed] (by the book's page numbering, else the same number). */
+fun pdfPageOfPrinted(ctx: Context, docId: Long, printed: Int, pageCount: Int): Int {
+    val secs = PageNumbering.sections(ctx, docId).filter { !it.roman }.sortedBy { it.from }
+    for ((i, s) in secs.withIndex().reversed()) {
+        val page = s.from + (printed - s.start)
+        val next = secs.getOrNull(i + 1)?.from ?: Int.MAX_VALUE
+        if (page >= s.from && page < next && (pageCount <= 0 || page <= pageCount)) return page
+    }
+    return if (pageCount > 0) printed.coerceIn(1, pageCount) else printed
 }
