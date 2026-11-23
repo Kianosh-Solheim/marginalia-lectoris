@@ -44,7 +44,7 @@ function texView(o) {
   const area = h('div', { class: 'wtexarea' });
   host.append(head, area);
   o.row.insertBefore(host, o.sheet.nextSibling);
-  let cm = null, busy = false, saveTimer = 0, lastToggle = 0;
+  let cm = null, busy = false, saveTimer = 0, lastToggle = 0, lastFocus = 'visual';
   const save = () => o.saveState(Object.assign({}, st));
   const docHash = () => hashText(JSON.stringify(o.editor.getJSON()));
   const say = (t) => { info.textContent = t; };
@@ -69,6 +69,8 @@ function texView(o) {
       phraseMenu(e, { text: cm.getSelection(), before: line.slice(0, from.ch), after: cm.getLine(to.line).slice(to.ch), latex: true,
         replace: t2 => { cm.replaceRange(t2, from, to); const end = cm.posFromIndex(cm.indexFromPos(from) + t2.length); cm.setSelection(from, end); to = end; } });
     });
+    cm.on('focus', () => { lastFocus = 'latex'; });
+    o.editor.on('focus', () => { lastFocus = 'visual'; });
     cm.on('change', () => {
       if (applying) return;
       st.src = cm.getValue();
@@ -141,7 +143,7 @@ function texView(o) {
     const parts = texSplit(text);
     st.preamble = parts.preamble.trim() !== (st.genPreamble || '').trim() ? parts.preamble : null;
     applying = true;
-    try { await o.importTex(text, st.back); } finally { applying = false; }
+    try { await o.importTex(text, Object.assign({}, st.back, { keyRev: Object.assign({}, st.back && st.back.keyRev, st.citeKeys) })); } finally { applying = false; }
     return true;
   }
   const markSynced = text => { st.src = text; st.base = docHash(); st.synced = hashText(text); };
@@ -244,7 +246,98 @@ function texView(o) {
   }
   let syncing = false;
 
+  // ---- the toolbar in the LaTeX: the same buttons, as LaTeX.
+  const LTX_ESC = { '\\': '\\textbackslash{}', '&': '\\&', '%': '\\%', '$': '\\$', '#': '\\#', '_': '\\_', '{': '\\{', '}': '\\}', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}' };
+  const esc = t => String(t).replace(/[\\&%$#_{}~^]/g, c => LTX_ESC[c]);
+  const MARK_CMD = { bold: 'textbf', italic: 'emph', underline: 'underline', strike: 'st', superscript: 'textsuperscript', subscript: 'textsubscript' };
+  /** The editor's content (a few nodes) as LaTeX. */
+  function pmToTex(nodes, keys) {
+    const inl = n => {
+      if (n.type === 'text') {
+        let t = esc(n.text);
+        (n.marks || []).forEach(m => { if (MARK_CMD[m.type]) t = `\\${MARK_CMD[m.type]}{${t}}`; else if (m.type === 'link' && m.attrs && m.attrs.href) t = `\\href{${m.attrs.href}}{${t}}`; });
+        return t;
+      }
+      if (n.type === 'citation') return latexCiteText(n.attrs, keys);
+      if (n.type === 'footnote') return '\\footnote{' + ((n.attrs.content && n.attrs.content.content) || []).map(blk).join(' ').trim() + '}';
+      if (n.type === 'math') return n.attrs.display ? `\\[${n.attrs.tex}\\]` : `$${n.attrs.tex}$`;
+      if (n.type === 'rawTex') return n.attrs.tex;
+      if (n.type === 'hardBreak') return '\\\\\n';
+      return (n.content || []).map(inl).join('');
+    };
+    const blk = n => {
+      if (n.type === 'paragraph') return (n.content || []).map(inl).join('');
+      if (n.type === 'heading') return `\\${['section', 'section', 'subsection', 'subsubsection', 'paragraph'][n.attrs.level] || 'paragraph'}{${(n.content || []).map(inl).join('')}}`;
+      if (n.type === 'blockquote') return '\\begin{quote}\n' + (n.content || []).map(blk).join('\n\n') + '\n\\end{quote}';
+      if (n.type === 'rawTexBlock') return n.attrs.tex;
+      if (n.isBlock || n.content && n.content.some(c => c.type === 'paragraph')) return (n.content || []).map(blk).join('\n\n');
+      return inl(n);
+    };
+    const blocks = nodes.some(n => ['paragraph', 'heading', 'blockquote', 'rawTexBlock'].includes(n.type));
+    return blocks ? nodes.map(blk).join('\n\n') : nodes.map(inl).join('');
+  }
+  /** Citation keys for the sources cited in [nodes] (keys made up for sources without one are remembered). */
+  async function keysFor(nodes) {
+    const info = await resolveCiteKeys(o.citing, { type: 'doc', content: [{ type: 'paragraph', content: nodes.filter(n => !n.isBlock) }].concat(nodes.filter(n => n.type !== 'text' && n.type !== 'citation')) });
+    st.citeKeys = st.citeKeys || {};
+    Object.entries(info.keys).forEach(([id, k]) => { st.citeKeys[k] = id; });
+    return info.keys;
+  }
+  /** Wraps the selection in \\cmd{…}, or puts \\cmd{} at the cursor with the cursor inside. */
+  function wrap(before, after) {
+    const sel = cm.getSelection();
+    if (sel) { cm.replaceSelection(before + sel + after, 'around'); }
+    else { const c = cm.getCursor(); cm.replaceRange(before + after, c); cm.setCursor({ line: c.line, ch: c.ch + before.length }); }
+    cm.focus();
+  }
+  function insert(text, block) {
+    const c = cm.getCursor();
+    if (block) { const line = cm.getLine(c.line); text = (line.trim() ? '\n\n' : '') + text + '\n'; if (line.trim()) cm.setCursor({ line: c.line, ch: line.length }); }
+    cm.replaceSelection(text, 'end'); cm.focus();
+  }
+  /** The chosen lines, as a list environment (or back to plain lines). */
+  function listify(env) {
+    const a = cm.getCursor('from').line, b = cm.getCursor('to').line;
+    const lines = []; for (let i = a; i <= b; i++) lines.push(cm.getLine(i));
+    const out = ['\\begin{' + env + '}'].concat(lines.filter(l => l.trim()).map(l => '  \\item ' + l.replace(/^\s*(\\item\s*)?/, ''))).concat(['\\end{' + env + '}']);
+    cm.replaceRange(out.join('\n'), { line: a, ch: 0 }, { line: b, ch: cm.getLine(b).length }); cm.focus();
+  }
+  function heading(v) {
+    const a = cm.getCursor('from').line, b = cm.getCursor('to').line;
+    if (v === 'quote') { const t = cm.getRange({ line: a, ch: 0 }, { line: b, ch: cm.getLine(b).length }); cm.replaceRange('\\begin{quote}\n' + t + '\n\\end{quote}', { line: a, ch: 0 }, { line: b, ch: cm.getLine(b).length }); cm.focus(); return; }
+    if (v === 'code') { const t = cm.getRange({ line: a, ch: 0 }, { line: b, ch: cm.getLine(b).length }); cm.replaceRange('\\begin{verbatim}\n' + t + '\n\\end{verbatim}', { line: a, ch: 0 }, { line: b, ch: cm.getLine(b).length }); cm.focus(); return; }
+    const cmd = { h1: 'section', h2: 'subsection', h3: 'subsubsection', h4: 'paragraph' }[v];
+    cm.operation(() => { for (let i = a; i <= b; i++) {
+      const l = cm.getLine(i); if (!l.trim()) continue;
+      const m = /^(\s*)\\(?:sub)*section\*?\{(.*)\}\s*$|^(\s*)\\paragraph\*?\{(.*)\}\s*$/.exec(l);
+      const inner = m ? (m[2] != null ? m[2] : m[4]) : l.trim();
+      cm.replaceRange(cmd ? `\\${cmd}{${inner}}` : inner, { line: i, ch: 0 }, { line: i, ch: l.length });
+    } });
+    cm.focus();
+  }
+  const COMMANDS = {
+    undo: () => cm.undo(), redo: () => cm.redo(),
+    bold: () => wrap('\\textbf{', '}'), italic: () => wrap('\\emph{', '}'), underline: () => wrap('\\underline{', '}'), strike: () => wrap('\\st{', '}'),
+    sup: () => wrap('\\textsuperscript{', '}'), sub: () => wrap('\\textsubscript{', '}'),
+    link: () => { const url = prompt('Link address'); if (url) wrap(`\\href{${url}}{`, '}'); },
+    ul: () => listify('itemize'), ol: () => listify('enumerate'),
+    indent: () => { cm.indentSelection('add'); cm.focus(); }, outdent: () => { cm.indentSelection('subtract'); cm.focus(); },
+    table: () => insert('\\begin{table}[htbp]\n  \\centering\n  \\begin{tabular}{lll}\n    \\hline\n    A & B & C \\\\\n    \\hline\n    1 & 2 & 3 \\\\\n    \\hline\n  \\end{tabular}\n  \\caption{}\n\\end{table}', true),
+    footnote: () => wrap('\\footnote{', '}'), formula: () => wrap('$', '$'),
+    hr: () => insert('\\noindent\\rule{\\linewidth}{0.4pt}', true),
+    bibliography: () => insert('\\printbibliography', true),
+    clear: () => { const s = cm.getSelection(); if (s) cm.replaceSelection(s.replace(/\\(textbf|emph|textit|underline|st|sout|textsuperscript|textsubscript|textsc)\{([^{}]*)\}/g, '$2'), 'around'); cm.focus(); },
+    heading: v => heading(v),
+    cite: () => o.citing.dialog(o.editor, null, null, false, async items => { const n = [{ type: 'citation', attrs: { items } }]; const keys = await keysFor(n); insert(latexCiteText({ items }, keys)); }),
+  };
+
   const api_ = {
+    /** Does the toolbar act on the LaTeX now (the LaTeX view, or side by side with the LaTeX last written in)? */
+    latexActive: () => !!cm && (st.mode === 'latex' || (st.mode === 'split' && lastFocus === 'latex')),
+    cmd: (name, arg) => { if (cm && COMMANDS[name]) COMMANDS[name](arg); },
+    /** Puts the editor's content (a note being inserted, say) into the LaTeX at the cursor. */
+    async insertPm(nodes, block) { const keys = await keysFor(nodes); insert(pmToTex(nodes, keys), block); },
+    citeKeys: () => Object.assign({}, st.citeKeys),
     get mode() { return st.mode; },
     toLatex: () => toLatex('latex'), toVisual, toSplit: () => toLatex('split'),
     toggle() {

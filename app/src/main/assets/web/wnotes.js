@@ -234,6 +234,8 @@ async function insertNote(editor, citing, n, pos) {
         block = true;
         nodes = [{ type: 'blockquote', content: [{ type: 'paragraph', content: [{ type: 'text', text: t + ' ' }, cit] }] }];
       }
+      // Into the LaTeX, when that is where you are writing.
+      if (window.texInsertTarget && window.texInsertTarget()) { close(); window.texInsertTarget().insertPm(nodes, block).catch(fail); return; }
       try {
         let where = Math.min(at, editor.state.doc.content.size);
         if (block) {

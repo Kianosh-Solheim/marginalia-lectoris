@@ -1436,7 +1436,7 @@ main.scrpage { padding: 10px 14px 0; max-width: none; }
 .wtexarea .cm-tag { color: #2f5fa8; } .wtexarea .cm-bracket { color: #8a6d1f; } .wtexarea .cm-comment { color: #888; font-style: italic; }
 .wtexarea .cm-keyword { color: #8a3a8a; } .wtexarea .cm-atom { color: #b05a00; } .wtexarea .cm-string, .wtexarea .cm-string-2 { color: #2c7a4b; } .wtexarea .cm-number { color: #b05a00; }
 .wtexarea .wtexhit { background: rgba(230,180,40,.35); }
-.texmode .wtoolbar .wgroup:not(:last-child) { opacity: .35; pointer-events: none; }
+.texmode .wtoolbar .tb:not(.texok), .texmode .wtoolbar select:not(.texok), .texmode .wtoolbar .wdict { opacity: .35; pointer-events: none; }
 .wtexlinelink { font-weight: 700; color: inherit; text-decoration: underline; }
 html[data-theme="dark"] .wtexarea .cm-tag { color: #8fb4ff; } html[data-theme="dark"] .wtexarea .cm-keyword { color: #d59ad5; }
 html[data-theme="dark"] .wtexarea .cm-string, html[data-theme="dark"] .wtexarea .cm-string-2 { color: #7fd1a0; } html[data-theme="dark"] .wtexarea .cm-bracket { color: #e0c070; }

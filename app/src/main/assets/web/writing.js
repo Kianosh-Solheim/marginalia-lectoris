@@ -695,6 +695,17 @@ async function showWriter(id, params) {
     toolbarButton('LaTeX ⇄', 'Edit the whole .tex file; switch back and forth with the visual view (Ctrl+Alt+X)', () => texV.toggle(), () => texV && texV.mode === 'latex'),
     toolbarButton('⫴ Side by side', 'The visual view and the LaTeX next to each other; the one you write in leads (Ctrl+Alt+Shift+X)', () => (texV.mode === 'split' ? texV.toVisual() : texV.toSplit()), () => texV && texV.mode === 'split'),
   ];
+  // In the LaTeX view (or side by side, writing in the LaTeX) these buttons write LaTeX instead.
+  const TEX_BUTTONS = { 0: 'undo', 1: 'redo', 3: 'bold', 4: 'italic', 5: 'underline', 6: 'strike', 7: 'sup', 8: 'sub', 9: 'link', 10: 'ul', 11: 'ol', 12: 'outdent', 13: 'indent', 14: 'table', 16: 'footnote', 17: 'formula', 18: 'hr', 19: 'cite', 23: 'bibliography', 26: 'clear' };
+  Object.entries(TEX_BUTTONS).forEach(([i, cmd]) => {
+    const b = btns[i].tagName === 'BUTTON' ? btns[i] : btns[i].querySelector('button');
+    if (!b) return;
+    b.classList.add('texok');
+    b.addEventListener('click', e => { if (texV && texV.latexActive()) { e.stopImmediatePropagation(); e.preventDefault(); texV.cmd(cmd); } }, true);
+  });
+  styleSel.classList.add('texok');
+  styleSel.addEventListener('change', e => { if (texV && texV.latexActive()) { e.stopImmediatePropagation(); texV.cmd('heading', styleSel.value); styleSel.value = 'p'; } }, true);
+  [22, 24, 25, 31, 33, 34].forEach(i => btns[i] && btns[i].classList && btns[i].classList.add('texok'));   // notes, citation style, keys, the LaTeX buttons
   // The bar in groups, each with its name: what you do to the text, what you put in, citations, and review.
   const groups = [['Edit', [0, 1]], ['Text', [2, 3, 4, 5, 6, 7, 8, 9, 26]], ['Lists', [10, 11, 12, 13]], ['Insert', [14, 15, 16, 17, 18, 28]], ['Citations', [19, 23, 24, 25, 21]], ['Review', [27, 29, 30, 20, 22]], ['LaTeX', [33, 34, 31, 32]]];
   bar.append(...groups.map(([name, at]) => h('div', { class: 'wgroup' }, h('div', { class: 'wgname' }, name), h('div', { class: 'wgrow' }, at.map(i => btns[i])))));
@@ -759,6 +770,9 @@ async function showWriter(id, params) {
       const used = texCitedKeys(own);
       if (used.length) {
         keyed = keyed || { keys: {}, method: 'biblatex', style: set.style || biblatexStyleFor(citing), bibName: 'references.bib' };
+        // Keys given out in the LaTeX view to sources that had none.
+        const own2 = texV.citeKeys();
+        used.forEach(k => { if (own2[k] && citing.items[own2[k]] && !keyed.keys[own2[k]]) keyed.keys[own2[k]] = k; });
         const have = new Set(Object.values(keyed.keys));
         const ask = used.filter(k => !have.has(k));
         if (ask.length) {
@@ -778,7 +792,7 @@ async function showWriter(id, params) {
   texP.addTool('Round-trip check', 'Convert to LaTeX and back, and show what (if anything) changed', roundTripCheck);
   // The LaTeX view (wtexview.js): the whole .tex, edited directly; Ctrl+Alt+X switches.
   texV = texView({
-    row: wbody.querySelector('.wsheetrow'), sheet: wbody.querySelector('.wsheet'), editor, wrap: app,
+    row: wbody.querySelector('.wsheetrow'), sheet: wbody.querySelector('.wsheet'), editor, wrap: app, citing,
     state: (d.settings || {}).texview,
     exportTex: async () => { const x = await texExport(texP.settings(), true); return { tex: x.tex, back: x.back }; },
     importTex: async (text, back) => {
@@ -794,6 +808,7 @@ async function showWriter(id, params) {
     onCompile: () => { if (!texP.isOpen()) texP.open(); else texP.compile(); },
   });
   texP.onLine = n => texV.gotoLine(n);
+  window.texInsertTarget = () => (texV && texV.latexActive() ? texV : null);
   // Right-click on selected text: other words, other phrasings (wrephrase.js).
   editor.view.dom.addEventListener('contextmenu', e => {
     const sel = editor.state.selection;

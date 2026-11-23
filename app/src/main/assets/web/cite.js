@@ -255,7 +255,7 @@ class Citing {
   // ----- inserting and changing a citation
   edit(editor, pos, attrs) { this.dialog(editor, pos, attrs); }
   insert(editor) { this.dialog(editor, null, null); }
-  dialog(editor, pos, attrs, inNoteEditor) {
+  dialog(editor, pos, attrs, inNoteEditor, onDone) {
     const self = this;
     let chosen = (attrs && attrs.items || []).map(i => Object.assign({}, i));
     modal((box, close) => {
@@ -317,6 +317,8 @@ class Citing {
       const done = () => {
         if (!chosen.length) { toast('Choose at least one source'); return; }
         const items = chosen.map(c => { const o = { id: c.id }; ['locator', 'label', 'prefix', 'suffix', 'noteId'].forEach(k => { if (c[k]) o[k] = c[k]; }); if (c.suppressAuthor) o.suppressAuthor = true; return o; });
+        // Somewhere else (the LaTeX view): the chosen sources are handed over instead.
+        if (onDone) { close(); onDone(items); return; }
         if (pos != null) editor.chain().setNodeSelection(pos).updateAttributes('citation', { items }).setTextSelection(pos + 1).focus().run();
         else {
           const at = editor.state.selection.to;
