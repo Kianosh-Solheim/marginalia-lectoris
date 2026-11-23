@@ -84,6 +84,7 @@ object PenMarks {
         return a / 2f
     }
     /** Is (x, y) inside the polygon [p] (closed from its last point to its first)? */
+    fun inside(p: List<Pair<Float, Float>>, x: Float, y: Float): Boolean = contains(p, x, y)
     private fun contains(p: List<Pair<Float, Float>>, x: Float, y: Float): Boolean {
         var inside = false
         var j = p.size - 1

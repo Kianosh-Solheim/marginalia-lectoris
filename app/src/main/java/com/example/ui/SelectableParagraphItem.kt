@@ -1359,6 +1359,7 @@ fun SelectableParagraphItem(
     var dragStartIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var isDragging by remember { mutableStateOf(false) }
+    var penTrail by remember { mutableStateOf<List<Offset>?>(null) }
     var activeSelectionRange by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var extraParagraphCount by remember(paragraph) { mutableIntStateOf(0) }
     var lastAppendedTimeMs by remember { mutableStateOf(0L) }
@@ -1935,8 +1936,17 @@ fun SelectableParagraphItem(
                     .onGloballyPositioned { coords ->
                         boxCoordinates = coords
                     }
+                    // The pen's ink trail while it moves (gone when it lifts).
+                    .drawWithContent {
+                        drawContent()
+                        penTrail?.takeIf { it.size > 1 }?.let { trail ->
+                            val path = androidx.compose.ui.graphics.Path().apply { moveTo(trail[0].x, trail[0].y); for (k in 1 until trail.size) lineTo(trail[k].x, trail[k].y) }
+                            drawPath(path, Color(0xFF444444), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                        }
+                    }
                     .pointerInput(baseParagraph) {
                         detectCustomTextSelectionGestures(
+                            onPenTrail = { penTrail = it },
                             getParagraphText = { currentParagraph },
                             getTextLayoutResult = { currentLayoutResult },
                             getActiveSelection = { activeSelectionRange },

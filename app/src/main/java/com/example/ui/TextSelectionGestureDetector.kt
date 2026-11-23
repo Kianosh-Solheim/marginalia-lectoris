@@ -163,10 +163,13 @@ suspend fun PointerInputScope.detectCustomTextSelectionGestures(
     onLongPressActivated: () -> Unit = {},
     onDragPositionInParent: (localPos: Offset?) -> Unit = {},
     longPressTimeoutMs: Long = 380L,
-    minHoldBeforeDragPromotionMs: Long = 220L
+    minHoldBeforeDragPromotionMs: Long = 220L,
+    /** The pen's stroke so far, for drawing its ink trail (null when the pen lifts). */
+    onPenTrail: (List<Offset>?) -> Unit = {}
 ) {
     var lastTapTimeMs = 0L
     var lastTapPosition = Offset.Zero
+    var lastPenMs = 0L
 
     awaitEachGesture {
         val text = getParagraphText()
@@ -198,8 +201,43 @@ suspend fun PointerInputScope.detectCustomTextSelectionGestures(
             touchTolerancePx = linkTouchTolerancePx
         ) != null
 
-        // Branch 1: Stylus / Pen highlights immediately on contact
+        // Branch 1: the pen draws a mark — an underline, a loop round some text, a tap on a word, or a line
+        // across words — and when it lifts, what it marked is selected (see penTextSelection).
         if (isStylus) {
+            down.consume()
+            onSelectionActive(true)
+            val pts = ArrayList<Offset>(128).apply { add(downPos) }
+            onPenTrail(pts.toList())
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                change.consume()
+                if (!change.pressed) break
+                // Near the bottom the next paragraphs are joined on, so a loop or line can run on into them.
+                onDragPositionInParent(change.position)
+                if ((change.position - pts.last()).getDistance() >= 1.5f) { pts.add(change.position); onPenTrail(pts.toList()) }
+            }
+            onDragPositionInParent(null)
+            onPenTrail(null)
+            val curText = getParagraphText()
+            val curLayout = getTextLayoutResult()
+            val picked = if (curLayout != null && curText.isNotEmpty()) penTextSelection(pts, curLayout, curText, density) else null
+            if (picked == null) {
+                if (getActiveSelection() == null) onSelectionActive(false)
+                return@awaitEachGesture
+            }
+            val now = System.currentTimeMillis()
+            val cur = getActiveSelection()
+            // Underlines made one after another (within a few seconds) make one selection; a loop starts its own.
+            val merged = if (!picked.third && cur != null && now - lastPenMs < 3000L) Pair(minOf(cur.first, picked.first), maxOf(cur.second, picked.second)) else Pair(picked.first, picked.second)
+            lastPenMs = now
+            onLongPressActivated()
+            onSelectionChange(merged)
+            onDragPreviewChange(null, null, false)
+            onSelectionActive(true)
+            return@awaitEachGesture
+        }
+        if (false) {
             down.consume()
             val layout = getTextLayoutResult() ?: return@awaitEachGesture
             val startChar = getClampedCharOffset(layout, downPos, text.length)
@@ -753,3 +791,63 @@ suspend fun PointerInputScope.detectCustomPdfSelectionGestures(
     }
 }
 
+
+
+/**
+ * What a pen stroke marks in a paragraph laid out as [layout]: (start, end, isLoop), or null for nothing.
+ * Points are in the paragraph's own pixels.
+ *  - a loop round some text: every character whose middle is inside it;
+ *  - a level line on or just below a line of text (an underline): the words of that line above it;
+ *  - a tap: the word under it;
+ *  - anything else: from the word where the pen went down to the word where it lifted.
+ */
+fun penTextSelection(points: List<Offset>, layout: TextLayoutResult, text: String, density: Float): Triple<Int, Int, Boolean>? {
+    if (points.isEmpty() || text.isEmpty()) return null
+    val len = text.length
+    val scale = layout.size.width.toFloat().coerceAtLeast(1f)
+    val norm = points.map { Pair(it.x / scale, it.y / scale) }
+    val word = { p: Offset -> findWordBoundaries(text, getClampedCharOffset(layout, p, len)) }
+    val minX = points.minOf { it.x }; val maxX = points.maxOf { it.x }
+    val minY = points.minOf { it.y }; val maxY = points.maxOf { it.y }
+    val w = maxX - minX; val h = maxY - minY
+    // A tap.
+    if (w < 12f * density && h < 12f * density) { val (s, e) = word(points.first()); return Triple(s, e, false) }
+    // A loop.
+    if (com.example.reader.PenMarks.isLoop(norm)) {
+        var s = -1; var e = -1
+        for (line in 0 until layout.lineCount) {
+            if (layout.getLineBottom(line) < minY || layout.getLineTop(line) > maxY) continue
+            for (i in layout.getLineStart(line) until layout.getLineEnd(line, visibleEnd = true)) {
+                if (text[i].isWhitespace()) continue
+                val r = layout.getBoundingBox(i)
+                if (com.example.reader.PenMarks.inside(norm, r.center.x / scale, r.center.y / scale)) { if (s < 0) s = i; e = i }
+            }
+        }
+        if (s >= 0) { val a = findWordBoundaries(text, s).first; val b = findWordBoundaries(text, e).second; return Triple(a, b, true) }
+    }
+    // An underline: level, not taller than a line and a half.
+    val lineH = if (layout.lineCount > 0) (layout.getLineBottom(0) - layout.getLineTop(0)).coerceAtLeast(1f) else 1f
+    if (h <= maxOf(w * 0.45f, lineH * 0.6f) && h <= lineH * 1.6f && w >= 12f * density) {
+        val y = points.map { it.y }.sorted()[points.size / 2]
+        var best = -1; var bestScore = Float.MAX_VALUE
+        for (line in 0 until layout.lineCount) {
+            val top = layout.getLineTop(line); val base = layout.getLineBaseline(line); val lh = layout.getLineBottom(line) - top
+            val score = when {
+                y in top..(base + lh * 0.3f) -> (base - y).coerceAtLeast(0f) * 0.25f   // through the line or on its foot
+                y > base && y - base <= lh * 0.95f -> y - base                          // below it
+                else -> continue
+            }
+            if (score < bestScore) { bestScore = score; best = line }
+        }
+        if (best >= 0) {
+            val mid = (layout.getLineTop(best) + layout.getLineBaseline(best)) / 2f
+            val ls = layout.getLineStart(best); val le = layout.getLineEnd(best, visibleEnd = true).coerceAtLeast(ls + 1)
+            val a = layout.getOffsetForPosition(Offset(minX, mid)).coerceIn(ls, le - 1)
+            val b = layout.getOffsetForPosition(Offset(maxX, mid)).coerceIn(ls, le - 1)
+            return Triple(findWordBoundaries(text, minOf(a, b)).first, findWordBoundaries(text, maxOf(a, b)).second, false)
+        }
+    }
+    // A line across words.
+    val (s0, e0) = word(points.first()); val (s1, e1) = word(points.last())
+    return Triple(minOf(s0, s1), maxOf(e0, e1), false)
+}
