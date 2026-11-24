@@ -17,7 +17,7 @@ function audiobookSection(d) {
       return;
     }
     player = abPlayer(d, a);
-    box.append(player.el, h('div', { class: 'row', style: { marginTop: '8px' } }, addBtn, add,
+    box.append(player.el, abSyncRow(d, load), h('div', { class: 'row', style: { marginTop: '8px' } }, addBtn, add,
       menuButton('Files ▾', a.files.map(f => [`${f.index + 1}. ${f.title || f.name}`, `${clockOf(f.durationMs)} · ${fmtSize(f.size)}`, () => confirmBox('Remove this file?', f.name, 'Remove', async () => { try { await api(`doc/${d.id}/audiobook/file/${f.index}`, { method: 'DELETE' }); load(); } catch (e) { fail(e); } })]), 'btn quiet'),
       h('button', { class: 'btn quiet', onclick: () => confirmBox('Remove the audiobook?', 'The audio files are deleted from the book’s folder on the tablet. The book and your notes stay.', 'Remove', async () => { try { await api(`doc/${d.id}/audiobook`, { method: 'DELETE' }); load(); } catch (e) { fail(e); } }) }, 'Remove')));
   };
@@ -115,4 +115,241 @@ function abPlayer(d, a) {
   const api_stop = () => { stopped = true; if (!audio.paused) { save(true); audio.pause(); } audio.removeAttribute('src'); };
   draw();
   return { el, stop: api_stop };
+}
+
+// ------------------------------------------------------------------ syncing the audio with the text
+
+/** The sync line under the player: how far it is, and the button. */
+function abSyncRow(d, reload) {
+  const row = h('div', { class: 'absync' }, h('span', { class: 'muted' }, 'Checking the sync…'));
+  api(`doc/${d.id}/audiobook/sync-info`).then(s => {
+    clear(row);
+    if (s.exists) row.append(h('span', null, h('b', null, 'Synced with the text'), h('span', { class: 'muted' }, ` · ${Math.round(s.coverage * 100)}% of the sentences · ${new Date(s.created).toLocaleDateString()} · ${s.engine}`)),
+      h('button', { class: 'btn quiet', onclick: () => abSyncDialog(d, reload) }, 'Sync again…'));
+    else row.append(h('span', { class: 'muted' }, s.transcribedMs ? `Not synced yet · transcribed up to ${clockOf(s.transcribedMs)} (it continues where it stopped)` : 'Not synced with the text yet.'),
+      h('button', { class: 'btn', onclick: () => abSyncDialog(d, reload) }, s.transcribedMs ? 'Continue syncing…' : 'Sync with the text…'));
+  }).catch(e => { clear(row).append(h('span', { class: 'muted' }, e.message)); });
+  return row;
+}
+
+const AB_MODELS = {
+  en_fast: { label: 'English · faster (Whisper base)', model: 'onnx-community/whisper-base', lang: 'english' },
+  en_exact: { label: 'English · more exact (Whisper small)', model: 'onnx-community/whisper-small', lang: 'english' },
+  no: { label: 'Norwegian (NB-Whisper small)', model: 'onnx-community/nb-whisper-small-ONNX', lang: 'norwegian' },
+  other: { label: 'Other language (Whisper small, detected)', model: 'onnx-community/whisper-small', lang: '' },
+};
+
+/** Transcribes the audiobook with Whisper in this browser (resumable), lines it up with the book's text and saves the map. */
+async function abSyncDialog(d, reload) {
+  let a, prev;
+  try { [a, prev] = await Promise.all([api(`doc/${d.id}/audiobook`), api(`doc/${d.id}/audiobook/transcript`)]); } catch (e) { fail(e); return; }
+  const gpu = !!navigator.gpu;
+  let choice = prev.modelKey || (/^(no|nb|nn)/i.test(d.language || '') ? 'no' : 'en_fast');
+  let cancelled = false, running = false;
+  const status = h('div', { class: 'mono', style: { fontSize: '12px', margin: '10px 0' } });
+  const bar = h('div', { class: 'pbar' }, h('i'));
+  const setP = (text, frac) => { status.textContent = text; if (frac != null) bar.firstChild.style.width = Math.round(frac * 100) + '%'; };
+  const pick = h('select', { style: { width: 'auto' } }, Object.entries(AB_MODELS).map(([k, m]) => h('option', { value: k, selected: k === choice }, m.label)));
+  pick.addEventListener('change', () => { choice = pick.value; });
+  const go = h('button', { class: 'btn fill' }, prev.doneMs ? 'Continue' : 'Start');
+  const restart = prev.doneMs ? h('label', { class: 'row', style: { gap: '6px', fontSize: '13px' } }, h('input', { type: 'checkbox' }), 'Start the transcription over') : null;
+  const est = Math.round(a.durationMs / 60000);
+  const close = modal((box, close) => {
+    box.append(...[h('h2', null, 'Sync the audiobook with the text'),
+      h('p', { class: 'muted', style: { marginTop: 0 } }, `Whisper listens to the audiobook (${clockOf(a.durationMs)}) in this browser, then each sentence of the book is matched with where it is read. The map is saved in the book’s folder; after that the tablet does not need this computer.`),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, gpu ? 'Using the graphics card (WebGPU): expect roughly a tenth to a third of the listening time.'
+        : `This browser cannot use the graphics card on this address, so Whisper runs on the processor: expect several hours for ${est} minutes of audio. It saves as it goes — you can close the tab and continue later, here or on another computer.`),
+      h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, h('span', null, 'Speech model'), pick),
+      prev.doneMs ? h('p', { class: 'muted', style: { fontSize: '13px' } }, `Already transcribed: ${clockOf(prev.doneMs)} of ${clockOf(a.durationMs)}.`) : null,
+      restart, status, bar,
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: () => { cancelled = true; close(); } }, running ? 'Stop (keeps what is done)' : 'Close'), go)].filter(Boolean));
+  }, () => { cancelled = true; });
+  go.addEventListener('click', async () => {
+    if (running) return; running = true; go.disabled = true; pick.disabled = true;
+    try {
+      const m = AB_MODELS[choice];
+      let tr = prev;
+      if ((restart && restart.firstChild.checked) || (tr.modelKey && tr.modelKey !== choice) || !tr.segments) tr = { modelKey: choice, segments: [], doneMs: 0 };
+      tr.modelKey = choice;
+      if (tr.doneMs < a.durationMs - 1000) {
+        const asr = await abWhisper(m.model, gpu, setP);
+        for (const f of a.files) {
+          for (let off = 0; off < f.durationMs; off += 300000) {
+            if (cancelled) return;
+            const g = f.startMs + off, len = Math.min(300000, f.durationMs - off);
+            if (g + len <= tr.doneMs + 500) continue;
+            setP(`Transcribing ${clockOf(g)} of ${clockOf(a.durationMs)}…`, g / a.durationMs);
+            const buf = await (await fetch(`/api/doc/${d.id}/audiobook/pcm?file=${f.index}&from=${off}&len=${len}`, { credentials: 'same-origin', headers: { 'X-Marginalia': '1' } })).arrayBuffer();
+            const i16 = new Int16Array(buf), pcm = new Float32Array(i16.length);
+            for (let k = 0; k < i16.length; k++) pcm[k] = i16[k] / 32768;
+            const opts = { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' };
+            if (m.lang) opts.language = m.lang;
+            const res = await asr(pcm, opts);
+            if (cancelled) return;
+            (res.chunks || [{ timestamp: [0, len / 1000], text: res.text }]).forEach(c => {
+              const t = (c.text || '').trim(); if (!t || /^\[.*\]$|^\(.*\)$/.test(t)) return;
+              const [s0, s1] = c.timestamp || [0, null];
+              tr.segments.push({ s: Math.round(g + (s0 || 0) * 1000), e: Math.round(g + ((s1 == null ? s0 + 2 : s1) || 0) * 1000), t });
+            });
+            tr.doneMs = g + len;
+            await api(`doc/${d.id}/audiobook/transcript`, { method: 'PUT', json: tr, timeout: 120000 });
+          }
+        }
+      }
+      setP('Reading the book’s text on the tablet…', 1);
+      const text = await api(`doc/${d.id}/audiobook/text`, { timeout: 600000 });
+      setP('Matching the sentences with the audio…', 1);
+      await new Promise(r => setTimeout(r, 30));
+      const map = abAlign(text, tr.segments);
+      map.engine = 'Whisper in the browser (' + (gpu ? 'WebGPU' : 'CPU') + ', ' + m.model.split('/')[1] + ')';
+      map.language = m.lang || 'auto'; map.durationMs = a.durationMs;
+      await api(`doc/${d.id}/audiobook/sync`, { method: 'POST', json: map, timeout: 120000 });
+      close();
+      toast(`Synced: ${Math.round(map.coverage * 100)}% of the sentences have a place in the audio`, 5000);
+      reload();
+    } catch (e) { console.error(e); setP('Stopped: ' + (e.message || e)); go.disabled = false; pick.disabled = false; running = false; }
+  });
+}
+
+let abAsr = {};
+async function abWhisper(model, gpu, setP) {
+  const key = model + (gpu ? ':gpu' : ':cpu');
+  if (!abAsr[key]) {
+    setP('Loading Whisper…', 0);
+    const { pipeline, env } = await import(TRANSFORMERS);
+    env.allowLocalModels = false;
+    const files = {};
+    abAsr[key] = pipeline('automatic-speech-recognition', model, {
+      device: gpu ? 'webgpu' : 'wasm',
+      dtype: gpu ? { encoder_model: 'fp16', decoder_model_merged: 'q4' } : { encoder_model: 'q8', decoder_model_merged: 'q8' },
+      progress_callback: p => {
+        if (p.status === 'progress' && p.file) {
+          files[p.file] = [p.loaded || 0, p.total || 0];
+          const v = Object.values(files), got = v.reduce((x, y) => x + y[0], 0), all = v.reduce((x, y) => x + y[1], 0);
+          setP(`Downloading the speech model (once): ${Math.round(got / 1e6)} of ${Math.round(all / 1e6)} MB`, all ? got / all : null);
+        }
+      }
+    });
+    abAsr[key].catch(() => { delete abAsr[key]; });
+  }
+  return abAsr[key];
+}
+
+// ------------------------------------------------------------------ alignment: book sentences ⇄ transcript times
+
+const abNorm = w => String(w).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
+const AB_ABBR = new Set(['mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'eg', 'ie', 'etc', 'vs', 'cf', 'nr', 'no', 'ca', 'bl', 'mfl', 'osv', 'dvs', 'fx', 'jf', 'kap', 'jr', 'sr', 'vol', 'ed', 'pp', 'p', 'ch', 'fig']);
+
+/** The book as tokens (with where each lies) and sentences (token ranges). */
+function abBookTokens(text) {
+  const toks = [], sents = [];
+  text.units.forEach((u, ui) => {
+    const start = toks.length;
+    if (text.kind === 'pdf') u.words.forEach((w, i) => toks.push({ raw: w, n: abNorm(w), u: ui, i }));
+    else { const re = /\S+/g; let m; while ((m = re.exec(u.text))) toks.push({ raw: m[0], n: abNorm(m[0]), u: ui, s: m.index, e: m.index + m[0].length }); }
+    let s0 = start;
+    for (let k = start; k < toks.length; k++) {
+      const raw = toks[k].raw, next = toks[k + 1];
+      const end = k === toks.length - 1 || (/[.!?…]["'”’»)\]]*$/.test(raw) && !AB_ABBR.has(abNorm(raw)) && raw.length > 1 &&
+        (!next || next.u !== ui || /^["'“‘«(\[]?[\p{Lu}\p{N}]/u.test(next.raw)));
+      if (end) { sents.push([s0, k]); s0 = k + 1; }
+    }
+    if (s0 < toks.length) sents.push([s0, toks.length - 1]);
+  });
+  return { toks, sents };
+}
+
+/** Transcript words with a time each (spread over their segment by length). */
+function abTranscriptTokens(segments) {
+  const out = [];
+  segments.forEach(sg => {
+    const words = sg.t.split(/\s+/).filter(Boolean); const total = words.reduce((x, w) => x + w.length + 1, 0) || 1;
+    let at = 0;
+    words.forEach(w => { const n = abNorm(w); if (n) out.push({ n, t: Math.round(sg.s + (sg.e - sg.s) * at / total) }); at += w.length + 1; });
+  });
+  return out;
+}
+
+/** Longest increasing subsequence (by .b) of pairs already ordered by .t. */
+function abLis(pairs) {
+  const tails = [], prevIdx = new Array(pairs.length), tailIdx = [];
+  pairs.forEach((p, i) => {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (tails[mid] < p.b) lo = mid + 1; else hi = mid; }
+    tails[lo] = p.b; tailIdx[lo] = i; prevIdx[i] = lo > 0 ? tailIdx[lo - 1] : -1;
+  });
+  const out = []; let k = tailIdx[tails.length - 1];
+  while (k != null && k >= 0) { out.push(pairs[k]); k = prevIdx[k]; }
+  return out.reverse();
+}
+
+/**
+ * Lines the book up with the transcript: unique three-word sequences found in both, in the same order, are the
+ * anchors; between anchors the words are matched one by one; the rest of the time is spread over the words in
+ * between when the pace is plausible. A sentence's time is when its first word is read.
+ */
+function abAlign(text, segments) {
+  const { toks, sents } = abBookTokens(text);
+  const bIdx = []; toks.forEach((t, i) => { if (t.n) bIdx.push(i); });
+  const B = bIdx.map(i => toks[i].n), T = abTranscriptTokens(segments), Tn = T.map(x => x.n);
+  const K = 3;
+  const grams = (arr) => { const m = new Map(); for (let i = 0; i + K <= arr.length; i++) { const g = arr.slice(i, i + K).join(' '); const v = m.get(g); if (v === undefined) m.set(g, i); else if (v !== -1) m.set(g, -1); } return m; };
+  const bg = grams(B), tg = grams(Tn);
+  const pairs = [];
+  tg.forEach((ti, g) => { if (ti < 0) return; const bi = bg.get(g); if (bi != null && bi >= 0) pairs.push({ b: bi, t: ti }); });
+  pairs.sort((x, y) => x.t - y.t);
+  const anchors = abLis(pairs);
+  // Matched words: book index (in B) → transcript index.
+  const match = new Int32Array(B.length).fill(-1);
+  const take = (b, t) => { if (match[b] < 0) match[b] = t; };
+  anchors.forEach(p => { for (let k = 0; k < K; k++) take(p.b + k, p.t + k); });
+  // Extend around the anchors while the words agree.
+  anchors.forEach(p => {
+    for (let b = p.b + K, t = p.t + K; b < B.length && t < Tn.length && match[b] < 0 && B[b] === Tn[t]; b++, t++) match[b] = t;
+    for (let b = p.b - 1, t = p.t - 1; b >= 0 && t >= 0 && match[b] < 0 && B[b] === Tn[t]; b--, t--) match[b] = t;
+  });
+  // Between matched words: a small word-by-word alignment when the gap is short on both sides.
+  let lastB = -1, lastT = -1;
+  const fill = (b0, b1, t0, t1) => {
+    const nb = b1 - b0, nt = t1 - t0; if (nb <= 0 || nt <= 0 || nb * nt > 250000) return;
+    const L = Array.from({ length: nb + 1 }, () => new Uint16Array(nt + 1));
+    for (let i = nb - 1; i >= 0; i--) for (let j = nt - 1; j >= 0; j--) L[i][j] = B[b0 + i] === Tn[t0 + j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    for (let i = 0, j = 0; i < nb && j < nt;) { if (B[b0 + i] === Tn[t0 + j]) { match[b0 + i] = t0 + j; i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) i++; else j++; }
+  };
+  for (let b = 0; b <= B.length; b++) {
+    if (b === B.length || match[b] >= 0) {
+      const t = b === B.length ? Tn.length : match[b];
+      if (t > lastT) fill(lastB + 1, b, lastT + 1, t);
+      if (b < B.length) { lastB = b; lastT = match[b]; }
+    }
+  }
+  // A time for every book word: matched, or spread between neighbours when the pace is plausible (0.12–1.5 s a word;
+  // faster means the audio skipped that text, slower means something else is read there).
+  const time = new Float64Array(B.length).fill(NaN);
+  let prev = -1;
+  for (let b = 0; b <= B.length; b++) {
+    if (b < B.length && match[b] < 0) continue;
+    if (b < B.length) time[b] = T[match[b]].t;
+    if (prev >= 0 && b < B.length && b - prev > 1) {
+      const t0 = time[prev], t1 = time[b], n = b - prev;
+      if (t1 > t0 && (t1 - t0) <= Math.max(15000, n * 1500) && (t1 - t0) >= n * 120) for (let k = 1; k < n; k++) time[prev + k] = t0 + (t1 - t0) * k / n;
+    }
+    prev = b;
+  }
+  // Sentences: when the first timed word is read (moved back by the words before it), in order.
+  const pos = new Int32Array(toks.length).fill(-1); bIdx.forEach((ti, bi) => { pos[ti] = bi; });
+  const out = []; let lastT2 = -1, timed = 0, counted = 0;
+  sents.forEach(([s0, s1]) => {
+    let first = -1, before = 0;
+    for (let k = s0; k <= s1; k++) { const bi = pos[k]; if (bi < 0) continue; if (!isNaN(time[bi])) { first = bi; break; } before++; }
+    const words = s1 - s0 + 1; if (words >= 2) counted++;
+    if (first < 0) return;
+    let t = Math.round(time[first] - before * 350);
+    if (t <= lastT2) { if (time[first] <= lastT2) return; t = lastT2 + 1; }
+    lastT2 = t; if (words >= 2) timed++;
+    const u = text.units[toks[s0].u];
+    const l = text.kind === 'pdf' ? { p: u.page, w: [toks[s0].i, toks[s1].u === toks[s0].u ? toks[s1].i : u.words.length - 1] } : { c: u.c, p: u.p, s: toks[s0].s, e: toks[s1].e };
+    out.push({ t, l, x: toks.slice(s0, Math.min(s1 + 1, s0 + 6)).map(z => z.raw).join(' ') });
+  });
+  return { version: 1, kind: text.kind, created: Date.now(), coverage: counted ? timed / counted : 0, anchors: anchors.length, sentences: out };
 }

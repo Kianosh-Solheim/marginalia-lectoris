@@ -1573,3 +1573,5 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .abline::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 2px; background: var(--line); }
 .abline > i { position: absolute; left: 0; top: 7px; height: 4px; background: var(--ink); }
 .abline > b { position: absolute; top: 4px; width: 1px; height: 10px; background: var(--soft); }
+.absync { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 13.5px; }
+.absync > span { flex: 1; min-width: 200px; }

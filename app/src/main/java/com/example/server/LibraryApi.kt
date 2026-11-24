@@ -1122,6 +1122,35 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 HttpResponse.FileBody(part.file, type, if (req.query["download"] == "1") part.file.name else null)
             }
             rest.size == 2 && rest[0] == "file" && m == "DELETE" -> HttpResponse.json(withContext(Dispatchers.IO) { ab.remove(context, doc, rest[1].toIntOrNull()) }.toString())
+            // Syncing with the text: the book's text, the audio as 16 kHz PCM for Whisper, the transcript while it grows, the map.
+            rest == listOf("text") && m == "GET" -> HttpResponse.json(withContext(Dispatchers.IO) {
+                if (isPdf(doc)) {
+                    val r = configuredRenderer(doc)
+                    val units = JSONArray()
+                    for (i in 0 until r.pageCount) {
+                        val words = r.extractPageTextData(i).words
+                        if (words.isNotEmpty()) units.put(JSONObject().put("page", i + 1).put("words", JSONArray(words.map { it.text })))
+                    }
+                    require(units.length() > 0) { "This PDF has no text to sync with. Run text recognition first (Text tools in the reader)." }
+                    JSONObject().put("kind", "pdf").put("units", units)
+                } else if (doc.fileType.equals("EPUB", true) || doc.filePath.endsWith(".epub", true)) com.example.reader.AudiobookSync.epubText(doc)
+                else throw IllegalArgumentException("Syncing works with PDF and EPUB books.")
+            }.toString())
+            rest == listOf("pcm") && m == "GET" -> {
+                val part = ab.files(context, doc.id).getOrNull(req.query["file"]?.toIntOrNull() ?: -1) ?: throw NoSuchElementException("No such file")
+                val from = req.query["from"]?.toLongOrNull() ?: 0L; val len = (req.query["len"]?.toLongOrNull() ?: 300_000L).coerceIn(1000L, 600_000L)
+                val bytes = withContext(Dispatchers.IO) { com.example.reader.AudiobookSync.pcmWindow(part.file, from, len) }
+                HttpResponse.Bytes(200, "application/octet-stream", bytes).header("Cache-Control", "no-store")
+            }
+            rest == listOf("transcript") && m == "GET" -> HttpResponse.json(com.example.reader.AudiobookSync.transcript(context, doc.id).toString())
+            rest == listOf("transcript") && m == "PUT" -> { com.example.reader.AudiobookSync.saveTranscript(context, doc.id, JSONObject(req.bodyText(64 * 1024 * 1024))); HttpResponse.json("{\"ok\":true}") }
+            rest == listOf("transcript") && m == "DELETE" -> { com.example.reader.AudiobookSync.saveTranscript(context, doc.id, JSONObject()); HttpResponse.json("{\"ok\":true}") }
+            rest == listOf("sync") && m == "GET" -> {
+                val f = com.example.reader.AudiobookSync.map(context, doc) ?: throw NoSuchElementException("No sync map yet.")
+                HttpResponse.FileBody(f, "application/json")
+            }
+            rest == listOf("sync") && m == "POST" -> HttpResponse.json(withContext(Dispatchers.IO) { com.example.reader.AudiobookSync.saveMap(context, doc, JSONObject(req.bodyText(64 * 1024 * 1024))) }.toString())
+            rest == listOf("sync-info") && m == "GET" -> HttpResponse.json(com.example.reader.AudiobookSync.info(context, doc).toString())
             rest == listOf("position") && (m == "PUT" || m == "POST") -> {
                 val b = JSONObject(req.bodyText())
                 val pos = b.optLong("positionMs")

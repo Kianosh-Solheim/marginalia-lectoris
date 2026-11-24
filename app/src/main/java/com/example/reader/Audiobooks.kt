@@ -130,7 +130,11 @@ object Audiobooks {
         gone.forEach { fileOf(ctx, doc.id, it).delete() }
         list.removeAll(gone)
         val sub = File(ItemFiles.folderOf(ctx, doc), baseName(doc))
-        if (list.isEmpty()) { if (sub.isDirectory && sub.listFiles()?.isEmpty() == true) sub.delete(); dir(ctx, doc.id).deleteRecursively(); changes.value++; return json(ctx, doc.id) }
+        if (list.isEmpty()) {
+            if (sub.isDirectory && sub.listFiles()?.isEmpty() == true) sub.delete()
+            AudiobookSync.syncFile(ctx, doc).delete()   // the sync map belongs to the audio
+            dir(ctx, doc.id).deleteRecursively(); changes.value++; return json(ctx, doc.id)
+        }
         arrange(ctx, doc, list)
         o.put("files", JSONArray(list)).put("chapters", chapters(ctx, doc.id, list)).put("positionMs", 0L)
         write(ctx, doc.id, o)
@@ -374,5 +378,117 @@ class AudiobookService : MediaSessionService() {
         session?.let { removeSession(it); it.release() }
         session = null
         super.onDestroy()
+    }
+}
+
+/**
+ * Syncing an audiobook with its book. The transcription (Whisper, in the browser for now) is kept by the app while it
+ * runs, so it can be resumed; the finished sync map lies in the book's folder beside the audio:
+ *   <book folder>/Audiobook – <Title>.sync.json
+ *   { version, kind: "pdf"|"epub", engine, language, created, coverage, durationMs,
+ *     sentences: [{ t: start ms, l: locator, x: the first words }] }
+ * Locators: PDF {p: page (1-based), w: [first word, last word]} in the page's words;
+ *           EPUB {c: chapter, p: paragraph, s: start char, e: end char} in the chapter's paragraphs.
+ */
+object AudiobookSync {
+    private fun transcriptFile(ctx: Context, docId: Long) = File(Audiobooks.dir(ctx, docId), "transcript.json")
+
+    suspend fun syncFile(ctx: Context, doc: com.example.data.local.DocumentEntity): File =
+        File(ItemFiles.folderOf(ctx, doc), "Audiobook – " + MarkdownExporter.sanitizeFilename(doc.title).ifBlank { "Untitled" }.take(120) + ".sync.json")
+
+    fun transcript(ctx: Context, docId: Long): JSONObject = runCatching { JSONObject(transcriptFile(ctx, docId).readText()) }.getOrDefault(JSONObject())
+    fun saveTranscript(ctx: Context, docId: Long, o: JSONObject) {
+        val f = transcriptFile(ctx, docId); f.parentFile?.mkdirs()
+        val t = File(f.parentFile, f.name + ".tmp"); t.writeText(o.toString()); t.renameTo(f)
+    }
+
+    suspend fun saveMap(ctx: Context, doc: com.example.data.local.DocumentEntity, o: JSONObject): JSONObject {
+        require((o.optJSONArray("sentences")?.length() ?: 0) > 0) { "The sync map is empty." }
+        val f = syncFile(ctx, doc); f.parentFile?.mkdirs()
+        val t = File(f.parentFile, "." + f.name + ".tmp"); t.writeText(o.toString()); t.renameTo(f)
+        Audiobooks.changes.value++
+        return info(ctx, doc)
+    }
+
+    suspend fun map(ctx: Context, doc: com.example.data.local.DocumentEntity): File? = syncFile(ctx, doc).takeIf { it.isFile }
+
+    suspend fun info(ctx: Context, doc: com.example.data.local.DocumentEntity): JSONObject {
+        val f = map(ctx, doc) ?: return JSONObject().put("exists", false).put("transcribedMs", transcript(ctx, doc.id).optLong("doneMs"))
+        val o = runCatching { JSONObject(f.readText()) }.getOrDefault(JSONObject())
+        return JSONObject().put("exists", true).put("name", f.name).put("coverage", o.optDouble("coverage", 0.0)).put("created", o.optLong("created"))
+            .put("engine", o.optString("engine")).put("sentences", o.optJSONArray("sentences")?.length() ?: 0).put("transcribedMs", transcript(ctx, doc.id).optLong("doneMs"))
+    }
+
+    /** The book's text in units with what locators need: PDF pages with their words, or EPUB paragraphs. */
+    fun epubText(doc: com.example.data.local.DocumentEntity): JSONObject {
+        val book = EpubParser.parseEpub(File(doc.filePath), "audiobook-${doc.id}")
+        val units = JSONArray()
+        book.chapters.forEachIndexed { c, ch -> ch.paragraphs.forEachIndexed { p, text -> if (text.isNotBlank()) units.put(JSONObject().put("c", c).put("p", p).put("text", text)) } }
+        return JSONObject().put("kind", "epub").put("units", units).put("language", book.language)
+    }
+
+    /** 16 kHz mono 16-bit little-endian PCM of [lenMs] from [fromMs] in one audio file (what Whisper wants). */
+    fun pcmWindow(file: File, fromMs: Long, lenMs: Long): ByteArray {
+        val ex = android.media.MediaExtractor()
+        ex.setDataSource(file.absolutePath)
+        val track = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
+            ?: error("No audio in the file.")
+        ex.selectTrack(track)
+        val fmt = ex.getTrackFormat(track)
+        val fromUs = fromMs * 1000; val toUs = (fromMs + lenMs) * 1000
+        ex.seekTo(fromUs, android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+        val codec = android.media.MediaCodec.createDecoderByType(fmt.getString(android.media.MediaFormat.KEY_MIME)!!)
+        codec.configure(fmt, null, null, 0); codec.start()
+        var rate = fmt.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)
+        var channels = fmt.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
+        val out = java.io.ByteArrayOutputStream((lenMs * 32).toInt().coerceAtMost(64 shl 20))
+        try {
+            val info = android.media.MediaCodec.BufferInfo()
+            var inputDone = false; var outputDone = false
+            var pos = 0.0; var inIndex = 0L; var carry = 0f; var haveCarry = false; var started = false
+            while (!outputDone) {
+                if (!inputDone) {
+                    val ib = codec.dequeueInputBuffer(10_000)
+                    if (ib >= 0) {
+                        val buf = codec.getInputBuffer(ib)!!
+                        val n = ex.readSampleData(buf, 0)
+                        if (n < 0 || ex.sampleTime > toUs + 500_000) { codec.queueInputBuffer(ib, 0, 0, 0, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM); inputDone = true }
+                        else { codec.queueInputBuffer(ib, 0, n, ex.sampleTime, 0); ex.advance() }
+                    }
+                }
+                val ob = codec.dequeueOutputBuffer(info, 10_000)
+                if (ob == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    val f = codec.outputFormat
+                    rate = f.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE); channels = f.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
+                } else if (ob >= 0) {
+                    val buf = codec.getOutputBuffer(ob)!!.order(java.nio.ByteOrder.nativeOrder())
+                    buf.position(info.offset); buf.limit(info.offset + info.size)
+                    val sb = buf.asShortBuffer()
+                    val frames = sb.remaining() / channels
+                    val usPerFrame = 1_000_000.0 / rate
+                    val step = rate / 16000.0
+                    for (fi in 0 until frames) {
+                        val tUs = info.presentationTimeUs + (fi * usPerFrame).toLong()
+                        if (tUs < fromUs) continue
+                        if (tUs >= toUs) { outputDone = true; break }
+                        if (!started) { started = true; pos = 0.0; inIndex = 0 }
+                        var acc = 0f
+                        for (c in 0 until channels) acc += sb.get(fi * channels + c)
+                        val v = acc / channels
+                        val prev = if (haveCarry) carry else v
+                        while (pos <= inIndex) {
+                            val frac = (pos - (inIndex - 1)).toFloat().coerceIn(0f, 1f)
+                            val s = (prev + (v - prev) * frac).toInt().coerceIn(-32768, 32767)
+                            out.write(s and 0xff); out.write((s shr 8) and 0xff)
+                            pos += step
+                        }
+                        carry = v; haveCarry = true; inIndex++
+                    }
+                    codec.releaseOutputBuffer(ob, false)
+                    if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                }
+            }
+        } finally { runCatching { codec.stop() }; codec.release(); ex.release() }
+        return out.toByteArray()
     }
 }
