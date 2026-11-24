@@ -217,12 +217,16 @@ object Courses {
 
     fun parseOutline(ctx: Context, text: String, year: String): JSONObject {
         require(text.isNotBlank()) { "Paste the course outline or the reading list first." }
-        return ai(ctx, "Turn this course outline or reading list into sessions. For each session give: date as YYYY-MM-DD (when no year is given, it is probably $year), " +
-            "time (like 10:15–12:00), room, kind (Lecture, Seminar, Workshop, Supervision, Exam, Deadline or Other), topic, and its readings. " +
+        return ai(ctx, "Turn this course outline or reading list into sessions. For each session give: date as YYYY-MM-DD (when no year is given, it is probably $year; empty when only a week is given), " +
+            "week (the week number when the outline gives one, e.g. \"Uke 36\" or a week column → 36), lecturer (as written), " +
+            "time (like 10:15–12:00), room, kind (Lecture, Seminar, Workshop, Supervision, Exam, Deadline or Other), topic (the text only), " +
+            "link (the address when the topic is a link written as [text](address); empty otherwise), and its readings. " +
+            "When one row or week has both a lecture and a seminar (e.g. a Seminar column), make two sessions with the same week: one Lecture and one Seminar, each with its own topic and link. " +
+            "A week with no topic and nothing else is left out. " +
             "For each reading give: author (surnames, as listed), year, title, container (the book or journal it is in), chapter, pages (like 45–78), " +
             "required (false when marked optional, recommended, further or supplementary reading), and text (the reading exactly as listed). " +
             "When the text is only a reading list without sessions, make one session per week, topic or heading, without a date. Keep the order of the text. " +
-            "Return only JSON: {\"sessions\": [{\"date\": string, \"time\": string, \"room\": string, \"kind\": string, \"topic\": string, " +
+            "Return only JSON: {\"sessions\": [{\"date\": string, \"week\": string, \"lecturer\": string, \"link\": string, \"time\": string, \"room\": string, \"kind\": string, \"topic\": string, " +
             "\"readings\": [{\"author\": string, \"year\": string, \"title\": string, \"container\": string, \"chapter\": string, \"pages\": string, \"required\": boolean, \"text\": string}]}]}.",
             text.take(30000), 8000)
     }

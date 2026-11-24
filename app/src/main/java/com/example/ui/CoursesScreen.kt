@@ -80,6 +80,9 @@ private fun allCourses(data: JSONObject): List<CourseRow> {
 
 private fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).map { getJSONObject(it) }
 
+/** Undated sessions with only a week number sort among the dated ones of that week (approximately). */
+private fun weekKey(x: JSONObject): String = x.optString("week").toIntOrNull()?.let { "~w" + it.toString().padStart(2, '0') } ?: "9999"
+
 private val dayFmt = DateTimeFormatter.ofPattern("EEE d MMM yyyy", Locale.ENGLISH)
 private fun niceDate(iso: String): String = runCatching { LocalDate.parse(iso).format(dayFmt) }.getOrDefault(iso.ifBlank { "No date" })
 
@@ -185,7 +188,7 @@ private fun CourseDetail(row: CourseRow, docs: Map<Long, DocumentEntity>, notes:
     val context = LocalContext.current
     val c = row.course
     val today = LocalDate.now().toString()
-    val sessions = remember(c) { c.optJSONArray("sessions").objects().sortedWith(compareBy({ it.optString("date").ifBlank { "9999" } }, { it.optString("time") })) }
+    val sessions = remember(c) { c.optJSONArray("sessions").objects().sortedWith(compareBy({ it.optString("date").ifBlank { weekKey(it) } }, { it.optString("time") })) }
     val nextIndex = sessions.indexOfFirst { it.optString("date").isNotBlank() && it.optString("date") >= today }
     val tag = courseTag(c)
     val tagged = remember(notes, tag) { notes.count { n -> n.tags.split(',').any { it.trim().removePrefix("#").equals(tag, true) } } }
@@ -218,13 +221,13 @@ private fun CourseDetail(row: CourseRow, docs: Map<Long, DocumentEntity>, notes:
             val past = x.optString("date").isNotBlank() && x.optString("date") < today
             Column(Modifier.fillMaxWidth().border(if (isNext) 2.dp else 1.dp, if (past) CRule else Color.Black).padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(niceDate(x.optString("date")), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = if (past) CGrey else Color.Black)
+                    Text(if (x.optString("date").isBlank() && x.optString("week").isNotBlank()) "Week " + x.optString("week") else niceDate(x.optString("date")), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = if (past) CGrey else Color.Black)
                     Text(listOf(x.optString("time"), x.optString("room")).filter { it.isNotBlank() }.joinToString(" · "), fontSize = 13.sp, color = CGrey)
                     if (isNext) Text("NEXT", modifier = Modifier.background(Color.Black).padding(horizontal = 6.dp, vertical = 1.dp), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
                     Text(x.optString("kind", "Lecture"), fontSize = 12.sp, color = CGrey)
                 }
-                if (x.optString("topic").isNotBlank()) Text(x.optString("topic"), fontFamily = FontFamily.Serif, fontSize = 17.sp, color = Color.Black)
+                if (x.optString("topic").isNotBlank() || x.optString("lecturer").isNotBlank()) Text(x.optString("topic") + (x.optString("lecturer").takeIf { it.isNotBlank() }?.let { (if (x.optString("topic").isBlank()) "" else " · ") + it } ?: ""), fontFamily = FontFamily.Serif, fontSize = 17.sp, color = Color.Black)
                 if (x.optString("note").isNotBlank()) Text(x.optString("note"), fontSize = 13.sp, color = CGrey)
                 x.optJSONArray("readings").objects().forEach { r ->
                     ReadingLine(r, r.optLong("docId", 0L).takeIf { it > 0 }?.let { docs[it] }, notes, tag,

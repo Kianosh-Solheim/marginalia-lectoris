@@ -1561,3 +1561,7 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .gcalcal { display: flex; align-items: center; gap: 8px; }
 .gcalpaste { margin-top: 10px; }
 @media (max-width: 800px) { .calweek { grid-template-columns: 1fr; } .calday { min-height: 0; } .calcourse .calrow, .calpickrow { grid-template-columns: 14px 1fr; } .calcourse .calrow > :nth-child(n+3), .calpickrow > :nth-child(n+3) { grid-column: 2; } }
+.mergerow { display: grid; grid-template-columns: 220px 1fr 1fr; gap: 10px; align-items: start; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.mergerow label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; word-break: break-word; }
+.crslect a { color: inherit; text-decoration: underline dotted; }
+@media (max-width: 800px) { .mergerow { grid-template-columns: 1fr; } }

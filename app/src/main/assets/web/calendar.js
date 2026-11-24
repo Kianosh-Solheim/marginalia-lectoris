@@ -35,7 +35,7 @@ function sessionMinutes(t) {
 function sessionEvent(c, x) {
   const mins = sessionMinutes(x.time);
   const reads = (x.readings || []).map(r => '• ' + (r.text || r.chapter || '') + (r.pages ? ' (pp. ' + r.pages + ')' : '') + (r.required === 'optional' ? ' — optional' : '')).filter(s => s.length > 2);
-  const description = [x.topic ? x.topic : '', x.note || '', reads.length ? 'Readings:\n' + reads.join('\n') : '', 'From Marginalia Lectoris · ' + [c.code, c.title].filter(Boolean).join(' ')].filter(Boolean).join('\n\n');
+  const description = [x.topic ? x.topic : '', x.lecturer ? 'Lecturer: ' + x.lecturer : '', x.link || '', x.note || '', reads.length ? 'Readings:\n' + reads.join('\n') : '', 'From Marginalia Lectoris · ' + [c.code, c.title].filter(Boolean).join(' ')].filter(Boolean).join('\n\n');
   const title = [c.code || c.title, x.kind && x.kind !== 'Other' ? x.kind.toLowerCase() : '', ].filter(Boolean).join(' ') + (x.topic ? ': ' + x.topic : '');
   const base = { title, description, location: x.room || '', session: `${c.id}/${x.id}`, timeZone: localZone() };
   if (!mins) return Object.assign(base, { allDay: true, start: x.date, end: ymd(addDays(new Date(x.date + 'T12:00:00'), 1)) });
@@ -146,10 +146,10 @@ async function eventsToSessionsDialog(events, c, onDone, source) {
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: async () => {
         const chosen = rows.filter(r => r.cb.checked); if (!chosen.length) { toast('Tick some events'); return; }
         const cc = course();
-        cc.sessions = (cc.sessions || []).concat(chosen.map(r => Object.assign(r.x, r.e.cal ? { gcal: { id: r.e.id, cal: r.e.cal, linked: true } } : {})));
-        cc.sessions.sort((a, b) => ((a.date || '9999') + (a.time || '')).localeCompare((b.date || '9999') + (b.time || '')));
+        const made = chosen.map(r => Object.assign(r.x, r.e.cal ? { gcal: { id: r.e.id, cal: r.e.cal, linked: true } } : {}));
         close();
-        if (await coursesSave()) { toast(`${chosen.length} session${chosen.length === 1 ? '' : 's'} put in ${cc.code || cc.title}`, 2500); if (onDone) onDone(cc); }
+        const sem = (all.find(a => a.c === cc) || {}).s;
+        mergeSessions(cc, made, 'timetable', () => { if (onDone) onDone(cc); else coursesSave(); }, sem);
       } }, 'Put them in')));
     draw();
   });
@@ -604,4 +604,122 @@ function tpCsvParse(text) {
   });
   events.sort((a, b) => a.start.localeCompare(b.start));
   return { events, code, sem };
+}
+
+// ------------------------------------------------------------------ outline ⇄ timetable: one session per week and kind
+
+/** A session's week: the one written in the outline, else the ISO week of its date. */
+function sessionWeek(x) {
+  const w = parseInt(x.week, 10); if (w >= 1 && w <= 53) return w;
+  return /^\d{4}-\d{2}-\d{2}$/.test(x.date || '') ? isoWeek(new Date(x.date + 'T12:00:00')) : 0;
+}
+/** The Monday of ISO week [w] in [year]. */
+function isoWeekMonday(year, w) { const j4 = new Date(year, 0, 4); const m = addDays(j4, -((j4.getDay() + 6) % 7)); return addDays(m, (w - 1) * 7); }
+/** Sorting: by date; a session with only a week sits at that week's Monday (in the semester's year). */
+function sessionSortKey(x, sem) {
+  if (x.date) return x.date + ' ' + (x.time || '');
+  const w = sessionWeek(x); if (!w) return '9999';
+  const start = sem && sem.start ? new Date(sem.start + 'T12:00:00') : new Date();
+  let y = start.getFullYear(); if (start.getMonth() >= 6 && w < 26) y++;
+  return ymd(isoWeekMonday(y, w)) + ' ~';
+}
+const kindKey = k => /seminar|gruppe|group/i.test(k || '') ? 'Seminar' : /lecture|forelesning/i.test(k || '') || !k ? 'Lecture' : k;
+
+/** The lecturer, linked to the course's teacher card when a teacher's name matches. */
+function lecturerChip(c, name) {
+  const n = name.toLowerCase().trim();
+  const t = (c.teachers || []).find(t => { const tn = (t.name || '').toLowerCase(); return tn && (tn === n || tn.split(/\s+/).some(w => w.length > 2 && n.split(/[\s,&/]+/).includes(w))); });
+  return h('span', { class: 'crslect muted' }, ' · ', t ? h('a', { href: '#', title: t.name, onclick: e => { e.preventDefault(); const el = document.getElementById('teacher-' + t.id); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('hl-flash'); setTimeout(() => el.classList.remove('hl-flash'), 1500); } } }, name) : name);
+}
+
+const MERGE_TIME = ['date', 'time', 'room'], MERGE_CONTENT = ['topic', 'lecturer', 'link', 'note'];
+const MERGE_LABEL = { date: 'Date', time: 'Time', room: 'Room', topic: 'Topic', lecturer: 'Lecturer', link: 'Link', note: 'Notes' };
+const mnorm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * Puts [incoming] sessions into the course: a session meets the course's session of the same week and kind
+ * (the first lecture of week 36 with the first lecture of week 36…). Where both have a value and they differ,
+ * you choose; readings are joined; the rest is kept on both sides.
+ */
+function mergeSessions(c, incoming, source, done, sem) {
+  c.sessions = c.sessions || [];
+  const bucket = list => { const m = new Map(); list.forEach(x => { const w = sessionWeek(x); if (!w) return; const k = w + '|' + kindKey(x.kind); if (!m.has(k)) m.set(k, []); m.get(k).push(x); }); m.forEach(v => v.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))); return m; };
+  const have = bucket(c.sessions), pairs = [], added = [];
+  const taken = new Set();
+  incoming.forEach(x => {
+    const w = sessionWeek(x), list = w ? (have.get(w + '|' + kindKey(x.kind)) || []) : [];
+    // The first one in that week and kind not yet matched; two dated sessions only meet on the same date.
+    const y = list.find(y => !taken.has(y) && !(x.date && y.date && x.date !== y.date));
+    if (y) { taken.add(y); pairs.push({ y, x }); }
+    else added.push(x);
+  });
+  const conflicts = [];
+  pairs.forEach(p => [...MERGE_TIME, ...MERGE_CONTENT].forEach(f => { if (p.x[f] && p.y[f] && mnorm(p.x[f]) !== mnorm(p.y[f])) conflicts.push({ p, f }); }));
+  const apply = choice => {
+    pairs.forEach(p => {
+      [...MERGE_TIME, ...MERGE_CONTENT].forEach(f => { if (!p.y[f] && p.x[f]) p.y[f] = p.x[f]; });
+      if (!p.y.week && p.x.week) p.y.week = p.x.week;
+      if (!p.y.gcal && p.x.gcal) p.y.gcal = p.x.gcal;
+      if (kindKey(p.y.kind) === kindKey(p.x.kind) && p.x.kind && (!p.y.kind || p.y.kind === 'Lecture')) p.y.kind = p.x.kind;
+      const seen = new Set((p.y.readings || []).map(r => r.docId ? 'd' + r.docId : mnorm(r.text)));
+      p.y.readings = (p.y.readings || []).concat((p.x.readings || []).filter(r => !seen.has(r.docId ? 'd' + r.docId : mnorm(r.text))));
+    });
+    conflicts.forEach((k, i) => { if (choice[i] === 'new') k.p.y[k.f] = k.p.x[k.f]; });
+    c.sessions = c.sessions.concat(added);
+    c.sessions.sort((a, b) => sessionSortKey(a, sem).localeCompare(sessionSortKey(b, sem)));
+    toast(`${pairs.length} matched by week, ${added.length} added`, 3000);
+    done();
+  };
+  if (!conflicts.length) { apply([]); return; }
+  // Where both sides have something different: you choose (the outline is preselected for the content, the timetable for the times).
+  const fromOutline = source === 'outline';
+  modal((box, close) => {
+    box.classList.add('wide');
+    const radios = conflicts.map(() => null);
+    const list = h('div', { class: 'calpick' });
+    conflicts.forEach((k, i) => {
+      const preferNew = MERGE_CONTENT.includes(k.f) ? fromOutline : !fromOutline;
+      const name = 'mc' + i;
+      const a = h('input', { type: 'radio', name, checked: !preferNew }), b = h('input', { type: 'radio', name, checked: preferNew });
+      radios[i] = { a, b, f: k.f };
+      const w = sessionWeek(k.p.y) || sessionWeek(k.p.x);
+      list.append(h('div', { class: 'mergerow' }, h('div', { class: 'mono muted' }, `Week ${w} · ${kindKey(k.p.y.kind)} · ${MERGE_LABEL[k.f]}`),
+        h('label', null, a, ' ', h('span', null, String(k.p.y[k.f])), h('span', { class: 'muted' }, ' — now')),
+        h('label', null, b, ' ', h('span', null, String(k.p.x[k.f])), h('span', { class: 'muted' }, fromOutline ? ' — outline' : ' — timetable'))));
+    });
+    const all = side => radios.forEach(r => { const outlineIsNew = fromOutline; const pickNew = side === 'outline' ? outlineIsNew : !outlineIsNew; (pickNew ? r.b : r.a).checked = true; });
+    const content = side => radios.forEach(r => { const pickNew = MERGE_CONTENT.includes(r.f) === (side === (fromOutline ? 'outline' : 'timetable')); (pickNew ? r.b : r.a).checked = true; });
+    box.append(h('h2', null, `${conflicts.length} difference${conflicts.length === 1 ? '' : 's'} between the outline and the timetable`),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, `${pairs.length} sessions meet by week and kind. Where both have something different, choose which to keep. Everything else is filled in from both.`),
+      h('div', { class: 'row', style: { gap: '6px', margin: '6px 0', flexWrap: 'wrap' } },
+        h('button', { class: 'btn quiet', onclick: () => content('outline') }, 'Content from the outline, times from the timetable'),
+        h('button', { class: 'btn quiet', onclick: () => all('outline') }, 'All from the outline'),
+        h('button', { class: 'btn quiet', onclick: () => all('timetable') }, 'All from the timetable')),
+      list,
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: () => { close(); toast('Nothing changed'); } }, 'Cancel'),
+        h('button', { class: 'btn fill', onclick: () => { close(); apply(radios.map(r => r.b.checked ? 'new' : 'now')); } }, 'Put them together')));
+  });
+}
+
+/** Pasting from a web page keeps its links as [text](address) and its table rows as lines (the AI reads both). */
+function pasteWithLinks(e, ta) {
+  const html = e.clipboardData && e.clipboardData.getData('text/html');
+  if (!html || !/<a\s/i.test(html)) return;
+  e.preventDefault();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const text = node => {
+    if (node.nodeType === 3) return node.nodeValue.replace(/\s+/g, ' ');
+    if (node.nodeType !== 1) return '';
+    const tag = node.tagName;
+    if (tag === 'SCRIPT' || tag === 'STYLE') return '';
+    if (tag === 'A') { const t = [...node.childNodes].map(text).join('').replace(/Links to an external site\.?/i, '').trim(); const href = node.getAttribute('href') || ''; return /^https?:/i.test(href) && t ? `[${t}](${href})` : t; }
+    if (tag === 'BR') return '\n';
+    if (tag === 'TR') return [...node.children].map(td => [...td.childNodes].map(text).join('').replace(/\s+/g, ' ').trim()).join(' | ') + '\n';
+    const inner = [...node.childNodes].map(text).join('');
+    return /^(P|DIV|LI|H[1-6]|TABLE|THEAD|TBODY|UL|OL|SECTION)$/.test(tag) ? '\n' + inner + '\n' : inner;
+  };
+  const out = text(doc.body).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  const at = ta.selectionStart, end = ta.selectionEnd;
+  ta.value = ta.value.slice(0, at) + out + ta.value.slice(end);
+  ta.selectionStart = ta.selectionEnd = at + out.length;
 }

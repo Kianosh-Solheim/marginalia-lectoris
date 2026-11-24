@@ -213,7 +213,7 @@ async function showCourse(id) {
   main.append(h('section', { class: 'crssec' }, h('h2', null, 'Teachers'), people));
 
   // The course outline
-  const sessions = (c.sessions || []).slice().sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || (a.time || '').localeCompare(b.time || ''));
+  const sessions = (c.sessions || []).slice().sort((a, b) => sessionSortKey(a, s).localeCompare(sessionSortKey(b, s)));
   const today = todayIso(), next = sessions.find(x => x.date && x.date >= today);
   const outline = h('div', { class: 'crsoutline' });
   if (!sessions.length) outline.append(h('p', { class: 'muted' }, 'No sessions yet. Add the lectures and seminars with their readings.'));
@@ -222,11 +222,13 @@ async function showCourse(id) {
     (x.readings || []).forEach((r, j) => rd.append(readingRow(r, byId.get(r.docId), c, () => readingDialog(x, r, docs, save), () => { x.readings.splice(j, 1); save(); }, save, notes)));
     rd.append(h('button', { class: 'btn quiet crsaddread', onclick: () => readingDialog(x, null, docs, save) }, '+ Reading'));
     outline.append(h('div', { class: 'crssession' + (x === next ? ' next' : '') + (x.date && x.date < today ? ' past' : '') },
-      h('div', { class: 'crswhen' }, h('div', { class: 'crsdate' }, courseDate(x.date) || 'No date'), h('div', { class: 'muted' }, [x.time, x.room].filter(Boolean).join(' · ')),
+      h('div', { class: 'crswhen' }, h('div', { class: 'crsdate' }, courseDate(x.date) || (sessionWeek(x) ? 'Week ' + sessionWeek(x) : 'No date')), h('div', { class: 'muted' }, [x.date && sessionWeek(x) ? 'week ' + sessionWeek(x) : '', x.time, x.room].filter(Boolean).join(' · ')),
         x === next ? h('span', { class: 'crsnext' }, 'Next') : null,
         x.gcal ? h('span', { class: 'calmark', title: x.gcal.linked ? 'Made from a Google Calendar event' : 'Sent to Google Calendar' }, x.gcal.linked ? 'from Google' : 'in Google') : null),
       h('div', { class: 'crswhat' },
-        h('div', { class: 'crstopic' }, h('span', { class: 'crskindtag' }, x.kind || 'Lecture'), ' ', x.topic || h('span', { class: 'muted' }, '(no topic)'),
+        h('div', { class: 'crstopic' }, h('span', { class: 'crskindtag' }, x.kind || 'Lecture'), ' ',
+          x.link && /^https?:\/\//.test(x.link) ? h('a', { href: x.link, target: '_blank', rel: 'noopener', title: x.link }, x.topic || 'Session page') : (x.topic || h('span', { class: 'muted' }, '(no topic)')),
+          x.lecturer ? lecturerChip(c, x.lecturer) : null,
           h('span', { style: { flex: 1 } }),
           h('button', { class: 'btn quiet', title: 'Edit the session', onclick: () => sessionDialog(c, x, save) }, 'Edit'),
           h('button', { class: 'btn quiet', title: 'Delete the session', onclick: () => confirmBox('Delete the session?', (x.topic || courseDate(x.date)) + (x.gcal && !x.gcal.linked ? ' — its Google Calendar event is deleted too.' : ''), 'Delete', () => { c.sessions = c.sessions.filter(y => y !== x); sessionGoogleDelete(x); save(); }) }, '×')),
@@ -239,7 +241,7 @@ async function showCourse(id) {
 }
 
 function teacherCard(t, onEdit, onRemove) {
-  return h('div', { class: 'crsperson' },
+  return h('div', { class: 'crsperson', id: t.id ? 'teacher-' + t.id : null },
     t.photo ? h('img', { class: 'crsphoto', src: '/api/course-photo/' + t.photo, alt: '' }) : h('div', { class: 'crsphoto none' }, (t.name || '?').split(/\s+/).map(w => w[0]).slice(0, 2).join('')),
     h('div', { class: 'crspinfo' },
       h('div', { class: 'crspname' }, t.name || '(no name)'),
@@ -302,7 +304,10 @@ function sessionDialog(c, x, save) {
     { key: 'time', label: 'Time', value: x && x.time, placeholder: '10:15–12:00' },
     { key: 'kind', label: 'Kind', type: 'select', value: (x && x.kind) || 'Lecture', options: ['Lecture', 'Seminar', 'Workshop', 'Supervision', 'Exam', 'Deadline', 'Other'].map(k => [k, k]) },
     { key: 'room', label: 'Room', value: x && x.room },
+    { key: 'week', label: 'Week', value: x && x.week, placeholder: 'from the date' },
+    { key: 'lecturer', label: 'Lecturer', value: x && x.lecturer },
     { key: 'topic', label: 'Topic', value: x && x.topic, wide: true },
+    { key: 'link', label: 'Link (the session’s page)', value: x && x.link, placeholder: 'https://…', wide: true },
     { key: 'note', label: 'Notes', type: 'textarea', rows: 3, value: x && x.note, wide: true },
   ], v => {
     if (x) Object.assign(x, v); else { c.sessions = c.sessions || []; c.sessions.push(Object.assign({ id: cid(), readings: [] }, v)); }
@@ -498,6 +503,7 @@ function outlinePasteDialog(s, c, docs, save) {
   modal((box, close) => {
     box.classList.add('wide');
     const ta = h('textarea', { rows: 12, placeholder: 'Paste the course outline, the lecture plan or the reading list here (from the course page, Canvas or the syllabus PDF)…' });
+    ta.addEventListener('paste', e => pasteWithLinks(e, ta));
     const year = h('input', { value: (s.start || '').slice(0, 4) || String(new Date().getFullYear()), style: { width: '80px' }, title: 'The year, for dates written without one' });
     const out = h('div');
     // A syllabus file: a PDF's text is read on the tablet, a text file here; either lands in the box to check before the AI reads it.
@@ -530,7 +536,7 @@ function outlinePasteDialog(s, c, docs, save) {
       if (!sessions.length) { out.append(h('p', { class: 'muted' }, 'No sessions were found in the text.')); return; }
       const picks = [];
       sessions.forEach((x, i) => {
-        const card = h('div', { class: 'crsrevsess' }, h('div', null, h('b', null, courseDate(x.date) || 'No date'), ' ', h('span', { class: 'muted' }, [x.time, x.room, x.kind].filter(Boolean).join(' · ')), ' — ', x.topic || ''));
+        const card = h('div', { class: 'crsrevsess' }, h('div', null, h('b', null, courseDate(x.date) || (x.week ? 'Week ' + x.week : 'No date')), ' ', h('span', { class: 'muted' }, [x.time, x.room, x.kind, x.lecturer].filter(Boolean).join(' · ')), ' — ', x.topic || '', x.link ? h('span', { class: 'muted' }, ' 🔗') : null));
         (x.readings || []).forEach(rd => {
           const m = libMatch(rd, docs);
           const sel = h('select', { title: 'The library item this reading is' }, [h('option', { value: '' }, 'Not in the library (keep as text)'), ...m.map((y, k) => h('option', { value: String(y.d.id), selected: k === 0 }, `${y.d.title}${y.d.author ? ' — ' + y.d.author : ''}`))]);
@@ -541,11 +547,13 @@ function outlinePasteDialog(s, c, docs, save) {
       });
       const mode = h('select', { style: { width: 'auto' } }, [['add', 'Add to the outline'], ['replace', 'Replace the outline']].map(([v, l]) => h('option', { value: v }, l)));
       out.append(h('div', { class: 'foot' }, mode, h('span', { style: { flex: 1 } }), h('button', { class: 'btn', onclick: close }, 'Cancel'), h('button', { class: 'btn fill', onclick: () => {
-        const made = sessions.map(x => ({ id: cid(), date: /^\d{4}-\d{2}-\d{2}$/.test(x.date || '') ? x.date : '', time: x.time || '', room: x.room || '', kind: x.kind || 'Lecture', topic: x.topic || '', note: '',
+        const made = sessions.map(x => ({ id: cid(), date: /^\d{4}-\d{2}-\d{2}$/.test(x.date || '') ? x.date : '', week: String(x.week || '').replace(/\D/g, ''), time: x.time || '', room: x.room || '', kind: x.kind || 'Lecture', topic: x.topic || '', note: '',
+          lecturer: x.lecturer || '', link: /^https?:\/\//.test(x.link || '') ? x.link : '',
           readings: picks.filter(p => p.x === x).map(p => ({ id: cid(), docId: p.sel.value ? +p.sel.value : null, chapter: p.rd.chapter || (p.sel.value && p.rd.container ? p.rd.title : '') || '', pages: p.rd.pages || '',
             text: p.rd.text || [p.rd.author, p.rd.year, p.rd.title, p.rd.container].filter(Boolean).join(', '), required: p.rd.required === false ? 'optional' : 'required', status: 'unread' })) }));
-        c.sessions = mode.value === 'replace' ? made : (c.sessions || []).concat(made);
-        close(); save(); toast(`${made.length} sessions put in`, 2500);
+        close();
+        if (mode.value === 'replace') { c.sessions = made; save(); toast(`${made.length} sessions put in`, 2500); }
+        else mergeSessions(c, made, 'outline', save, s);
       } }, 'Put them in')));
     };
     box.append(h('h2', null, 'Paste the course outline'), h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Your AI turns it into sessions with dates and readings; the readings are matched with your library. You check everything before it goes in.'),
