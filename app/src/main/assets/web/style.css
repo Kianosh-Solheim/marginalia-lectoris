@@ -1565,3 +1565,11 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .mergerow label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; word-break: break-word; }
 .crslect a { color: inherit; text-decoration: underline dotted; }
 @media (max-width: 800px) { .mergerow { grid-template-columns: 1fr; } }
+
+/* Audiobook */
+.abplayer { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--card); }
+.abtitle { font-family: var(--serif, Georgia, serif); font-weight: normal; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.abline { position: relative; height: 18px; cursor: pointer; }
+.abline::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 2px; background: var(--line); }
+.abline > i { position: absolute; left: 0; top: 7px; height: 4px; background: var(--ink); }
+.abline > b { position: absolute; top: 4px; width: 1px; height: 10px; background: var(--soft); }

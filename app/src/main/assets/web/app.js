@@ -1725,6 +1725,7 @@ function renderBook(main, d) {
     d.chapters ? chaptersSection(d) : null,
     d.placeholder ? null : filesSection(d, again),
     notesSection(d, main),
+    audiobookSection(d),
     recordingsSection(d),
     bibSection(d, main));
 

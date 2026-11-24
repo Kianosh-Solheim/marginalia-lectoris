@@ -141,6 +141,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -285,6 +286,11 @@ fun ReaderScreen(
     var activeFootnoteEntry by remember { mutableStateOf<com.example.reader.EpubFootnoteEntry?>(null) }
     var activePageTextForTts by remember(document.id) { mutableStateOf("") }
     var showTtsBar by remember(document.id) { mutableStateOf(false) }
+    // The book's audiobook (if it has one): the bar at the bottom, and whether the toolbar offers it.
+    var showAudiobookBar by remember(document.id) { mutableStateOf(com.example.reader.AudiobookPlayer.state.value.let { it.docId == document.id && it.playing }) }
+    val audiobookChanges by com.example.reader.Audiobooks.changes.collectAsState()
+    val hasAudiobook by produceState(false, document.id, audiobookChanges) { value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.Audiobooks.has(context, document.id) } }
+    val audiobookState by com.example.reader.AudiobookPlayer.state.collectAsState()
     var isTtsMinimized by remember(settings.ttsMinimized) { mutableStateOf(settings.ttsMinimized) }
     var showTtsSettingsDialog by remember { mutableStateOf(false) }
     var pendingTtsAutoPlayNextPage by remember(document.id) { mutableStateOf(false) }
@@ -965,6 +971,9 @@ fun ReaderScreen(
                     } else null,
                     isRecording = recordingNow?.docId == document.id,
                     onToggleRecording = toggleRecording,
+                    onOpenAudiobook = if (isDaisyDocument) null else ({ showAudiobookBar = !showAudiobookBar; if (showAudiobookBar) showTtsBar = false }),
+                    hasAudiobook = hasAudiobook,
+                    isAudiobookActive = showAudiobookBar || (audiobookState.docId == document.id && audiobookState.playing),
                     onToggleTtsBar = {
                         if (isDaisyDocument) {
                             if (!showDaisyAudioBar) {
@@ -1584,6 +1593,16 @@ fun ReaderScreen(
                             daisyAudioManager.pause()
                             showDaisyAudioBar = false
                         }
+                    )
+                }
+
+                // The audiobook player (Media3; keeps playing with the screen off)
+                if (showAudiobookBar && !isDaisyDocument) {
+                    AudiobookBar(
+                        document = document,
+                        onClose = { showAudiobookBar = false },
+                        onUseTts = { showAudiobookBar = false; showTtsBar = true; if (!ttsState.isPlaying) ttsManager.togglePlayPause(activePageTextForTts, currentActivePage) },
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 14.dp, vertical = if (isUiVisible) 52.dp else 14.dp)
                     )
                 }
 

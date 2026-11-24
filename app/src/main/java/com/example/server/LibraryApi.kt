@@ -498,6 +498,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             what == "page-text" -> HttpResponse.json(pageText(doc, req.query["page"]?.toIntOrNull() ?: 1).toString())
             what == "page-check" -> HttpResponse.json(pageCheck(doc, req.query["page"]?.toIntOrNull() ?: 1).toString())
             what == "recordings" -> recordingsRoute(doc, req, rest.drop(1))
+            what == "audiobook" -> audiobookRoute(doc, req, rest.drop(1))
             what == "set-as" && m == "POST" && rest.getOrNull(1) == "preview" -> HttpResponse.json(setAsPreview(doc, JSONObject(req.bodyText())).toString())
             what == "set-as" && m == "POST" -> HttpResponse.json(setAs(doc, JSONObject(req.bodyText())).toString())
             what == "export" -> export(doc, rest.getOrNull(1).orEmpty(), req)
@@ -1096,6 +1097,46 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         .put("status", com.example.reader.Transcripts.progress.value[r.id]
             ?: com.example.reader.LocalWhisper.state.value.takeIf { it.busy && it.id == r.id }?.status ?: JSONObject.NULL)
         .put("error", com.example.reader.Transcripts.lastError.value[r.id] ?: JSONObject.NULL)
+
+    /** The book's audiobook: list, add a file (raw body, ?name=), stream a file (Range), save the place, delete. */
+    private suspend fun audiobookRoute(doc: DocumentEntity, req: HttpRequest, rest: List<String>): HttpResponse {
+        val ab = com.example.reader.Audiobooks
+        val m = req.method
+        return when {
+            rest.isEmpty() && m == "GET" -> HttpResponse.json(ab.json(context, doc.id).toString())
+            rest.isEmpty() && m == "DELETE" -> HttpResponse.json(withContext(Dispatchers.IO) { ab.remove(context, doc.id, null) }.toString())
+            rest == listOf("file") && m == "POST" -> {
+                val name = File(req.query["name"].orEmpty()).name.ifBlank { "audio.mp3" }
+                require(req.contentLength > 0) { "The file is empty." }
+                require(name.substringAfterLast('.', "").lowercase(Locale.ROOT) in ab.EXTENSIONS) { "“$name” is not an audio file (MP3, M4B/M4A, AAC, OGG/Opus, FLAC or WAV)." }
+                val tmpDir = File(ab.dir(context, doc.id).parentFile, ".incoming").apply { mkdirs() }
+                val tmp = File(tmpDir, "${System.nanoTime()}.part")
+                try {
+                    withContext(Dispatchers.IO) { tmp.outputStream().use { out -> req.body.copyTo(out, 256 * 1024) } }
+                    require(tmp.length() == req.contentLength) { "The upload was interrupted." }
+                    HttpResponse.json(withContext(Dispatchers.IO) { ab.add(context, doc.id, tmp, name) }.toString())
+                } finally { tmp.delete() }
+            }
+            rest.size == 2 && rest[0] == "file" && m == "GET" -> {
+                val part = ab.files(context, doc.id).getOrNull(rest[1].toIntOrNull() ?: -1) ?: throw NoSuchElementException("No such file")
+                val type = when (part.file.extension.lowercase(Locale.ROOT)) { "mp3" -> "audio/mpeg"; "m4a", "m4b", "aac" -> "audio/mp4"; "ogg", "opus" -> "audio/ogg"; "flac" -> "audio/flac"; "wav" -> "audio/wav"; else -> "application/octet-stream" }
+                HttpResponse.FileBody(part.file, type, if (req.query["download"] == "1") part.file.name else null)
+            }
+            rest.size == 2 && rest[0] == "file" && m == "DELETE" -> HttpResponse.json(withContext(Dispatchers.IO) { ab.remove(context, doc.id, rest[1].toIntOrNull()) }.toString())
+            rest == listOf("position") && (m == "PUT" || m == "POST") -> {
+                val b = JSONObject(req.bodyText())
+                val pos = b.optLong("positionMs")
+                val playing = com.example.reader.AudiobookPlayer.state.value.let { it.docId == doc.id && it.playing }
+                // While the tablet itself is playing, its own place wins.
+                if (!playing) {
+                    ab.savePosition(context, doc.id, pos, b.optDouble("speed").takeIf { !it.isNaN() })
+                    com.example.reader.AudiobookPlayer.positionFromElsewhere(doc.id, pos)
+                }
+                HttpResponse.json(JSONObject().put("ok", true).put("tabletPlaying", playing).toString())
+            }
+            else -> throw NoSuchElementException("No such action")
+        }
+    }
 
     private suspend fun recordingsRoute(doc: DocumentEntity, req: HttpRequest, rest: List<String>): HttpResponse {
         val settings = ops.repository.getSettings()

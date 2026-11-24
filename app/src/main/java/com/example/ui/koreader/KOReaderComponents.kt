@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
@@ -205,6 +206,9 @@ fun KOReaderTopBar(
     onOpenPdfCropMenu: (() -> Unit)? = null,
     onOpenPdfTextToolsMenu: (() -> Unit)? = null,
     onToggleTtsBar: (() -> Unit)? = null,
+    onOpenAudiobook: (() -> Unit)? = null,
+    hasAudiobook: Boolean = false,
+    isAudiobookActive: Boolean = false,
     isRecording: Boolean = false,
     onToggleRecording: (() -> Unit)? = null,
     onOpenAnnotationsMenu: () -> Unit,
@@ -301,8 +305,14 @@ fun KOReaderTopBar(
                             tag = "koreader_tab_annotations")
                     }
                     cells += { ReaderToolCell(Icons.Default.FormatSize, "Type", activeTheme, onOpenTypesettingMenu, tag = "koreader_tab_typesetting") }
-                    if (onToggleTtsBar != null) {
+                    // With an audiobook, Listen plays it; without, Listen reads aloud and the audiobook is added under More.
+                    if (onOpenAudiobook != null && hasAudiobook) {
+                        cells += { ReaderToolCell(Icons.Default.Headphones, "Audiobook", activeTheme, onOpenAudiobook, active = isAudiobookActive, tag = "koreader_tab_audiobook") }
+                    } else if (onToggleTtsBar != null) {
                         cells += { ReaderToolCell(Icons.Default.RecordVoiceOver, "Listen", activeTheme, onToggleTtsBar, active = isTtsPlaying || isTtsBarVisible, tag = "koreader_tab_tts") }
+                    }
+                    if (onOpenAudiobook != null && !hasAudiobook) {
+                        more += ReaderMenuEntry(Icons.Default.Headphones, "Audiobook", "Add the audiobook’s files", false, "koreader_tab_audiobook", onOpenAudiobook)
                     }
                     // A recording in progress stays in sight, so it can be stopped with one tap.
                     if (onToggleRecording != null && isRecording) {
