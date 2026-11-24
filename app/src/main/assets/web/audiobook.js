@@ -12,14 +12,14 @@ function audiobookSection(d) {
     add.addEventListener('change', () => { const fs = [...add.files]; add.value = ''; if (fs.length) abUpload(d, fs, load); });
     const addBtn = h('button', { class: 'btn' + (a.exists ? '' : ' fill'), onclick: () => add.click() }, a.exists ? 'Add files…' : 'Add the audio files…');
     if (!a.exists) {
-      box.append(h('p', { class: 'muted', style: { marginTop: 0 } }, 'One .m4b with chapters, or all the .mp3 files at once (they are put in name order). They are kept on the tablet, which plays them with the screen off; you can listen here too, and the place is shared.'),
+      box.append(h('p', { class: 'muted', style: { marginTop: 0 } }, 'One .m4b with chapters, or all the .mp3 files at once (they are put in name order). They are kept in the book’s folder on the tablet (one file as “Audiobook – title”, several in a folder of that name), and the tablet plays them with the screen off; you can listen here too, and the place is shared.'),
         h('div', { class: 'row' }, addBtn), add);
       return;
     }
     player = abPlayer(d, a);
     box.append(player.el, h('div', { class: 'row', style: { marginTop: '8px' } }, addBtn, add,
       menuButton('Files ▾', a.files.map(f => [`${f.index + 1}. ${f.title || f.name}`, `${clockOf(f.durationMs)} · ${fmtSize(f.size)}`, () => confirmBox('Remove this file?', f.name, 'Remove', async () => { try { await api(`doc/${d.id}/audiobook/file/${f.index}`, { method: 'DELETE' }); load(); } catch (e) { fail(e); } })]), 'btn quiet'),
-      h('button', { class: 'btn quiet', onclick: () => confirmBox('Remove the audiobook?', 'The audio files are deleted from the tablet. The book and your notes stay.', 'Remove', async () => { try { await api(`doc/${d.id}/audiobook`, { method: 'DELETE' }); load(); } catch (e) { fail(e); } }) }, 'Remove')));
+      h('button', { class: 'btn quiet', onclick: () => confirmBox('Remove the audiobook?', 'The audio files are deleted from the book’s folder on the tablet. The book and your notes stay.', 'Remove', async () => { try { await api(`doc/${d.id}/audiobook`, { method: 'DELETE' }); load(); } catch (e) { fail(e); } }) }, 'Remove')));
   };
   load();
   return box;

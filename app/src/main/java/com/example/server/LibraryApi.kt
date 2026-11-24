@@ -1103,18 +1103,17 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         val ab = com.example.reader.Audiobooks
         val m = req.method
         return when {
-            rest.isEmpty() && m == "GET" -> HttpResponse.json(ab.json(context, doc.id).toString())
-            rest.isEmpty() && m == "DELETE" -> HttpResponse.json(withContext(Dispatchers.IO) { ab.remove(context, doc.id, null) }.toString())
+            rest.isEmpty() && m == "GET" -> HttpResponse.json(withContext(Dispatchers.IO) { ab.migrate(context, doc); ab.json(context, doc.id) }.toString())
+            rest.isEmpty() && m == "DELETE" -> HttpResponse.json(withContext(Dispatchers.IO) { ab.remove(context, doc, null) }.toString())
             rest == listOf("file") && m == "POST" -> {
                 val name = File(req.query["name"].orEmpty()).name.ifBlank { "audio.mp3" }
                 require(req.contentLength > 0) { "The file is empty." }
                 require(name.substringAfterLast('.', "").lowercase(Locale.ROOT) in ab.EXTENSIONS) { "“$name” is not an audio file (MP3, M4B/M4A, AAC, OGG/Opus, FLAC or WAV)." }
-                val tmpDir = File(ab.dir(context, doc.id).parentFile, ".incoming").apply { mkdirs() }
-                val tmp = File(tmpDir, "${System.nanoTime()}.part")
+                val tmp = ab.incoming(context)
                 try {
                     withContext(Dispatchers.IO) { tmp.outputStream().use { out -> req.body.copyTo(out, 256 * 1024) } }
                     require(tmp.length() == req.contentLength) { "The upload was interrupted." }
-                    HttpResponse.json(withContext(Dispatchers.IO) { ab.add(context, doc.id, tmp, name) }.toString())
+                    HttpResponse.json(withContext(Dispatchers.IO) { ab.add(context, doc, tmp, name) }.toString())
                 } finally { tmp.delete() }
             }
             rest.size == 2 && rest[0] == "file" && m == "GET" -> {
@@ -1122,7 +1121,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 val type = when (part.file.extension.lowercase(Locale.ROOT)) { "mp3" -> "audio/mpeg"; "m4a", "m4b", "aac" -> "audio/mp4"; "ogg", "opus" -> "audio/ogg"; "flac" -> "audio/flac"; "wav" -> "audio/wav"; else -> "application/octet-stream" }
                 HttpResponse.FileBody(part.file, type, if (req.query["download"] == "1") part.file.name else null)
             }
-            rest.size == 2 && rest[0] == "file" && m == "DELETE" -> HttpResponse.json(withContext(Dispatchers.IO) { ab.remove(context, doc.id, rest[1].toIntOrNull()) }.toString())
+            rest.size == 2 && rest[0] == "file" && m == "DELETE" -> HttpResponse.json(withContext(Dispatchers.IO) { ab.remove(context, doc, rest[1].toIntOrNull()) }.toString())
             rest == listOf("position") && (m == "PUT" || m == "POST") -> {
                 val b = JSONObject(req.bodyText())
                 val pos = b.optLong("positionMs")

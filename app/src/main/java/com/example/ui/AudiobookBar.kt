@@ -47,7 +47,7 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
     var has by remember { mutableStateOf<Boolean?>(null) }
     var busy by remember { mutableStateOf("") }
     LaunchedEffect(document.id, changes) {
-        has = withContext(Dispatchers.IO) { Audiobooks.has(context, document.id) }
+        has = withContext(Dispatchers.IO) { Audiobooks.migrate(context, document); Audiobooks.has(context, document.id) }
         if (has == true) AudiobookPlayer.load(context, document.id, document.title)
     }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
@@ -59,9 +59,9 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
                 withContext(Dispatchers.IO) {
                     runCatching {
                         val name = context.contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "audio.mp3"
-                        val tmp = File(Audiobooks.dir(context, document.id).parentFile, ".incoming/${System.nanoTime()}.part").apply { parentFile?.mkdirs() }
+                        val tmp = Audiobooks.incoming(context)
                         context.contentResolver.openInputStream(u)!!.use { i -> tmp.outputStream().use { o -> i.copyTo(o, 256 * 1024) } }
-                        try { Audiobooks.add(context, document.id, tmp, name) } finally { tmp.delete() }
+                        try { Audiobooks.add(context, document, tmp, name) } finally { tmp.delete() }
                     }.onFailure { err = it.message ?: "Could not add the file" }
                 }
             }
@@ -81,7 +81,7 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
                 if (onUseTts != null && busy.isBlank()) InkButton("Read aloud (TTS)", onClick = onUseTts)
                 InkButton("×", onClick = onClose)
             }
-            if (busy.isBlank()) Text("One .m4b with chapters, or all the .mp3 files at once (they are put in name order). You can also add them in the web view, on the book’s page.", fontSize = 12.sp, color = Color(0xFF52525B))
+            if (busy.isBlank()) Text("One .m4b with chapters, or all the .mp3 files at once (they are put in name order). They are kept in the book’s folder: “Audiobook – title”. You can also add them in the web view, on the book’s page.", fontSize = 12.sp, color = Color(0xFF52525B))
             return@Column
         }
         if (has == null || st.docId != document.id) { Text("Loading the audiobook…", fontSize = 13.sp); return@Column }
@@ -139,7 +139,7 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
                 InkButton("Add more files…", onClick = { showFiles = false; pick.launch(arrayOf("audio/*")) })
                 InkButton("Remove the audiobook", onClick = {
                     showFiles = false
-                    scope.launch { withContext(Dispatchers.IO) { Audiobooks.remove(context, document.id, null) }; Toast.makeText(context, "Audiobook removed from the tablet", Toast.LENGTH_SHORT).show() }
+                    scope.launch { withContext(Dispatchers.IO) { Audiobooks.remove(context, document, null) }; Toast.makeText(context, "Audiobook removed from the tablet", Toast.LENGTH_SHORT).show() }
                 })
                 InkButton("Close", onClick = { showFiles = false })
             }

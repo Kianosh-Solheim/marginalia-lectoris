@@ -20,9 +20,11 @@ import java.io.File
 import java.io.RandomAccessFile
 
 /**
- * The audiobook belonging to a book: its audio files (one .m4b with chapters, or several .mp3 in order), kept on
- * the tablet under files/audiobooks/<book id>/ (not in backups — too large), with audiobook.json:
- *   { files: [{name, title, durationMs}], chapters: [{title, startMs}], positionMs, speed, updatedAt }
+ * The audiobook belonging to a book, kept in the book's own folder (so it shows under Files and syncs with it):
+ *   <book folder>/Audiobook – <Title>.m4b         one file
+ *   <book folder>/Audiobook – <Title>/01 ….mp3    several files (a folder of its own)
+ * What the app knows about it (the files in order, chapters, where you are, speed) is kept in the app:
+ *   files/audiobooks/<book id>/audiobook.json  { files: [{path, name, title, durationMs}], chapters: [{title, startMs}], positionMs, speed, updatedAt }
  * Positions are on one timeline across all the files. The tablet's player and the web view's player share it.
  */
 object Audiobooks {
@@ -31,8 +33,11 @@ object Audiobooks {
     /** Bumped on every change (screens refresh on it). */
     val changes = MutableStateFlow(0)
 
+    /** The app's own record for the book (not the audio). */
     fun dir(ctx: Context, docId: Long) = File(ctx.applicationContext.filesDir, "audiobooks/$docId")
     private fun meta(ctx: Context, docId: Long) = File(dir(ctx, docId), "audiobook.json")
+
+    private fun baseName(doc: com.example.data.local.DocumentEntity) = "Audiobook – " + MarkdownExporter.sanitizeFilename(doc.title).ifBlank { "Untitled" }.take(120)
 
     fun has(ctx: Context, docId: Long): Boolean = meta(ctx, docId).isFile && files(ctx, docId).isNotEmpty()
 
@@ -48,10 +53,13 @@ object Audiobooks {
 
     data class Part(val file: File, val title: String, val durationMs: Long, val startMs: Long)
 
+    private fun fileOf(ctx: Context, docId: Long, f: JSONObject): File =
+        f.optString("path").takeIf { it.isNotBlank() }?.let { File(it) } ?: File(dir(ctx, docId), f.optString("name"))
+
     /** The files in playing order, each with where it starts on the shared timeline. */
     fun files(ctx: Context, docId: Long): List<Part> {
         val o = read(ctx, docId); val a = o.optJSONArray("files") ?: JSONArray(); val out = ArrayList<Part>(); var at = 0L
-        for (i in 0 until a.length()) { val f = a.getJSONObject(i); val file = File(dir(ctx, docId), f.optString("name"))
+        for (i in 0 until a.length()) { val f = a.getJSONObject(i); val file = fileOf(ctx, docId, f)
             if (!file.isFile) continue
             val d = f.optLong("durationMs"); out += Part(file, f.optString("title"), d, at); at += d }
         return out
@@ -66,42 +74,76 @@ object Audiobooks {
             .put("positionMs", o.optLong("positionMs")).put("speed", o.optDouble("speed", 1.0)).put("updatedAt", o.optLong("updatedAt"))
     }
 
-    /** Adds one audio file (moved in from [src]); the files are kept in natural name order (track 2 before track 10). */
-    fun add(ctx: Context, docId: Long, src: File, name: String): JSONObject {
-        val ext = name.substringAfterLast('.', "").lowercase()
-        require(ext in EXTENSIONS) { "“$name” is not an audio file (MP3, M4B/M4A, AAC, OGG/Opus, FLAC or WAV)." }
-        val d = dir(ctx, docId).apply { mkdirs() }
-        val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(150)
-        var target = File(d, safe); var n = 2
-        while (target.exists()) target = File(d, safe.substringBeforeLast('.') + " ($n)." + ext).also { n++ }
-        if (!src.renameTo(target)) { src.copyTo(target, true); src.delete() }
-        val (dur, title) = probe(target)
-        require(dur > 0) { "“$name” could not be read as audio." }
-        synchronized(lock) {
-            val o = read(ctx, docId); val a = o.optJSONArray("files") ?: JSONArray()
-            val list = (0 until a.length()).map { a.getJSONObject(it) }.toMutableList()
-            list += JSONObject().put("name", target.name).put("title", title.ifBlank { target.nameWithoutExtension }).put("durationMs", dur)
-            list.sortWith { x, y -> naturalCompare(x.optString("name"), y.optString("name")) }
-            o.put("files", JSONArray(list))
-            o.put("chapters", chapters(ctx, docId, list))
-            write(ctx, docId, o)
+    /** A place for an incoming file before it is put in the book's folder. */
+    fun incoming(ctx: Context): File = File(ctx.applicationContext.filesDir, "audiobooks/.incoming/${System.nanoTime()}.part").apply { parentFile?.mkdirs() }
+
+    private fun moveFile(src: File, target: File) { target.parentFile?.mkdirs(); if (!src.renameTo(target)) { src.copyTo(target, true); src.delete() } }
+    private fun unique(f: File): File { var t = f; var n = 2; while (t.exists()) { t = File(f.parentFile, f.nameWithoutExtension + " ($n)." + f.extension); n++ }; return t }
+
+    /**
+     * Puts the files where they belong: one file lies in the book's folder as “Audiobook – <Title>.ext”;
+     * two or more go in a folder “Audiobook – <Title>” under their own names.
+     */
+    private suspend fun arrange(ctx: Context, doc: com.example.data.local.DocumentEntity, list: MutableList<JSONObject>) {
+        val folder = ItemFiles.folderOf(ctx, doc).apply { mkdirs() }
+        val base = baseName(doc)
+        val sub = File(folder, base)
+        for (f in list) {
+            val cur = fileOf(ctx, doc.id, f); if (!cur.isFile) continue
+            val orig = f.optString("name").ifBlank { cur.name }
+            val want = if (list.size == 1) File(folder, "$base.${cur.extension}") else File(sub, orig)
+            if (cur.canonicalPath != want.canonicalPath) { val t = unique(want); moveFile(cur, t); f.put("path", t.absolutePath) }
+            else f.put("path", cur.absolutePath)
         }
-        return json(ctx, docId)
+        // A folder left empty (from two files down to one) is removed.
+        if (list.size <= 1 && sub.isDirectory && (sub.listFiles()?.isEmpty() == true)) sub.delete()
     }
 
-    fun remove(ctx: Context, docId: Long, index: Int?): JSONObject {
-        if (index == null) { AudiobookPlayer.unload(docId); dir(ctx, docId).deleteRecursively(); changes.value++; return json(ctx, docId) }
-        synchronized(lock) {
-            val o = read(ctx, docId); val a = o.optJSONArray("files") ?: JSONArray()
-            val list = (0 until a.length()).map { a.getJSONObject(it) }.toMutableList()
-            val gone = list.getOrNull(index) ?: throw NoSuchElementException("No such file")
-            AudiobookPlayer.unload(docId)
-            File(dir(ctx, docId), gone.optString("name")).delete()
-            list.removeAt(index)
-            o.put("files", JSONArray(list)).put("chapters", chapters(ctx, docId, list)).put("positionMs", 0L)
-            write(ctx, docId, o)
-        }
-        return json(ctx, docId)
+    /** Adds one audio file (moved in from [src]); the files are kept in natural name order (track 2 before track 10). */
+    suspend fun add(ctx: Context, doc: com.example.data.local.DocumentEntity, src: File, name: String): JSONObject {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        require(ext in EXTENSIONS) { "“$name” is not an audio file (MP3, M4B/M4A, AAC, OGG/Opus, FLAC or WAV)." }
+        val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(150)
+        val (dur, title) = probe(src)
+        require(dur > 0) { "“$name” could not be read as audio." }
+        AudiobookPlayer.unload(doc.id)
+        migrate(ctx, doc)
+        val o = read(ctx, doc.id); val a = o.optJSONArray("files") ?: JSONArray()
+        val list = (0 until a.length()).map { a.getJSONObject(it) }.toMutableList()
+        // Into the folder first (under its own name), then arranged with the others.
+        val folder = ItemFiles.folderOf(ctx, doc).apply { mkdirs() }
+        val landed = unique(File(File(folder, baseName(doc)), safe)); moveFile(src, landed)
+        list += JSONObject().put("name", safe).put("path", landed.absolutePath).put("title", title.ifBlank { safe.substringBeforeLast('.') }).put("durationMs", dur)
+        list.sortWith { x, y -> naturalCompare(x.optString("name"), y.optString("name")) }
+        arrange(ctx, doc, list)
+        o.put("files", JSONArray(list)).put("chapters", chapters(ctx, doc.id, list))
+        write(ctx, doc.id, o)
+        return json(ctx, doc.id)
+    }
+
+    /** Removes one file ([index]) or the whole audiobook (null): the audio files are deleted from the book's folder. */
+    suspend fun remove(ctx: Context, doc: com.example.data.local.DocumentEntity, index: Int?): JSONObject {
+        AudiobookPlayer.unload(doc.id)
+        val o = read(ctx, doc.id); val a = o.optJSONArray("files") ?: JSONArray()
+        val list = (0 until a.length()).map { a.getJSONObject(it) }.toMutableList()
+        val gone = if (index == null) list.toList() else listOf(list.getOrNull(index) ?: throw NoSuchElementException("No such file"))
+        gone.forEach { fileOf(ctx, doc.id, it).delete() }
+        list.removeAll(gone)
+        val sub = File(ItemFiles.folderOf(ctx, doc), baseName(doc))
+        if (list.isEmpty()) { if (sub.isDirectory && sub.listFiles()?.isEmpty() == true) sub.delete(); dir(ctx, doc.id).deleteRecursively(); changes.value++; return json(ctx, doc.id) }
+        arrange(ctx, doc, list)
+        o.put("files", JSONArray(list)).put("chapters", chapters(ctx, doc.id, list)).put("positionMs", 0L)
+        write(ctx, doc.id, o)
+        return json(ctx, doc.id)
+    }
+
+    /** Audio kept in the app by the first version is moved into the book's folder. */
+    suspend fun migrate(ctx: Context, doc: com.example.data.local.DocumentEntity) {
+        val o = read(ctx, doc.id); val a = o.optJSONArray("files") ?: return
+        val list = (0 until a.length()).map { a.getJSONObject(it) }.toMutableList()
+        if (list.isEmpty() || list.all { it.optString("path").isNotBlank() }) return
+        arrange(ctx, doc, list)
+        o.put("files", JSONArray(list)); write(ctx, doc.id, o)
     }
 
     /** Saves where you are (from the tablet's player or the web view). */
@@ -126,7 +168,7 @@ object Audiobooks {
     private fun chapters(ctx: Context, docId: Long, list: List<JSONObject>): JSONArray {
         val out = JSONArray(); var at = 0L
         for (f in list) {
-            val file = File(dir(ctx, docId), f.optString("name"))
+            val file = fileOf(ctx, docId, f)
             val marks = if (file.extension.lowercase() in setOf("m4b", "m4a", "mp4", "aac")) runCatching { mp4Chapters(file) }.getOrDefault(emptyList()) else emptyList()
             if (marks.size > 1) marks.forEach { (t, ms) -> out.put(JSONObject().put("title", t).put("startMs", at + ms)) }
             else out.put(JSONObject().put("title", f.optString("title").ifBlank { file.nameWithoutExtension }).put("startMs", at))
