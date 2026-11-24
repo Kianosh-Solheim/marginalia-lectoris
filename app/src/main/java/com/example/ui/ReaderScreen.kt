@@ -291,6 +291,39 @@ fun ReaderScreen(
     val audiobookChanges by com.example.reader.Audiobooks.changes.collectAsState()
     val hasAudiobook by produceState(false, document.id, audiobookChanges) { value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.Audiobooks.has(context, document.id) } }
     val audiobookState by com.example.reader.AudiobookPlayer.state.collectAsState()
+    // The sync map (audiobook ⇄ text): the sentence being read is underlined and the pages follow it.
+    val audioSyncMap by produceState<com.example.reader.AudiobookSyncMap?>(null, document.id, audiobookChanges) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.AudiobookSyncMap.load(context, document) }
+    }
+    val audioActive = audiobookState.docId == document.id && (audiobookState.playing || showAudiobookBar)
+    val audioFollow = audiobookState.docId == document.id && audiobookState.playing
+    val audioIdx = audioSyncMap?.takeIf { audioActive }?.indexAt(audiobookState.positionMs) ?: -1
+    val audioPdfSentence = audioSyncMap?.takeIf { audioIdx >= 0 && it.kind == "pdf" }?.let { Triple(it.page[audioIdx], it.w0[audioIdx], it.w1[audioIdx]) }
+    val audioEpubSentence = audioSyncMap?.takeIf { audioIdx >= 0 && it.kind == "epub" }?.let { it.href[audioIdx] to it.text[audioIdx] }
+    var readingHref by remember(document.id) { mutableStateOf("") }
+    var readingProgression by remember(document.id) { mutableStateOf(0.0) }
+    // Play from a selection (Speak) or a tapped paragraph: the audiobook starts at the sentence it begins in.
+    val playAudioFrom: (String, Int?) -> Boolean = from@{ quote, page ->
+        val map = audioSyncMap ?: return@from false
+        if (!com.example.reader.AudiobookPlayer.load(context, document.id, document.title)) return@from false
+        val i = map.find(quote, if (map.kind == "pdf") page else null, audioIdx.coerceAtLeast(0))
+        if (i < 0) { android.widget.Toast.makeText(context, "That passage is not in the audiobook’s sync map.", android.widget.Toast.LENGTH_SHORT).show(); return@from true }
+        showAudiobookBar = true
+        com.example.reader.AudiobookPlayer.seekTo(map.t[i]); com.example.reader.AudiobookPlayer.play(context)
+        true
+    }
+    // Whispersync: pressing Play starts where you are reading, unless the audiobook's sentence is on the page in view.
+    val audioStartHere: () -> Unit = here@{
+        val map = audioSyncMap ?: return@here
+        val cur = map.indexAt(audiobookState.positionMs)
+        val target = when {
+            map.kind == "pdf" -> { val pg = currentActivePage; if (cur >= 0 && map.page[cur] == pg) -1 else map.firstOnPage(pg) }
+            readingHref.isNotBlank() -> { if (cur >= 0 && map.href[cur].substringAfterLast('/') == readingHref.substringAfterLast('/') && kotlin.math.abs(map.atResource(readingHref, readingProgression) - cur) < 25) -1 else map.atResource(readingHref, readingProgression) }
+            activePageTextForTts.isNotBlank() -> { val pageNorm = com.example.reader.AudiobookSyncMap.normalize(activePageTextForTts); if (cur >= 0 && pageNorm.contains(com.example.reader.AudiobookSyncMap.normalize(map.text[cur]).take(30))) -1 else map.find(activePageTextForTts, null, cur.coerceAtLeast(0)) }
+            else -> -1
+        }
+        if (target >= 0) com.example.reader.AudiobookPlayer.seekTo(map.t[target])
+    }
     var isTtsMinimized by remember(settings.ttsMinimized) { mutableStateOf(settings.ttsMinimized) }
     var showTtsSettingsDialog by remember { mutableStateOf(false) }
     var pendingTtsAutoPlayNextPage by remember(document.id) { mutableStateOf(false) }
@@ -1061,9 +1094,13 @@ fun ReaderScreen(
                             activePageTextForTts = pageText
                         },
                         onSpeakSelection = { quote, pageNum ->
-                            showTtsBar = true
-                            ttsManager.speakSelection(quote, pageNum)
+                            if (!(hasAudiobook && audioSyncMap != null && playAudioFrom(quote, pageNum))) {
+                                showTtsBar = true
+                                ttsManager.speakSelection(quote, pageNum)
+                            }
                         },
+                        audioSentence = audioPdfSentence,
+                        followAudio = audioFollow,
                         onRequestHighlight = { quote, page, readPrintedPage, chapterTitle, colorHex ->
                             // Page numbers laid down for this document come before those read off the page.
                             val printedPage = com.example.reader.PageNumbering.relabel(context, document.id, page, readPrintedPage)
@@ -1338,9 +1375,14 @@ fun ReaderScreen(
                                 useReadiumEngine = false
                             },
                             onSpeakSelection = { quote, pageNum ->
-                                showTtsBar = true
-                                ttsManager.speakSelection(quote, pageNum)
+                                if (!(hasAudiobook && audioSyncMap != null && playAudioFrom(quote, null))) {
+                                    showTtsBar = true
+                                    ttsManager.speakSelection(quote, pageNum)
+                                }
                             },
+                            audioSentence = audioEpubSentence,
+                            followAudio = audioFollow,
+                            onReadingLocation = { h, pr -> readingHref = h; readingProgression = pr },
                             onRequestHighlight = { quote, page, chapterTitle, colorHex, paragraphCitation, pageEquivalent, epubCfi ->
                                 highlightQuoteText = quote
                                 highlightPageNumber = page
@@ -1460,7 +1502,7 @@ fun ReaderScreen(
                                     textSnippet = quote,
                                     autoPlay = true
                                 )
-                            } else {
+                            } else if (!(hasAudiobook && audioSyncMap != null && playAudioFrom(quote, null))) {
                                 showTtsBar = true
                                 ttsManager.speakSelection(quote, pageNum)
                             }
@@ -1536,8 +1578,8 @@ fun ReaderScreen(
                         },
                         activeDaisyFileKey = if (isDaisyDocument && daisyAudioState.isAudioModeEnabled) daisyAudioState.activeFileKey else "",
                         activeDaisyAnchorId = if (isDaisyDocument && daisyAudioState.isAudioModeEnabled) daisyAudioState.activeAnchorId else "",
-                        activeDaisyTextSnippet = if (isDaisyDocument && daisyAudioState.isAudioModeEnabled) daisyAudioState.activeTextSnippet else "",
-                        isDaisyAutoScrollEnabled = daisyAudioState.autoTurnPages,
+                        activeDaisyTextSnippet = if (isDaisyDocument && daisyAudioState.isAudioModeEnabled) daisyAudioState.activeTextSnippet else (audioEpubSentence?.second ?: ""),
+                        isDaisyAutoScrollEnabled = if (isDaisyDocument) daisyAudioState.autoTurnPages else audioFollow,
                         onDaisyPhraseTapped = if (isDaisyDocument) {
                             { anchorId, textSnippet ->
                                 if (daisyAudioState.isAudioModeEnabled) {
@@ -1551,6 +1593,9 @@ fun ReaderScreen(
                                     isUiVisible = !isUiVisible
                                 }
                             }
+                        } else if (audioFollow && audioSyncMap != null) {
+                            // While the audiobook plays, a tap on a paragraph plays from there.
+                            { _, textSnippet -> playAudioFrom(textSnippet, null) }
                         } else null,
                         paragraphStyleSetting = if (!isPdfDocument && publisherStylesEnabled) "" else settings.readerParagraphStyle,
                         columnCount = readerColumnCount,
@@ -1602,6 +1647,7 @@ fun ReaderScreen(
                         document = document,
                         onClose = { showAudiobookBar = false },
                         onUseTts = { showAudiobookBar = false; showTtsBar = true; if (!ttsState.isPlaying) ttsManager.togglePlayPause(activePageTextForTts, currentActivePage) },
+                        onBeforePlay = audioStartHere,
                         modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 14.dp, vertical = if (isUiVisible) 52.dp else 14.dp)
                     )
                 }

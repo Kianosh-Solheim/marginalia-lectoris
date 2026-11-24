@@ -423,7 +423,7 @@ object AudiobookSync {
     fun epubText(doc: com.example.data.local.DocumentEntity): JSONObject {
         val book = EpubParser.parseEpub(File(doc.filePath), "audiobook-${doc.id}")
         val units = JSONArray()
-        book.chapters.forEachIndexed { c, ch -> ch.paragraphs.forEachIndexed { p, text -> if (text.isNotBlank()) units.put(JSONObject().put("c", c).put("p", p).put("text", text)) } }
+        book.chapters.forEachIndexed { c, ch -> ch.paragraphs.forEachIndexed { p, text -> if (text.isNotBlank()) units.put(JSONObject().put("c", c).put("p", p).put("h", ch.fileKey).put("text", text)) } }
         return JSONObject().put("kind", "epub").put("units", units).put("language", book.language)
     }
 
@@ -490,5 +490,75 @@ object AudiobookSync {
             }
         } finally { runCatching { codec.stop() }; codec.release(); ex.release() }
         return out.toByteArray()
+    }
+}
+
+/** A loaded sync map: sentence start times with where each sentence is (see [AudiobookSync]). */
+class AudiobookSyncMap(
+    val kind: String, val t: LongArray, val page: IntArray, val w0: IntArray, val w1: IntArray,
+    val chapter: IntArray, val para: IntArray, val text: Array<String>, val href: Array<String>
+) {
+    /** For an EPUB: the sentence at [progression] (0–1) of resource [name], by its share of the resource's sentences. */
+    fun atResource(name: String, progression: Double): Int {
+        val base = name.substringAfterLast('/')
+        val idx = (0 until size).filter { href[it].substringAfterLast('/') == base }
+        if (idx.isEmpty()) return -1
+        return idx[(progression.coerceIn(0.0, 1.0) * (idx.size - 1)).toInt()]
+    }
+
+    val size get() = t.size
+    private val norm: Array<String> by lazy { Array(text.size) { normalize(text[it]) } }
+
+    /** The sentence being read at [ms] (the last one started), or -1 before the first. */
+    fun indexAt(ms: Long): Int {
+        var lo = 0; var hi = t.size - 1; var ans = -1
+        while (lo <= hi) { val mid = (lo + hi) ushr 1; if (t[mid] <= ms) { ans = mid; lo = mid + 1 } else hi = mid - 1 }
+        return ans
+    }
+
+    /** The first sentence on PDF page [p] (1-based), or -1. */
+    fun firstOnPage(p: Int): Int = (0 until size).firstOrNull { page[it] == p } ?: -1
+
+    /**
+     * The sentence [q] starts in: a paragraph's text (its first sentence) or a selection (the sentence it begins in).
+     * Restricted to PDF page [pageHint] when given; the one nearest [near] when the text occurs more than once.
+     */
+    fun find(q: String, pageHint: Int? = null, near: Int = 0): Int {
+        val nq = normalize(q); if (nq.length < 4) return -1
+        val head = nq.take(30)
+        var best = -1; var bestScore = Long.MAX_VALUE
+        for (i in 0 until size) {
+            if (pageHint != null && kind == "pdf" && page[i] != pageHint) continue
+            val ns = norm[i]; if (ns.isEmpty()) continue
+            val at = when {
+                nq.contains(ns.take(30)) -> nq.indexOf(ns.take(30)).toLong()           // the paragraph contains the sentence: earliest wins
+                ns.contains(head) -> 0L                                                // the selection begins inside this sentence
+                else -> -1L
+            }
+            if (at < 0) continue
+            val score = at * 100_000 + kotlin.math.abs(i - near)
+            if (score < bestScore) { bestScore = score; best = i }
+        }
+        return best
+    }
+
+    companion object {
+        fun normalize(s: String) = java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFKD)
+            .replace(Regex("\\p{M}+"), "").replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
+
+        suspend fun load(ctx: Context, doc: com.example.data.local.DocumentEntity): AudiobookSyncMap? = runCatching {
+            val f = AudiobookSync.map(ctx, doc) ?: return null
+            val o = JSONObject(f.readText()); val a = o.optJSONArray("sentences") ?: return null
+            val n = a.length()
+            val t = LongArray(n); val pg = IntArray(n); val w0 = IntArray(n); val w1 = IntArray(n); val c = IntArray(n); val p = IntArray(n)
+            val x = Array(n) { "" }; val h = Array(n) { "" }
+            for (i in 0 until n) {
+                val s = a.getJSONObject(i); val l = s.optJSONObject("l") ?: JSONObject()
+                t[i] = s.optLong("t"); x[i] = s.optString("x")
+                if (l.has("w")) { pg[i] = l.optInt("p"); l.optJSONArray("w")?.let { w0[i] = it.optInt(0); w1[i] = it.optInt(1) } }
+                else { c[i] = l.optInt("c"); p[i] = l.optInt("p"); h[i] = l.optString("h") }
+            }
+            AudiobookSyncMap(o.optString("kind"), t, pg, w0, w1, c, p, x, h)
+        }.getOrNull()
     }
 }

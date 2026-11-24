@@ -181,6 +181,11 @@ fun ReadiumEpubReaderContent(
     onPrintPageAnchorChanged: (String) -> Unit = {},
     /** Resource (file name) holding a saved highlight, when page numbers are not EPUB positions (reflowed PDFs). */
     highlightHref: ((HighlightEntity) -> String?)? = null,
+    /** The sentence the audiobook is reading: (resource file name, its text), underlined; the page follows it when [followAudio]. */
+    audioSentence: Pair<String, String>? = null,
+    followAudio: Boolean = false,
+    /** Where the reader is: the resource's file name and how far into it (0–1), for starting the audiobook here. */
+    onReadingLocation: (href: String, progression: Double) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -333,6 +338,21 @@ fun ReadiumEpubReaderContent(
         } else {
             activeReadiumSelection = null
         }
+    }
+
+    // The audiobook's sentence: underlined, and the page turned to it (found by its text in its resource).
+    LaunchedEffect(navigatorFragment, publication, audioSentence, followAudio) {
+        val frag = navigatorFragment ?: return@LaunchedEffect
+        val pub = publication ?: return@LaunchedEffect
+        if (!frag.awaitReady()) return@LaunchedEffect
+        try {
+            val (name, text) = audioSentence ?: run { frag.applyDecorations(emptyList(), group = "audiobook"); return@LaunchedEffect }
+            val link = pub.readingOrder.firstOrNull { l -> l.href.toString().substringBefore('#').let { it == name || it.endsWith("/$name") || it.substringAfterLast('/') == name.substringAfterLast('/') } }
+                ?: return@LaunchedEffect
+            val loc = pub.locatorFromLink(link)?.copy(text = Locator.Text(highlight = text)) ?: return@LaunchedEffect
+            frag.applyDecorations(listOf(Decoration(id = "audiobook", locator = loc, style = Decoration.Style.Underline(tint = android.graphics.Color.BLACK, isActive = true))), group = "audiobook")
+            if (followAudio) frag.go(loc, animated = false)
+        } catch (t: Throwable) { Log.w("ReadiumReader", "audiobook sentence", t) }
     }
 
     // Apply saved highlights as Readium Decorations and listen for taps on existing highlights
@@ -556,6 +576,7 @@ fun ReadiumEpubReaderContent(
             try {
                 val previousLocator = latestLocator
                 latestLocator = locator
+                onReadingLocation(locator.href.toString().substringBefore('#'), locator.locations.progression ?: 0.0)
                 ReadiumLocatorHandoff.remember(document.id, locator)
                 if (glossFlipped.isNotEmpty() && previousLocator != null) {
                     val sameResource = previousLocator.href.toString() == locator.href.toString()

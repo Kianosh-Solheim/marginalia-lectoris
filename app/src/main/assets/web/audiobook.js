@@ -348,8 +348,10 @@ function abAlign(text, segments) {
     if (t <= lastT2) { if (time[first] <= lastT2) return; t = lastT2 + 1; }
     lastT2 = t; if (words >= 2) timed++;
     const u = text.units[toks[s0].u];
-    const l = text.kind === 'pdf' ? { p: u.page, w: [toks[s0].i, toks[s1].u === toks[s0].u ? toks[s1].i : u.words.length - 1] } : { c: u.c, p: u.p, s: toks[s0].s, e: toks[s1].e };
-    out.push({ t, l, x: toks.slice(s0, Math.min(s1 + 1, s0 + 6)).map(z => z.raw).join(' ') });
+    const l = text.kind === 'pdf' ? { p: u.page, w: [toks[s0].i, toks[s1].u === toks[s0].u ? toks[s1].i : u.words.length - 1] } : { c: u.c, p: u.p, h: u.h || '', s: toks[s0].s, e: toks[s1].e };
+    // The sentence's own text (the reader finds it on the page by it): exact for EPUB, the words joined for PDF.
+    const x = (text.kind === 'pdf' || toks[s1].u !== toks[s0].u ? toks.slice(s0, s1 + 1).map(z => z.raw).join(' ') : u.text.slice(toks[s0].s, toks[s1].e)).slice(0, 400);
+    out.push({ t, l, x });
   });
   return { version: 1, kind: text.kind, created: Date.now(), coverage: counted ? timed / counted : 0, anchors: anchors.length, sentences: out };
 }

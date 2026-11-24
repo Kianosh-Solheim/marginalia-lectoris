@@ -40,7 +40,7 @@ private fun clock(ms: Long): String { val s = ms / 1000; return if (s >= 3600) "
  * Without audio yet it offers to add the files.
  */
 @Composable
-fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() -> Unit)?, modifier: Modifier = Modifier) {
+fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() -> Unit)?, modifier: Modifier = Modifier, onBeforePlay: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val changes by Audiobooks.changes.collectAsState()
@@ -102,7 +102,7 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             InkButton("|◁", onClick = { AudiobookPlayer.chapterStep(-1) })
             InkButton("−30", onClick = { AudiobookPlayer.skip(-30_000) })
-            InkButton(if (st.playing) "Pause" else "Play", filled = true, onClick = { AudiobookPlayer.toggle(context) })
+            InkButton(if (st.playing) "Pause" else "Play", filled = true, onClick = { if (!st.playing) onBeforePlay(); AudiobookPlayer.toggle(context) })
             InkButton("+30", onClick = { AudiobookPlayer.skip(30_000) })
             InkButton("▷|", onClick = { AudiobookPlayer.chapterStep(1) })
             Spacer(Modifier.weight(1f))

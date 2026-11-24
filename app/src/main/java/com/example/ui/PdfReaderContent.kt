@@ -345,7 +345,10 @@ fun PdfReaderPagerContent(
     onUpdatePdfCrop: (left: Float, top: Float, right: Float, bottom: Float) -> Unit = { _, _, _, _ -> },
     extractionConfigVersion: Int = 0,
     glossaeEnabled: Boolean = false,
-    onOpenPdfTextToolsDialog: (initialTab: Int, selectedRegion: android.graphics.RectF, selectedText: String) -> Unit = { _, _, _ -> }
+    onOpenPdfTextToolsDialog: (initialTab: Int, selectedRegion: android.graphics.RectF, selectedText: String) -> Unit = { _, _, _ -> },
+    /** The sentence the audiobook is reading: (page 1-based, first word, last word), underlined; the page follows it when [followAudio]. */
+    audioSentence: Triple<Int, Int, Int>? = null,
+    followAudio: Boolean = false
 ) {
     val context = LocalContext.current
     val hapticFeedback = LocalHapticFeedback.current
@@ -396,6 +399,12 @@ fun PdfReaderPagerContent(
     )
 
     var hasRestoredSavedPage by remember(document.id) { mutableStateOf(false) }
+
+    // The audiobook turns the pages: when the sentence being read is on another page, go there (no animation, for e-ink).
+    LaunchedEffect(audioSentence?.first, followAudio, pageCount) {
+        val p = audioSentence?.first ?: return@LaunchedEffect
+        if (followAudio && p - 1 in 0 until pageCount && pagerState.currentPage != p - 1) pagerState.scrollToPage(p - 1)
+    }
 
     LaunchedEffect(pageCount, initialPage) {
         if (pageCount > 1 && !hasRestoredSavedPage) {
@@ -1172,6 +1181,17 @@ fun PdfReaderPagerContent(
                                         moveTo(trail[0].x, trail[0].y); for (k in 1 until trail.size) lineTo(trail[k].x, trail[k].y)
                                     }
                                     drawPath(path, Color(0xFF444444), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.5f * density, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                                }
+
+                                // 0. The sentence the audiobook is reading: a black line under each of its lines.
+                                audioSentence?.takeIf { it.first == pageIndex + 1 && words.isNotEmpty() }?.let { (_, a0, a1) ->
+                                    val slice = words.subList(a0.coerceIn(0, words.size - 1), (a1 + 1).coerceIn(a0.coerceIn(0, words.size - 1) + 1, words.size))
+                                    for ((_, lineWords) in slice.groupBy { it.lineIndex }) {
+                                        val left = lineWords.minOf { it.leftRatio } * canvasW
+                                        val right = lineWords.maxOf { it.rightRatio } * canvasW
+                                        val y = (lineWords.maxOf { it.bottomRatio } * canvasH + 1.5f * density).coerceAtMost(canvasH - 1f)
+                                        drawLine(Color.Black, Offset(left, y), Offset(right, y), strokeWidth = 2.5f * density)
+                                    }
                                 }
 
                                 // 1. Draw saved highlights on this PDF page
