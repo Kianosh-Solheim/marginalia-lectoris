@@ -3051,6 +3051,8 @@ async function openReader(id, params) {
   // Opened from a course: notes get the course's tag, and the reading's progress follows.
   if (params.get('course') && typeof courseReaderContext === 'function') courseReaderContext(ctx, d, params.get('course'), params.get('reading')).catch(console.warn);
   const ld = document.getElementById('rload'); if (ld) ld.remove();
+  // The audiobook (when the book has one): a player under the bar, the sentence followed in the text.
+  if (readerOpen && readerOpen.audioMark && typeof abReaderAttach === 'function') abReaderAttach(ctx, readerOpen, d, bar, readerRoot).catch(console.warn);
   drawSide();
   const hl = +params.get('hl');
   if (hl) { const n = ctx.notes.find(x => x.id === hl); if (n && !n.file) setTimeout(() => readerOpen && readerOpen.goToNote(n), 300); }
@@ -3343,6 +3345,7 @@ function selectionBar(ctx, sel, onDone) {
     h('button', { class: 'btn fill', onmousedown: e => e.preventDefault(), onclick: () => noteDialog(ctx, sel, color, onDone) }, 'Note…'),
     sel.pdf && ctx.goToPage ? h('button', { class: 'btn', title: 'The quotation continues on the next page: turn the page and select the rest there', onmousedown: e => e.preventDefault(), onclick: () => continueOnNextPage(ctx, sel, color, onDone, sel.text, sel.draft || {}) }, 'Continue on next page ›') : null,
     h('button', { class: 'btn', onmousedown: e => e.preventDefault(), onclick: () => copyText(sel.text, 'Copied') }, 'Copy'),
+    ctx.audio ? h('button', { class: 'btn', title: 'Play the audiobook from this passage', onmousedown: e => e.preventDefault(), onclick: () => { ctx.audio.playFromText(sel.text, sel.loc && sel.loc.page); onDone(true); } }, '▶ Listen') : null,
     sel.text.trim().split(/\s+/).length <= 6 ? h('button', { class: 'btn', title: 'Keep this word in your lexicon, with the sentence it stands in', onmousedown: e => e.preventDefault(), onclick: () => lexAddFromReader(ctx, sel) }, 'Lexicon +') : null,
     setAsButton(ctx, sel, onDone),
     h('button', { class: 'btn quiet', onmousedown: e => e.preventDefault(), onclick: () => { onDone(true); } }, '×'));
@@ -3557,6 +3560,7 @@ async function openPdf(ctx, params) {
     el._textDiv = textDiv;
     paintHighlights(i);
     if (ctx.find && ctx.find.q) markFindInTextLayer(textDiv, ctx.find.q, optsOf(ctx.find));
+    if (audioSent && audioSent.l.p === i) markAudioInTextLayer(textDiv, audioSent.x);
     if (needsTablet(i)) applyTabletText(i, el, textDiv).catch(console.error); else badge(el, null);
   }
 
@@ -3622,7 +3626,7 @@ async function openPdf(ctx, params) {
     }, 60);
   }
 
-  let current = 1;
+  let current = 1, audioSent = null;
   const slider = h('input', { type: 'range', min: 1, max: n, value: 1 });
   ctx.pageNumbers = () => pageNumbersDialog(d, current, n, labels && labels[current - 1], () => route());
   const where = h('span', { class: 'pagenos', title: 'Page numbers: say which printed page this is, and the rest follows', onclick: () => pageNumbersDialog(d, current, n, labels && labels[current - 1], () => route()) }, '');
@@ -3841,6 +3845,15 @@ async function openPdf(ctx, params) {
       setTimeout(() => { const m = pages[hit.loc - 1] && pages[hit.loc - 1].querySelector('.find-hit'); if (m) m.scrollIntoView({ block: 'center' }); }, 450);
     },
     markFind: (q, whole) => pages.forEach(el => { if (el._textDiv) markFindInTextLayer(el._textDiv, q, whole); }),
+    // The audiobook's sentence: marked in its page's text, and the page shown when following.
+    audioMark: (sn, follow) => {
+      audioSent = sn;
+      pages.forEach(el => { if (el._textDiv) markAudioInTextLayer(el._textDiv, null); });
+      if (!sn) return;
+      if (follow && sn.l.p !== current) goPage(sn.l.p, true);
+      const el = pages[sn.l.p - 1]; if (el && el._textDiv) markAudioInTextLayer(el._textDiv, sn.x);
+    },
+    audioHere: () => ({ page: current }),
     clearFind: () => pages.forEach(el => { if (el._textDiv) markFindInTextLayer(el._textDiv, '', false); }),
     notesChanged: () => { [...rendered.keys()].forEach(paintHighlights); },
     destroy: () => {
@@ -4106,7 +4119,7 @@ async function openEpub(ctx, params) {
   rendition.hooks.content.register(contents => { setTimeout(() => paintIn(contents), 50); });
 
   // Place, progress and the status line
-  let lastLoc = null;
+  let lastLoc = null, audioCfi = null;
   const where = h('span', null, '');
   const fontBox = h('span', { class: 'row', style: { gap: '4px' } });
   const fl = h('span', { class: 'mono', style: { fontSize: '11px', minWidth: '40px', textAlign: 'center' }, title: 'Text size (as on the tablet)' }, Math.round(RS.fontSizeSp) + ' pt');
@@ -4244,6 +4257,24 @@ async function openEpub(ctx, params) {
       try { rendition.annotations.highlight(cfi, {}, () => {}, 'ml-find', { fill: '#facc15', 'fill-opacity': '0.45', 'mix-blend-mode': 'multiply' }); } catch (_) {}
     },
     markFind: () => {},
+    audioMark: async (sn, follow) => {
+      if (audioCfi) { try { rendition.annotations.remove(audioCfi, 'underline'); } catch (_) {} audioCfi = null; }
+      if (!sn) return;
+      const name = String(sn.l.h || '').split('/').pop();
+      const item = name ? (book.spine.spineItems || []).find(x => String(x.href || '').split('/').pop() === name) : null;
+      const cur = lastLoc && lastLoc.start && String(lastLoc.start.href || '').split('/').pop();
+      if (follow && item && cur !== name) { try { await rendition.display(item.href); } catch (_) {} }
+      for (const c of (rendition.getContents() || [])) {
+        const range = audioRangeIn(c.document, sn.x);
+        if (!range) continue;
+        let cfi; try { cfi = c.cfiFromRange(range); } catch (_) { continue; }
+        audioCfi = cfi;
+        try { rendition.annotations.underline(cfi, {}, null, 'ml-audio', { stroke: '#111', 'stroke-width': '2.5', 'stroke-opacity': '0.9' }); } catch (_) {}
+        if (follow) { try { await rendition.display(cfi); } catch (_) {} }
+        break;
+      }
+    },
+    audioHere: () => { const st = (lastLoc && lastLoc.start) || {}; const disp = st.displayed || {}; return { href: String(st.href || '').split('/').pop(), progression: disp.total ? Math.max(0, disp.page - 1) / disp.total : 0 }; },
     clearFind: () => { if (findCfi) { try { rendition.annotations.remove(findCfi, 'highlight'); } catch (_) {} findCfi = null; } },
     goToNote: async note => {
       let cfi = painted.get(note.id);

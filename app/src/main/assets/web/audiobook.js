@@ -61,7 +61,7 @@ function abUpload(d, files, done) {
 const AB_SPEEDS = [0.8, 1, 1.1, 1.25, 1.5, 1.75, 2];
 
 /** A player over the book's files as one timeline; the place is saved on the tablet. */
-function abPlayer(d, a) {
+function abPlayer(d, a, hooks = {}) {
   const audio = new Audio(); audio.preload = 'metadata';
   let idx = -1, pendingSeek = null, lastSave = 0, stopped = false;
   const files = a.files, total = a.durationMs || 1, chapters = a.chapters || [];
@@ -81,7 +81,13 @@ function abPlayer(d, a) {
   let speed = a.speed || 1;
   const seek = ms => { const [i, o] = locate(Math.max(0, Math.min(total - 500, ms))); open(i, o, !audio.paused); setTimeout(() => { draw(); save(true); }, 300); };
   const chapterAt = ms => { let k = -1; chapters.forEach((c, j) => { if (c.startMs <= ms) k = j; }); return k; };
-  const playBtn = h('button', { class: 'btn fill', style: { minWidth: '80px' }, onclick: () => { if (audio.paused) { if (idx < 0) open(...locate(a.positionMs || 0), true); else audio.play(); } else audio.pause(); } }, 'Play');
+  // Play: where the reader is (hooks.beforePlay may give a place), else where it stopped.
+  const playBtn = h('button', { class: 'btn fill', style: { minWidth: '80px' }, onclick: () => {
+    if (!audio.paused) { audio.pause(); return; }
+    const here = hooks.beforePlay ? hooks.beforePlay(idx < 0 ? (a.positionMs || 0) : global()) : null;
+    if (here != null) open(...locate(here), true);
+    else if (idx < 0) open(...locate(a.positionMs || 0), true); else audio.play();
+  } }, 'Play');
   const title = h('b', { class: 'abtitle' });
   const time = h('span', { class: 'mono muted' });
   const line = h('div', { class: 'abline', title: 'Go to this place' }, h('i'));
@@ -101,7 +107,7 @@ function abPlayer(d, a) {
     spd.textContent = speed + '×';
   };
   // Leaving the book's page stops the sound (and saves the place).
-  audio.addEventListener('timeupdate', () => { if (!el.isConnected) { api_stop(); return; } draw(); if (!audio.paused) save(false); });
+  audio.addEventListener('timeupdate', () => { if (!el.isConnected) { api_stop(); return; } draw(); if (!audio.paused) save(false); if (hooks.onTime) hooks.onTime(global(), !audio.paused); });
   audio.addEventListener('play', draw); audio.addEventListener('pause', () => { draw(); if (!stopped) save(true); });
   const el = h('div', { class: 'abplayer' },
     h('div', { class: 'row', style: { alignItems: 'baseline', gap: '10px' } }, title, h('span', { style: { flex: 1 } }), time), line,
@@ -114,7 +120,7 @@ function abPlayer(d, a) {
       spd, chapters.length > 1 ? chap : null), note);
   const api_stop = () => { stopped = true; if (!audio.paused) { save(true); audio.pause(); } audio.removeAttribute('src'); };
   draw();
-  return { el, stop: api_stop };
+  return { el, stop: api_stop, playAt: ms => { const [i, o] = locate(Math.max(0, ms)); open(i, o, true); setTimeout(draw, 300); }, position: () => (idx < 0 ? (a.positionMs || 0) : global()) };
 }
 
 // ------------------------------------------------------------------ syncing the audio with the text
@@ -354,4 +360,67 @@ function abAlign(text, segments) {
     out.push({ t, l, x });
   });
   return { version: 1, kind: text.kind, created: Date.now(), coverage: counted ? timed / counted : 0, anchors: anchors.length, sentences: out };
+}
+
+// ------------------------------------------------------------------ in the reader: listen while the text follows
+
+/** The audiobook in the web reader: a player under the reader's bar; with a sync map, the sentence is marked and followed. */
+async function abReaderAttach(ctx, viewer, d, bar, root) {
+  let a; try { a = await api(`doc/${d.id}/audiobook`); } catch (_) { return; }
+  if (!a.exists) return;
+  let sents = [];
+  try { const m = await api(`doc/${d.id}/audiobook/sync`, { timeout: 60000 }); sents = m.sentences || []; } catch (_) {}
+  const norm = x => String(x).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const nsents = sents.map(x => norm(x.x));
+  const indexAt = ms => { let lo = 0, hi = sents.length - 1, ans = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (sents[mid].t <= ms) { ans = mid; lo = mid + 1; } else hi = mid - 1; } return ans; };
+  const find = (q, page, near) => {
+    const nq = norm(q); if (nq.length < 4) return -1;
+    const head = nq.slice(0, 30); let best = -1, score = Infinity;
+    sents.forEach((x, i) => {
+      if (page && x.l.w && x.l.p !== page) return;
+      const ns = nsents[i]; if (!ns) return;
+      const at = nq.includes(ns.slice(0, 30)) ? nq.indexOf(ns.slice(0, 30)) : ns.includes(head) ? 0 : -1;
+      if (at < 0) return;
+      const sc = at * 100000 + Math.abs(i - near); if (sc < score) { score = sc; best = i; }
+    });
+    return best;
+  };
+  let last = -1;
+  const player = abPlayer(d, a, {
+    onTime: (ms, playing) => {
+      if (!sents.length) return;
+      const i = indexAt(ms);
+      if (i !== last) { last = i; viewer.audioMark(sents[i] || null, playing); }
+    },
+    // Whispersync: Play starts where you are reading, unless the sentence it stopped at is on the page in view.
+    beforePlay: ms => {
+      if (!sents.length || !viewer.audioHere) return null;
+      const here = viewer.audioHere(), cur = indexAt(ms);
+      if (here.page) {
+        if (cur >= 0 && sents[cur].l.p === here.page) return null;
+        const i = sents.findIndex(x => x.l.p === here.page); return i >= 0 ? sents[i].t : null;
+      }
+      if (here.href) {
+        const idx = []; sents.forEach((x, i) => { if (String(x.l.h || '').split('/').pop() === here.href) idx.push(i); });
+        if (!idx.length) return null;
+        const i = idx[Math.floor(Math.min(1, Math.max(0, here.progression)) * (idx.length - 1))];
+        if (cur >= 0 && String(sents[cur].l.h || '').split('/').pop() === here.href && Math.abs(i - cur) < 25) return null;
+        return sents[i].t;
+      }
+      return null;
+    }
+  });
+  const host = h('div', { class: 'rabook', hidden: localGet('ml.abar', '0') !== '1' }, player.el,
+    sents.length ? null : h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Not synced with the text yet — on the book’s page, “Sync with the text…” makes the text follow the audio.'));
+  const btn = h('button', { class: 'btn' + (host.hidden ? '' : ' fill'), title: 'The audiobook: listen while the text follows', onclick: () => { host.hidden = !host.hidden; btn.classList.toggle('fill', !host.hidden); localSet('ml.abar', host.hidden ? '0' : '1'); } }, 'Listen');
+  bar.insertBefore(btn, bar.querySelector('.rsep'));
+  root.insertBefore(host, bar.nextSibling);
+  if (sents.length) ctx.audio = {
+    playFromText: (text, page) => {
+      const i = find(text, page, Math.max(0, last));
+      if (i < 0) { toast('That passage is not in the audiobook’s sync map'); return; }
+      host.hidden = false; btn.classList.add('fill');
+      player.playAt(sents[i].t);
+    }
+  };
 }

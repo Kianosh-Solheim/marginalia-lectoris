@@ -725,6 +725,46 @@ function markFindInTextLayer(textDiv, q, opt) {
   });
 }
 
+/** Marks the audiobook's sentence in a PDF.js text layer (null clears): found by its first words. */
+function markAudioInTextLayer(textDiv, text) {
+  if (!textDiv) return;
+  textDiv.querySelectorAll('span.aspan').forEach(s => { s.textContent = s.textContent; s.classList.remove('aspan'); });
+  if (!text) return;
+  const spans = [...textDiv.querySelectorAll('span')].filter(s => !s.querySelector('span'));
+  let all = ''; const starts = [];
+  spans.forEach(s => { starts.push(all.length); all += (s.textContent || '') + ' '; });
+  const [n, map] = normMap(all), [q] = normMap(String(text));
+  let probe = q.trim().slice(0, 60), at = n.indexOf(probe);
+  if (at < 0 && probe.length > 24) { probe = probe.slice(0, 24); at = n.indexOf(probe); }
+  if (at < 0) return;
+  const sa = map[at], sb = map[Math.min(n.length - 1, at + Math.min(q.trim().length, n.length - at) - 1)] + 1;
+  spans.forEach((s, k) => {
+    const st = starts[k], t = s.textContent || '', en = st + t.length;
+    if (en <= sa || st >= sb) return;
+    const x = Math.max(0, sa - st), y = Math.min(en, sb) - st;
+    s.textContent = ''; s.append(document.createTextNode(t.slice(0, x)), h('mark', { class: 'audio-hit' }, t.slice(x, y)), document.createTextNode(t.slice(y)));
+    s.classList.add('aspan');
+  });
+}
+
+/** The DOM range of the audiobook's sentence in a document (EPUB section), found by its words; or null. */
+function audioRangeIn(doc, text) {
+  if (!doc || !doc.body || !text) return null;
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const nodes = []; let all = '';
+  for (let t = walker.nextNode(); t; t = walker.nextNode()) { nodes.push([t, all.length]); all += t.nodeValue; }
+  const [n, map] = normMap(all), q = normMap(String(text))[0].trim();
+  let at = n.indexOf(q.slice(0, 80)); if (at < 0 && q.length > 30) at = n.indexOf(q.slice(0, 30));
+  if (at < 0) return null;
+  const end = Math.min(n.length - 1, at + q.length - 1);
+  const sa = map[at], sb = map[end] + 1;
+  const find = pos => { let lo = 0, hi = nodes.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (nodes[mid][1] <= pos) lo = mid; else hi = mid - 1; } return nodes[lo]; };
+  const [na, oa] = find(sa), [nb, ob] = find(sb - 1);
+  const r = doc.createRange();
+  try { r.setStart(na, sa - oa); r.setEnd(nb, sb - ob); } catch (_) { return null; }
+  return r;
+}
+
 /** DOM ranges in a document where the search matches (for EPUB sections). */
 function findRangesIn(doc, q, opt) {
   const query = parseQuery(q, opt);
