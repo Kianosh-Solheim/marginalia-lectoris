@@ -208,7 +208,8 @@ object Courses {
         require(Regex("^[0-9]{2}[hv]$").matches(s)) { "Choose a semester (e.g. 26h for autumn 2026, 27v for spring 2027)." }
         val url = "https://tp.educloud.no/${r.inst}/timeplan/ical.php?sem=$s&id%5B0%5D=" + java.net.URLEncoder.encode("${r.code},${r.termin}", "UTF-8") + "&type=course"
         val (code, body) = http.newCall(okhttp3.Request.Builder().url(url).header("Accept", "text/calendar,*/*").build()).execute().use { it.code to it.body?.string().orEmpty() }
-        if (code !in 200..299) throw IllegalArgumentException("TP answered HTTP $code.")
+        if (code !in 200..299) throw IllegalArgumentException("TP refused ${r.code} for $s (HTTP $code" + body.replace(Regex("<[^>]+>"), " ").replace(Regex("\\s+"), " ").trim().take(160).let { if (it.isNotBlank()) ": $it" else "" } +
+            "). TP exports only the current and the next semester — choose that one" + (if (r.termin != "1") "" else "; if it still fails, the course may not be taught in $s") + ".")
         if (!body.trimStart().startsWith("BEGIN:VCALENDAR")) throw IllegalArgumentException("TP gave no calendar for ${r.code} $s: " + body.trim().take(200).ifBlank { "(empty)" } + " — TP exports only the current and the next semester.")
         if (!body.contains("BEGIN:VEVENT")) throw IllegalArgumentException("TP has no timetable for ${r.code} in $s yet (not published, or the wrong semester).")
         return JSONObject().put("ics", body).put("code", r.code).put("sem", s)

@@ -497,7 +497,8 @@ async function tpDialog(c, sem, onDone) {
       if (!link.value.trim()) return;
       try {
         const r = await api('courses/tp-semesters', { method: 'POST', json: { url: link.value.trim() }, timeout: 30000 });
-        const want = c.tpSem || guessSem() || r.linkSem;
+        const now = (r.semesters.find(x => x.standard) || {}).id || '';
+        const want = c.tpSem || guessSem() || (r.linkSem && now && r.linkSem < now ? now : r.linkSem) || now;
         const list = r.semesters.length ? r.semesters : ['26h', '27v', '27h'].map(id => ({ id, name: '' }));
         clear(semSel).append(h('option', { value: '' }, '— semester —'), ...list.map(x => h('option', { value: x.id, selected: x.id === want || (!want && x.standard) }, x.id + (x.name ? ' · ' + x.name : '') + (x.standard ? ' (now)' : ''))));
         if (want && !list.some(x => x.id === want)) semSel.append(h('option', { value: want, selected: true }, want + ' (from the link)'));
