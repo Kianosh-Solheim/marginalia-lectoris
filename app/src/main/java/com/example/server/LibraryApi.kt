@@ -177,6 +177,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                         "fetch-page" -> com.example.reader.Courses.fetchCourse(context, b.optString("url").trim())
                         "fetch-person" -> com.example.reader.Courses.fetchPerson(context, b.optString("url").trim())
                         "parse-outline" -> com.example.reader.Courses.parseOutline(context, b.optString("text"), b.optString("year"))
+                        "tp-semesters" -> com.example.reader.Courses.tpSemesters(b.optString("url").trim())
+                        "tp-fetch" -> com.example.reader.Courses.tpFetch(b.optString("url").trim(), b.optString("sem").trim())
                         else -> throw NoSuchElementException("No such action")
                     }
                 }

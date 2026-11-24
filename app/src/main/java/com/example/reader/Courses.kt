@@ -162,6 +162,57 @@ object Courses {
     }
 
     /** Pasted course outline or reading list → sessions with their readings (for you to check). */
+    // ---------------------------------------------------------------- the TP timetable (tp.educloud.no)
+
+    /** Institution, course code and teaching term (“SAMPOL103¤1” → SAMPOL103, 1) and semester from a TP link (or a bare course code). */
+    private data class TpRef(val inst: String, val code: String, val termin: String, val sem: String)
+    private fun tpRef(link: String): TpRef {
+        val t = link.trim()
+        if (Regex("^[A-ZÆØÅa-zæøå]{2,}[0-9]{2,}[A-Za-z0-9-]*$").matches(t)) return TpRef("uib", t.uppercase(), "1", "")
+        val u = runCatching { java.net.URI(t) }.getOrNull() ?: throw IllegalArgumentException("Paste the address of the course's timetable at tp.educloud.no.")
+        if (u.host?.lowercase() != "tp.educloud.no") throw IllegalArgumentException("That is not a TP timetable address (tp.educloud.no).")
+        val inst = u.path.trim('/').substringBefore('/').ifBlank { "uib" }
+        require(Regex("^[a-z0-9_-]{2,20}$").matches(inst)) { "Unexpected TP address." }
+        val q = (u.rawQuery ?: "").split('&').mapNotNull { kv -> kv.split('=', limit = 2).takeIf { it.size == 2 }?.let { java.net.URLDecoder.decode(it[0], "UTF-8") to java.net.URLDecoder.decode(it[1], "UTF-8") } }
+        val course = q.firstOrNull { it.first == "course" || it.first.startsWith("id") }?.second ?: throw IllegalArgumentException("The address names no course (…&course=CODE¤1).")
+        val parts = course.split('¤', ',')
+        return TpRef(inst, parts[0].trim().uppercase(), parts.getOrNull(1)?.trim()?.ifBlank { "1" } ?: "1", q.firstOrNull { it.first == "semester" || it.first == "sem" }?.second.orEmpty())
+    }
+
+    /** The semesters TP knows (for the choice in the dialog), the current one marked. */
+    fun tpSemesters(link: String): JSONObject {
+        val r = tpRef(link)
+        val out = JSONArray()
+        runCatching {
+            val body = http.newCall(okhttp3.Request.Builder().url("https://tp.educloud.no/${r.inst}/ws/services/semesters.php").build()).execute().use { it.body?.string().orEmpty() }
+            val any: Any = org.json.JSONTokener(body).nextValue()
+            val arr = JSONArray()
+            when (any) {
+                is JSONArray -> for (i in 0 until any.length()) any.optJSONObject(i)?.let { arr.put(it) }
+                is JSONObject -> (any.optJSONArray("data") ?: any.optJSONArray("semesters"))?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { arr.put(it) } }
+                    ?: any.keys().forEach { k -> any.optJSONObject(k)?.let { o -> if (o.optString("id").isBlank()) o.put("id", k); arr.put(o) } }
+            }
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { o ->
+                val id = o.optString("id").ifBlank { o.optString("semester") }
+                if (Regex("^[0-9]{2}[hvHV]$").matches(id)) out.put(JSONObject().put("id", id.lowercase()).put("name", o.optString("name").ifBlank { o.optString("name_en") }).put("standard", o.optBoolean("standard")))
+            }
+        }
+        return JSONObject().put("code", r.code).put("termin", r.termin).put("linkSem", r.sem).put("semesters", out)
+    }
+
+    /** The course's timetable for [sem] as iCalendar text (TP's own export). */
+    fun tpFetch(link: String, sem: String): JSONObject {
+        val r = tpRef(link)
+        val s = sem.ifBlank { r.sem }.lowercase()
+        require(Regex("^[0-9]{2}[hv]$").matches(s)) { "Choose a semester (e.g. 26h for autumn 2026, 27v for spring 2027)." }
+        val url = "https://tp.educloud.no/${r.inst}/timeplan/ical.php?sem=$s&id%5B0%5D=" + java.net.URLEncoder.encode("${r.code},${r.termin}", "UTF-8") + "&type=course"
+        val (code, body) = http.newCall(okhttp3.Request.Builder().url(url).header("Accept", "text/calendar,*/*").build()).execute().use { it.code to it.body?.string().orEmpty() }
+        if (code !in 200..299) throw IllegalArgumentException("TP answered HTTP $code.")
+        if (!body.trimStart().startsWith("BEGIN:VCALENDAR")) throw IllegalArgumentException("TP gave no calendar for ${r.code} $s: " + body.trim().take(200).ifBlank { "(empty)" } + " — TP exports only the current and the next semester.")
+        if (!body.contains("BEGIN:VEVENT")) throw IllegalArgumentException("TP has no timetable for ${r.code} in $s yet (not published, or the wrong semester).")
+        return JSONObject().put("ics", body).put("code", r.code).put("sem", s)
+    }
+
     fun parseOutline(ctx: Context, text: String, year: String): JSONObject {
         require(text.isNotBlank()) { "Paste the course outline or the reading list first." }
         return ai(ctx, "Turn this course outline or reading list into sessions. For each session give: date as YYYY-MM-DD (when no year is given, it is probably $year), " +

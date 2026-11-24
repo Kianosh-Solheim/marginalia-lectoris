@@ -52,6 +52,7 @@ function eventSession(e, c) {
   let topic = (e.title || '').trim();
   if (c && c.code) topic = topic.replace(new RegExp('^\\s*' + c.code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[-–:,]?\\s*', 'i'), '');
   topic = topic.replace(/^(forelesning|lecture|seminar|gruppe\w*)\s*[-–:,]\s*/i, '');
+  if (/^(forelesning|lecture|seminar|undervisning|teaching)?\s*((seminar)?grupp?e|group|gr\.)?\s*\d*[a-z]?$/i.test(topic.trim())) topic = '';
   return { id: cid(), date: ymd(s), time: e.allDay ? '' : hm(s) + (en ? '–' + hm(en) : ''), kind, room: e.location || '', topic, note: '', readings: [] };
 }
 
@@ -220,6 +221,7 @@ function courseCalendarSection(c, s, save) {
   const draw = async (fetch) => {
     let st; try { st = await gcalStatus(); } catch (_) { st = { connected: false }; }
     const tools = h('span', { class: 'row', style: { gap: '6px' } },
+      h('button', { class: 'btn quiet', title: 'Fetch the lectures and your seminar group from the TP timetable (tp.educloud.no)', onclick: () => tpDialog(c, s, () => save()) }, 'From the timetable (TP)…'),
       h('button', { class: 'btn quiet', title: 'Read a calendar file (.ics) — e.g. the timetable export — into sessions', onclick: () => icsImport(c, () => save()) }, 'Import .ics…'),
       st.connected ? h('button', { class: 'btn quiet', title: 'Make Google Calendar events of the sessions with dates', onclick: () => sendSessionsToGoogle(c, () => save()) }, 'Send sessions to Google') : null,
       st.connected ? h('button', { class: 'btn quiet', onclick: () => draw(true) }, 'Refresh') : null);
@@ -465,5 +467,90 @@ function calEventEdit(e, redraw) {
     const body = { id: e ? e.id : '', cal: e ? e.cal : '', title: v.title, location: v.location, description: v.description, allDay, timeZone: localZone(),
       start: allDay ? v.date : at(v.from), end: allDay ? ymd(addDays(new Date(v.date + 'T12:00:00'), 1)) : at(v.to && v.to > v.from ? v.to : v.from) };
     api('gcal/event', { method: 'POST', json: body, timeout: 60000 }).then(() => { toast(e ? 'Event changed' : 'Event made'); redraw(); }).catch(fail);
+  });
+}
+
+// ------------------------------------------------------------------ the TP timetable (tp.educloud.no)
+
+/** Which seminar group an event belongs to ("Gruppe 2", "Group 3", "Gr. 1A", "Seminargruppe 4"), or ''. */
+function tpGroup(e) {
+  const t = [e.title, e.description, e.location].join(' \n ');
+  const m = t.match(/\b(?:seminar\s*)?(?:grupp?e|group|gr\.)\s*[:#-]?\s*([0-9]{1,3}[a-z]?)\b/i) || t.match(/\bseminar\s+([0-9]{1,3}[a-z]?)\b/i);
+  return m ? m[1].toUpperCase() : '';
+}
+const tpIsSeminar = e => /seminar|gruppe|group|kollokvie|øving|exercise|workshop/i.test((e.title || '') + ' ' + (e.description || ''));
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Fetch the course's TP timetable: all lectures, and the seminars of the group you choose (remembered on the course). */
+async function tpDialog(c, sem, onDone) {
+  modal((box, close) => {
+    box.classList.add('wide');
+    const link = h('input', { type: 'url', placeholder: 'https://tp.educloud.no/uib/app/schedule?…&course=' + (c.code || 'CODE') + '%C2%A41', value: c.tpUrl || '', style: { flex: 1 } });
+    const semSel = h('select', { style: { width: 'auto' } }, h('option', { value: '' }, '— semester —'));
+    const out = h('div');
+    const msg = h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Paste the address of the course in TP (as in the browser), or just the course code. TP exports the current and the next semester.');
+    const guessSem = () => { // from the app's semester dates: autumn → yyh, spring → yyv
+      const d = sem && (sem.start || sem.end); if (!d) return '';
+      const y = d.slice(2, 4), m = +d.slice(5, 7); return y + (m >= 7 ? 'h' : 'v');
+    };
+    const loadSems = async () => {
+      if (!link.value.trim()) return;
+      try {
+        const r = await api('courses/tp-semesters', { method: 'POST', json: { url: link.value.trim() }, timeout: 30000 });
+        const want = c.tpSem || guessSem() || r.linkSem;
+        const list = r.semesters.length ? r.semesters : ['26h', '27v', '27h'].map(id => ({ id, name: '' }));
+        clear(semSel).append(h('option', { value: '' }, '— semester —'), ...list.map(x => h('option', { value: x.id, selected: x.id === want || (!want && x.standard) }, x.id + (x.name ? ' · ' + x.name : '') + (x.standard ? ' (now)' : ''))));
+        if (want && !list.some(x => x.id === want)) semSel.append(h('option', { value: want, selected: true }, want + ' (from the link)'));
+        msg.textContent = `${r.code} (teaching term ${r.termin}). Choose the semester and press Fetch.`;
+      } catch (e) { msg.textContent = e.message; }
+    };
+    link.addEventListener('change', loadSems);
+    const go = h('button', { class: 'btn fill', onclick: async () => {
+      if (!link.value.trim()) { toast('Paste the TP address first'); return; }
+      if (!semSel.value) { toast('Choose the semester'); return; }
+      go.disabled = true; clear(out).append(h('p', { class: 'muted' }, 'Fetching from TP…'));
+      try {
+        const r = await api('courses/tp-fetch', { method: 'POST', json: { url: link.value.trim(), sem: semSel.value }, timeout: 60000 });
+        c.tpUrl = link.value.trim(); c.tpSem = r.sem;
+        showChoice(icsParse(r.ics), r);
+      } catch (e) { clear(out).append(h('p', { class: 'muted' }, e.message)); }
+      go.disabled = false;
+    } }, 'Fetch');
+    box.append(h('h2', null, 'From the timetable (TP)'), h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, link, semSel, go), msg, out,
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Close')));
+    if (link.value) loadSems();
+
+    function showChoice(evs, r) {
+      clear(out);
+      // Seminars with a group number group by it; seminars without one by their weekday, time and room.
+      const groups = new Map(), common = [];
+      evs.forEach(e => {
+        const g = tpGroup(e);
+        let key = g ? 'Group ' + g : '';
+        if (!key && tpIsSeminar(e) && !e.allDay) { const d = new Date(e.start); key = `${WD[d.getDay()]} ${hm(d)}${e.location ? ' · ' + e.location : ''}`; }
+        if (key) { if (!groups.has(key)) groups.set(key, []); groups.get(key).push(e); } else common.push(e);
+      });
+      const keys = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+      const summary = list => { const by = {}; list.forEach(e => { const d = new Date(e.start); const k = e.allDay ? 'all day' : `${WD[d.getDay()]} ${hm(d)}`; by[k] = (by[k] || 0) + 1; });
+        const locs = [...new Set(list.map(e => e.location).filter(Boolean))].slice(0, 2).join(', ');
+        return Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, n]) => `${k} ×${n}`).join(', ') + (locs ? ' · ' + locs : ''); };
+      const lect = h('input', { type: 'checkbox', checked: true });
+      out.append(h('label', { class: 'row', style: { gap: '8px', margin: '8px 0' } }, lect, h('b', null, `Lectures and everything for the whole course (${common.length})`), h('span', { class: 'muted' }, summary(common))));
+      let chosen = c.tpGroup && groups.has(c.tpGroup) ? c.tpGroup : '';
+      if (keys.length) {
+        out.append(h('p', { style: { margin: '10px 0 4px' } }, h('b', null, 'Which seminar group are you in?')));
+        const opt = (key, label, sub) => { const r0 = h('input', { type: 'radio', name: 'tpg', checked: chosen === key }); r0.addEventListener('change', () => { chosen = key; }); return h('label', { class: 'calpickrow', style: { gridTemplateColumns: '18px 140px 1fr' } }, r0, h('b', null, label), h('span', { class: 'muted' }, sub)); };
+        const listBox = h('div', { class: 'calpick' }, ...keys.map(k => opt(k, k, `${groups.get(k).length} sessions · ${summary(groups.get(k))}`)), opt('', 'None', 'Add no seminars'));
+        out.append(listBox);
+      } else out.append(h('p', { class: 'muted' }, 'TP lists no seminar groups for this course.'));
+      out.append(h('div', { class: 'foot' }, h('button', { class: 'btn fill', onclick: async () => {
+        const pick = (lect.checked ? common : []).concat(chosen ? groups.get(chosen) : []);
+        if (!pick.length) { toast('Nothing chosen'); return; }
+        c.tpGroup = chosen;
+        await coursesSave();
+        close();
+        eventsToSessionsDialog(pick, c, onDone, `TP ${r.code} ${r.sem}` + (chosen ? ' · ' + chosen : ''));
+      } }, 'Next: check the sessions')));
+    }
   });
 }
