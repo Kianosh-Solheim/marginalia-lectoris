@@ -147,6 +147,7 @@ async function eventsToSessionsDialog(events, c, onDone, source) {
         const chosen = rows.filter(r => r.cb.checked); if (!chosen.length) { toast('Tick some events'); return; }
         const cc = course();
         cc.sessions = (cc.sessions || []).concat(chosen.map(r => Object.assign(r.x, r.e.cal ? { gcal: { id: r.e.id, cal: r.e.cal, linked: true } } : {})));
+        cc.sessions.sort((a, b) => ((a.date || '9999') + (a.time || '')).localeCompare((b.date || '9999') + (b.time || '')));
         close();
         if (await coursesSave()) { toast(`${chosen.length} session${chosen.length === 1 ? '' : 's'} put in ${cc.code || cc.title}`, 2500); if (onDone) onDone(cc); }
       } }, 'Put them in')));
@@ -517,7 +518,21 @@ async function tpDialog(c, sem, onDone) {
       } catch (e) { clear(out).append(h('p', { class: 'muted' }, e.message)); }
       go.disabled = false;
     } }, 'Fetch');
-    box.append(h('h2', null, 'From the timetable (TP)'), h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, link, semSel, go), msg, out,
+    // Older semesters: TP's own CSV download (Last ned ▸ CSV on the TP page), read here.
+    const csvIn = h('input', { type: 'file', accept: '.csv,text/csv', style: { display: 'none' } });
+    csvIn.addEventListener('change', async () => {
+      const f = csvIn.files[0]; csvIn.value = ''; if (!f) return;
+      try {
+        const buf = await f.arrayBuffer();
+        let text; try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (_) { text = new TextDecoder('windows-1252').decode(buf); }
+        const r = tpCsvParse(text);
+        if (!r.events.length) { toast('No sessions in that file'); return; }
+        c.tpSem = r.sem || c.tpSem;
+        showChoice(r.events, { code: r.code || c.code || '', sem: r.sem || '' });
+      } catch (e) { fail(e); }
+    });
+    const csvBtn = h('button', { class: 'btn quiet', title: 'For an older semester: on the TP page, download the timetable as CSV and choose the file here', onclick: () => csvIn.click() }, 'CSV file from TP…');
+    box.append(csvIn, h('h2', null, 'From the timetable (TP)'), h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, link, semSel, go, csvBtn), msg, out,
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Close')));
     if (link.value) loadSems();
 
@@ -526,8 +541,8 @@ async function tpDialog(c, sem, onDone) {
       // Seminars with a group number group by it; seminars without one by their weekday, time and room.
       const groups = new Map(), common = [];
       evs.forEach(e => {
-        const g = tpGroup(e);
-        let key = g ? 'Group ' + g : '';
+        const g = e.group ? '' : tpGroup(e);
+        let key = e.group || (g ? 'Group ' + g : '');
         if (!key && tpIsSeminar(e) && !e.allDay) { const d = new Date(e.start); key = `${WD[d.getDay()]} ${hm(d)}${e.location ? ' · ' + e.location : ''}`; }
         if (key) { if (!groups.has(key)) groups.set(key, []); groups.get(key).push(e); } else common.push(e);
       });
@@ -554,4 +569,39 @@ async function tpDialog(c, sem, onDone) {
       } }, 'Next: check the sessions')));
     }
   });
+}
+
+/** TP's CSV download (semicolon separated; any semester): rows → events, seminar groups from the party columns. */
+function tpCsvParse(text) {
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ';') { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += ch;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  const head = (rows.shift() || []).map(x => x.trim().replace(/^﻿/, ''));
+  const col = n => head.indexOf(n);
+  if (col('dtstart') < 0) throw new Error('This is not a timetable CSV from TP (no dtstart column).');
+  const get = (r, n) => { const i = col(n); return i < 0 ? '' : String(r[i] || '').trim(); };
+  const when = v => { const m = v.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})/); return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) : null; };
+  let code = '', sem = '';
+  const events = [];
+  rows.forEach(r => {
+    if (r.length < 5) return;
+    const s = when(get(r, 'dtstart')); if (!s) return;
+    const e = when(get(r, 'dtend'));
+    code = code || get(r, 'courseid'); sem = sem || get(r, 'semesterid');
+    const title = (get(r, 'summary_en') || get(r, 'summary') || get(r, 'teaching-title') || get(r, 'teaching-method-name')).replace(/\s+/g, ' ').trim();
+    const method = get(r, 'teaching-method-name') || get(r, 'teaching-method');
+    const isGroup = /^j/i.test(get(r, 'isparty')) && get(r, 'party');
+    events.push({ id: (get(r, 'eventid') || get(r, 'id') + '+' + get(r, 'weeknr')), title: `${get(r, 'courseid')} ${title}`.trim(), location: get(r, 'room'),
+      description: [method && method !== title ? method : '', get(r, 'staffnames') || get(r, 'staffs')].filter(Boolean).join(' · '),
+      allDay: false, start: s.toISOString(), end: e ? e.toISOString() : '', group: isGroup ? (title || 'Group ' + get(r, 'party')) : '' });
+  });
+  events.sort((a, b) => a.start.localeCompare(b.start));
+  return { events, code, sem };
 }
