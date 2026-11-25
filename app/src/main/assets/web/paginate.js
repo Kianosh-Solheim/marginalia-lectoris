@@ -232,7 +232,8 @@ async function pgReadEpub(data) {
     id: it.getAttribute('id'), href: it.getAttribute('href'), type: it.getAttribute('media-type') || '', props: it.getAttribute('properties') || '', el: it,
   }));
   // the book's text, in reading order (not the nav document: its contents list is not a page of the book)
-  const spine = [...opf.getElementsByTagNameNS('*', 'itemref')].map(r => items.get(r.getAttribute('idref'))).filter(x => x && /html/.test(x.type) && !/\bnav\b/.test(x.props));
+  const spine = [...opf.getElementsByTagNameNS('*', 'itemref')].map((r, i) => Object.assign({}, items.get(r.getAttribute('idref')), { spineIndex: i, idref: r.getAttribute('idref') }))
+    .filter(x => x.href && /html/.test(x.type) && !/\bnav\b/.test(x.props));
   const files = [], words = [];
   let existing = 0;
   for (const it of spine) {
@@ -245,7 +246,7 @@ async function pgReadEpub(data) {
     [...doc.querySelectorAll('[role="doc-pagebreak"], span.pagenum')].concat([...doc.getElementsByTagName('*')].filter(e => /\bpagebreak\b/.test(e.getAttributeNS(PG_OPS, 'type') || e.getAttribute('epub:type') || '')))
       .forEach(e => { if (e.isConnected) { e.remove(); existing++; } });
     const fi = files.length;
-    files.push({ path, doc, html, xmlDecl: /^\s*<\?xml/.test(text), changed: existing > 0 });
+    files.push({ path, doc, html, xmlDecl: /^\s*<\?xml/.test(text), changed: existing > 0, spineIndex: it.spineIndex, idref: it.idref });
     const body = doc.getElementsByTagNameNS('*', 'body')[0] || doc.body || doc.documentElement;
     const tw = doc.createTreeWalker(body, NodeFilter.SHOW_TEXT);
     let n;
@@ -358,6 +359,7 @@ async function pgWrite(epub, placements, opts) {
     }
   }
   marks.sort((a, b) => a.e - b.e);
+  epub.marks = marks;   // for the page map
 
   const zip = epub.zip, outFiles = new Map();
   const ser = new XMLSerializer();
@@ -429,6 +431,68 @@ async function pgWrite(epub, placements, opts) {
   return out.generateAsync({ type: 'blob', mimeType: 'application/epub+zip', compression: 'DEFLATE', compressionOptions: { level: 6 } });
 }
 
+// ------------------------------------------------------------------ notes in the EPUB, moved with it
+
+/** Where a note stands in the EPUB as read (before markers are put in): a live Range — markers put in
+    later move it along — found by its EPUB place (CFI), or else by its quote. */
+function pgNoteRange(epub, note) {
+  const qWords = ((note.highlightedText || '').match(PG_TOKEN) || []).map(pgWord).filter(Boolean);
+  const fits = r => { const t = (r.toString().match(PG_TOKEN) || []).map(pgWord); return !qWords.length || t.slice(0, 3).join(' ') === qWords.slice(0, 3).join(' '); };
+  if (note.epubCfi && typeof ePub !== 'undefined' && ePub.CFI) {
+    try {
+      const cfi = new ePub.CFI(note.epubCfi);
+      const fi = epub.files.findIndex(x => x.spineIndex === cfi.spinePos);
+      if (fi >= 0) { const r = cfi.toRange(epub.files[fi].doc); if (r && !r.collapsed && fits(r)) return { range: r, fi, how: 'place' }; }
+    } catch (_) {}
+  }
+  if (qWords.length < 2) return null;
+  const E = epub.words, head = qWords.slice(0, Math.min(8, qWords.length));
+  let s = -1;
+  search: for (let i = 0; i + head.length <= E.length; i++) { for (let j = 0; j < head.length; j++) if (E[i + j].w !== head[j]) continue search; s = i; break; }
+  if (s < 0) return null;
+  let e = Math.min(E.length - 1, s + qWords.length - 1);
+  const lastW = qWords[qWords.length - 1];
+  for (let k = Math.max(s, e - 6); k <= Math.min(E.length - 1, e + 6); k++) if (E[k].w === lastW) { e = k; break; }
+  while (e > s && E[e].fi !== E[s].fi) e--;   // a quote does not run over into the next file
+  const a = E[s], b = E[e];
+  const r = a.node.ownerDocument.createRange(); r.setStart(a.node, a.off); r.setEnd(b.node, b.off + b.len);
+  return { range: r, fi: a.fi, how: 'quote' };
+}
+/** After the markers are in: the note's new EPUB place (CFI) and its printed page(s), "45" or "45–46". */
+function pgNoteAfter(epub, nr) {
+  const f = epub.files[nr.fi], doc = f.doc, range = nr.range;
+  const label = m => m.getAttribute('aria-label') || m.getAttribute('title') || '';
+  let first = '', last = '';
+  const inFile = [...doc.querySelectorAll('[role="doc-pagebreak"]')];
+  for (const m of inFile) {
+    let cp; try { cp = range.comparePoint(m, 0); } catch (_) { continue; }
+    if (cp < 0) first = label(m);
+    else if (cp === 0) {
+      // a marker at the very start of the note: the note begins on that page (and the place begins after it)
+      const pre = doc.createRange(); pre.setStart(range.startContainer, range.startOffset); pre.setEndBefore(m);
+      if (!pre.toString().trim()) { first = label(m); range.setStartAfter(m); } else last = label(m);
+    }
+  }
+  for (let k = nr.fi - 1; k >= 0 && !first; k--) {   // no marker before it in its file: the last of an earlier one
+    const ms = epub.files[k].doc.querySelectorAll('[role="doc-pagebreak"]');
+    if (ms.length) first = label(ms[ms.length - 1]);
+  }
+  let cfi = '';
+  try { cfi = new ePub.CFI(range, `/6/${(f.spineIndex + 1) * 2}[${f.idref}]`).toString(); } catch (_) {}
+  return { cfi, label: first && last && last !== first ? `${first}–${last}` : (last || first) };
+}
+/** The page map kept with the item: printed page ↔ PDF page ↔ place in the EPUB (and the words read on scanned pages). */
+function pgPageMap(result, src) {
+  return {
+    version: 1, made: new Date().toISOString(), pdf: src.pdf, epub: src.epub, source: result.pdf.source,
+    pages: (result.epub.marks || []).map(m => {
+      const p = result.align.placements.find(q => q.label === m.label && !q.skip);
+      return { label: m.label, pdfPage: p ? p.pdfPage : null, href: result.epub.files[m.fi].path + '#' + m.id, hand: !!(p && p.hand) };
+    }),
+    ocr: result.pdf.pages.filter(p => p.ocr).map(p => ({ pdfPage: p.n, words: p.lines.flatMap(l => (l.words || []).map(w => [w.t, ...w.box.map(v => Math.round(v * 10) / 10)])) })),
+  };
+}
+
 /** The whole job: read both, line them up. → { pdf, epub, align } (write with pgWrite after looking) */
 async function pgPaginate(pdfData, epubData, opts, progress = () => {}) {
   progress('Reading the EPUB…');
@@ -455,7 +519,14 @@ function paginateDialog() {
   const opts = {
     showPages: localGet('ml.pg.show', '0') === '1', label: localGet('ml.wc.label', 'p. '),
     toLibrary: localGet('ml.wc.lib', '1') === '1', download: localGet('ml.wc.dl', '0') === '1',
-    category: 'BOOK', pdfPage: '', printedPage: '',
+    category: 'BOOK', pdfPage: '', printedPage: '', epubMode: localGet('ml.pg.mode', 'replace'),
+  };
+  // A file is a File (chosen or dropped) or one of an item's files: { lib: true, docId, rel, name, title, main }
+  const bytesOf = async f => {
+    if (!f.lib) return f.arrayBuffer();
+    const r = await fetch(`/api/doc/${f.docId}/files?rel=${encodeURIComponent(f.rel)}`, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error(`Could not fetch “${f.name}” from the tablet (${r.status}).`);
+    return r.arrayBuffer();
   };
   let pdfFile = null, epubFile = null, result = null, stop = { stop: false };
   modal((box, close) => {
@@ -474,12 +545,38 @@ function paginateDialog() {
       result = null; draw();
     };
     const optsBox = h('div');
+    // ---- from the library: a book's own PDF and EPUB
+    const libBox = h('div', { class: 'pg-lib' });
+    const libQ = h('input', { placeholder: 'Find a book in the library…', type: 'search' });
+    const libHits = h('div', { class: 'pg-hits' });
+    const pickItem = async d => {
+      clear(libHits); libQ.value = d.title;
+      try {
+        const fl = await api(`doc/${d.id}/files`);
+        const files = (fl.files || []).filter(x => !x.dir && x.readable);
+        const pick = kind => files.filter(x => x.kind === kind).sort((a, b) => b.main - a.main)[0];
+        const pf = pick('PDF'), ef = pick('EPUB');
+        if (pf) pdfFile = { lib: true, docId: d.id, rel: pf.rel, name: pf.name, title: d.title, main: pf.main };
+        if (ef) epubFile = { lib: true, docId: d.id, rel: ef.rel, name: ef.name, title: d.title, main: ef.main };
+        if (!pf || !ef) toast(`“${d.title}” has ${pf ? 'no EPUB' : ef ? 'no PDF' : 'neither a PDF nor an EPUB'}: choose ${!pf && !ef ? 'them' : 'it'} below.`, 4000);
+      } catch (e) { toast(e.message || String(e)); }
+      result = null; draw();
+    };
+    libQ.addEventListener('input', () => {
+      const q = libQ.value.trim().toLowerCase();
+      clear(libHits);
+      if (q.length < 2) return;
+      const docs = ((typeof state !== 'undefined' && state.docs) || []).filter(d => !/^(FOLDER|ZOTERO)$/i.test(d.fileType || '') && (d.title || '').toLowerCase().includes(q)).slice(0, 8);
+      libHits.append(...(docs.length ? docs.map(d => h('div', { class: 'pg-hit', onclick: () => pickItem(d) }, h('b', null, d.title), h('span', { class: 'muted' }, [d.author, d.fileType].filter(Boolean).join(' · '))))
+        : [h('div', { class: 'pg-hit muted' }, 'No book by that name.')]));
+    });
+    libBox.append(h('span', { class: 'label' }, 'From the library'), h('div', { class: 'pg-libq' }, libQ, libHits));
     const chip = (label, on, fn, tip) => h('button', { class: 'chip' + (on() ? ' on' : ''), title: tip || null, onclick: () => { fn(); draw(); } }, label);
     const num = (val, set, ph) => { const i = h('input', { value: val, placeholder: ph, style: { width: '56px' }, inputmode: 'numeric' }); i.addEventListener('input', () => { set(i.value.trim()); result = null; drawResult(); }); return i; };
     const draw = () => {
       clear(slots).append(
-        h('div', { class: 'pg-slot' + (pdfFile ? ' on' : ''), onclick: () => pdfPick.click() }, h('b', null, 'PDF with page numbers'), h('span', null, pdfFile ? pdfFile.name : 'Choose, or drop here')),
-        h('div', { class: 'pg-slot' + (epubFile ? ' on' : ''), onclick: () => epubPick.click() }, h('b', null, 'EPUB of the same book'), h('span', null, epubFile ? epubFile.name : 'Choose, or drop here')));
+        h('div', { class: 'pg-slot' + (pdfFile ? ' on' : ''), onclick: () => pdfPick.click() }, h('b', null, 'PDF with page numbers'), h('span', null, pdfFile ? (pdfFile.lib ? `${pdfFile.name} · in the library` : pdfFile.name) : 'Choose, or drop here')),
+        h('div', { class: 'pg-slot' + (epubFile ? ' on' : ''), onclick: () => epubPick.click() }, h('b', null, 'EPUB of the same book'), h('span', null, epubFile ? (epubFile.lib ? `${epubFile.name} · in the library` : epubFile.name) : 'Choose, or drop here')));
       clear(optsBox).append(
         h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'Printed pages'),
           h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Found in the PDF. If they come out wrong: PDF page'), num(opts.pdfPage, v => { opts.pdfPage = v; }, '12'),
@@ -487,18 +584,25 @@ function paginateDialog() {
         h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'In the text'),
           chip('Show page numbers', () => opts.showPages, () => { opts.showPages = !opts.showPages; localSet('ml.pg.show', opts.showPages ? '1' : '0'); }, 'Off: the pages are marked invisibly; the reader still knows them (go to page, notes, citations)'),
           opts.showPages ? (() => { const i = h('input', { value: opts.label, style: { width: '60px' } }); i.addEventListener('input', () => { opts.label = i.value; localSet('ml.wc.label', i.value); }); return i; })() : null),
-        h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'Then'),
-          chip('Add to the library', () => opts.toLibrary, () => { opts.toLibrary = !opts.toLibrary; localSet('ml.wc.lib', opts.toLibrary ? '1' : '0'); }),
-          h('span', { class: 'spacer' }),
-          chip('Download', () => opts.download, () => { opts.download = !opts.download; localSet('ml.wc.dl', opts.download ? '1' : '0'); })));
+        epubFile && epubFile.lib
+          ? h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'Then'),
+            chip('Replace the EPUB in the book', () => opts.epubMode === 'replace', () => { opts.epubMode = 'replace'; localSet('ml.pg.mode', 'replace'); }, 'The new EPUB takes the old one\'s place (the old one is kept in _to_delete); its notes move with it and get their printed pages'),
+            chip('Add it as another edition', () => opts.epubMode === 'edition', () => { opts.epubMode = 'edition'; localSet('ml.pg.mode', 'edition'); }, 'The old EPUB and its notes stay as they are; the new one is added to the book beside it'),
+            h('span', { class: 'spacer' }),
+            chip('Download', () => opts.download, () => { opts.download = !opts.download; localSet('ml.wc.dl', opts.download ? '1' : '0'); }))
+          : h('div', { class: 'wc-row' }, h('span', { class: 'label' }, 'Then'),
+            chip('Add to the library', () => opts.toLibrary, () => { opts.toLibrary = !opts.toLibrary; localSet('ml.wc.lib', opts.toLibrary ? '1' : '0'); }),
+            h('span', { class: 'spacer' }),
+            chip('Download', () => opts.download, () => { opts.download = !opts.download; localSet('ml.wc.dl', opts.download ? '1' : '0'); })));
+      save.textContent = epubFile && epubFile.lib ? (opts.epubMode === 'replace' ? 'Replace the EPUB' : 'Add the EPUB') : 'Save the EPUB';
       go.disabled = !(pdfFile && epubFile);
       drawResult();
     };
     // ---- check and correct: every page, or the uncertain ones; a page opens beside its PDF page
     let filter = 'unsure', openAt = null;
-    const state = p => p.skip ? 'out' : p.hand ? 'hand' : p.conf >= 0.75 ? 'sure' : p.conf >= 0.4 ? 'unsure' : 'lost';
+    const stateOf = p => p.skip ? 'out' : p.hand ? 'hand' : p.conf >= 0.75 ? 'sure' : p.conf >= 0.4 ? 'unsure' : 'lost';
     const MARK = { sure: ['✓', 'Placed with confidence'], unsure: ['?', 'Uncertain'], lost: ['!', 'Not found: put where it most likely begins'], hand: ['✎', 'Checked by hand'], out: ['–', 'Left out'] };
-    const shown = () => result.align.placements.filter(p => filter === 'all' || ['unsure', 'lost'].includes(state(p)) || p.touched);
+    const shown = () => result.align.placements.filter(p => filter === 'all' || ['unsure', 'lost'].includes(stateOf(p)) || p.touched);
     const wordText = w => w.node.nodeValue.substr(w.off, w.len);
     const pdfStartLines = p => { const pg = result.pdf.pages[p.pdfPage - 1]; return pg ? pg.body.slice(0, 2).map(l => l.text).join(' ') : p.pdfStart; };
     const renderPdf = async (n, canvas, width) => {
@@ -542,7 +646,7 @@ function paginateDialog() {
         text.append(gap.replace(/\s+/g, ' ') || (nx && nx.node !== w.node ? ' ' : ''));
       }
       const warn = !p.skip && ((prev && p.e <= prev.e) ? `This puts p. ${p.label} before the marker of p. ${prev.label}.` : (next && p.e >= next.e) ? `This puts p. ${p.label} after the marker of p. ${next.label}.` : '');
-      const [icon, what] = MARK[state(p)];
+      const [icon, what] = MARK[stateOf(p)];
       out.append(h('div', { class: 'pg-review' },
         h('div', { class: 'pg-rhead' },
           h('b', null, `p. ${p.label}`), h('span', { class: 'muted' }, ` · PDF page ${p.pdfPage} · ${icon} ${what}`),
@@ -571,7 +675,7 @@ function paginateDialog() {
       go.textContent = result ? 'Find again' : 'Find the pages';
       box.style.width = result ? '1000px' : '760px';
       if (!result) return;
-      const pl = result.align.placements, count = k => pl.filter(p => state(p) === k).length;
+      const pl = result.align.placements, count = k => pl.filter(p => stateOf(p) === k).length;
       out.append(
         h('div', { class: 'pg-sum' },
           h('b', null, `${pl.length} printed pages${pl.length ? ` (pp. ${pl[0].label}–${pl[pl.length - 1].label})` : ''}`),
@@ -587,8 +691,8 @@ function paginateDialog() {
         h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Click a page to see it beside the PDF and move its marker.')));
       if (!list.length) { out.append(h('div', { class: 'pg-none muted' }, 'Nothing left to check. Save the EPUB, or look through all pages.')); return; }
       out.append(h('div', { class: 'pg-list' }, list.map((p, i) => {
-        const [icon, what] = MARK[state(p)];
-        return h('div', { class: 'pg-item ' + state(p), onclick: () => { openAt = i; drawResult(); } },
+        const [icon, what] = MARK[stateOf(p)];
+        return h('div', { class: 'pg-item ' + stateOf(p), onclick: () => { openAt = i; drawResult(); } },
           h('b', null, h('span', { class: 'pg-mark', title: what }, icon), ' p. ' + p.label),
           h('span', null, 'PDF: ', h('i', null, p.pdfStart)), h('span', null, 'EPUB: ', h('i', null, p.skip ? '(left out)' : p.epubStart)));
       })));
@@ -596,7 +700,8 @@ function paginateDialog() {
     go.addEventListener('click', async () => {
       go.disabled = true; result = null; drawResult();
       try {
-        const [pd, ed] = await Promise.all([pdfFile.arrayBuffer(), epubFile.arrayBuffer()]);
+        status.textContent = 'Fetching the files…';
+        const [pd, ed] = await Promise.all([bytesOf(pdfFile), bytesOf(epubFile)]);
         stop = { stop: false }; filter = 'unsure'; openAt = null;
         const pdfBytes = new Uint8Array(pd.slice(0));   // pdf.js may take the buffer it reads; this copy shows the pages in the check
         result = await pgPaginate(pd, ed, Object.assign({ stop }, opts), m => { status.textContent = m; });
@@ -608,20 +713,54 @@ function paginateDialog() {
     save.addEventListener('click', async () => {
       save.disabled = true;
       try {
+        const lib = epubFile.lib ? epubFile : null, replacing = lib && opts.epubMode === 'replace';
+        // the notes made in this EPUB, found before the markers go in (their places then move along)
+        let notes = [], placed = [];
+        if (replacing) {
+          status.textContent = 'Finding the notes…';
+          notes = (await api(`doc/${lib.docId}/highlights`)).filter(n => n.file ? n.file === lib.name : lib.main);
+          placed = notes.map(n => ({ n, r: pgNoteRange(result.epub, n) }));
+        }
         status.textContent = 'Writing the EPUB…';
         const blob = await pgWrite(result.epub, result.align.placements, opts);
         const kept = result.align.placements.filter(p => !p.skip).length;
-        const name = epubFile.name.replace(/\.epub$/i, '') + ' (with page numbers).epub';
-        const file = new File([blob], name, { type: 'application/epub+zip' });
-        if (opts.download) { const a = h('a', { href: URL.createObjectURL(file), download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
-        if (opts.toLibrary) { status.textContent = 'Adding to the library…'; await wcToLibrary([file], opts.category); }
-        toast(`Made “${name}” with ${kept} printed pages`, 4000);
+        const name = lib ? lib.name : epubFile.name.replace(/\.epub$/i, '') + ' (with page numbers).epub';
+        const file = new File([blob], replacing ? name : name.replace(/\.epub$/i, '') + (lib ? ' (with page numbers).epub' : '.epub'), { type: 'application/epub+zip' });
+        if (opts.download) { const a = h('a', { href: URL.createObjectURL(file), download: file.name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
+        let msg = `Made “${file.name}” with ${kept} printed pages`;
+        if (replacing) {
+          const moved = placed.filter(x => x.r).map(x => Object.assign({ n: x.n, how: x.r.how }, pgNoteAfter(result.epub, x.r)));
+          status.textContent = 'Replacing the EPUB in the book…';
+          const r = await fetch(`/api/doc/${lib.docId}/files?op=replace&rel=${encodeURIComponent(lib.rel)}`, { method: 'POST', credentials: 'same-origin', headers: { 'X-Marginalia': '1', 'Content-Type': 'application/octet-stream' }, body: file });
+          if (!r.ok) { let e = {}; try { e = await r.json(); } catch (_) {} throw new Error(e.error || 'The tablet said ' + r.status); }
+          status.textContent = 'Moving the notes…';
+          let done = 0;
+          for (const m of moved) {
+            const body = { auto: true };
+            if (m.cfi) body.epubCfi = m.cfi;
+            if (m.label) body.printedPageLabel = m.label;
+            try { await api(`highlight/${m.n.id}`, { method: 'PATCH', json: body }); done++; } catch (e) { console.warn('note', m.n.id, e); }
+          }
+          try {
+            await fetch(`/api/doc/${lib.docId}/pagemap`, { method: 'PUT', credentials: 'same-origin', headers: { 'X-Marginalia': '1', 'Content-Type': 'application/json' },
+              body: JSON.stringify(pgPageMap(result, { pdf: pdfFile.lib ? { rel: pdfFile.rel, name: pdfFile.name } : { name: pdfFile.name }, epub: { rel: lib.rel, name: lib.name } })) });
+          } catch (e) { console.warn('page map', e); }
+          const lost = notes.length - moved.length;
+          msg = `Replaced the EPUB in “${lib.title}” (${kept} printed pages)` + (notes.length ? `; ${done} of ${notes.length} notes moved${lost ? `, ${lost} not found in the new file (their places are kept)` : ''}` : '');
+        } else if (lib) {
+          status.textContent = 'Adding the EPUB to the book…';
+          const r = await fetch(`/api/doc/${lib.docId}/files?op=upload&name=${encodeURIComponent(file.name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'X-Marginalia': '1', 'Content-Type': 'application/octet-stream' }, body: file });
+          if (!r.ok) throw new Error('The tablet said ' + r.status);
+          msg = `Added “${file.name}” to “${lib.title}” as another edition`;
+        } else if (opts.toLibrary) { status.textContent = 'Adding to the library…'; await wcToLibrary([file], opts.category); }
+        if (typeof refreshAfterUpload === 'function' && lib) refreshAfterUpload();
+        toast(msg, 6000);
         close();
-      } catch (e) { console.error(e); status.textContent = 'Could not write the EPUB: ' + (e.message || e); save.disabled = false; }
+      } catch (e) { console.error(e); status.textContent = 'Could not save the EPUB: ' + (e.message || e); save.disabled = false; }
     });
     box.append(h('h2', null, 'Convert books'), convertTabs('pages', close),
       h('p', { class: 'muted', style: { fontSize: '13px' } }, 'The same book as a PDF with its printed page numbers and as an EPUB without them: the EPUB gets the printed page numbers, so notes, citations and “go to page” follow the book. Both must be the same edition. Scanned PDFs are read with text recognition (OCR), a few seconds a page.'),
-      pdfPick, epubPick, slots, optsBox, status, out,
+      pdfPick, epubPick, libBox, slots, optsBox, status, out,
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), go, save));
     draw();
     wcDropTarget = addFiles;

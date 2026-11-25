@@ -112,6 +112,28 @@ object ItemFiles {
         return target
     }
 
+    /**
+     * Replaces the file at [rel] with new contents (an EPUB given printed page numbers, say), keeping its
+     * name, so its notes and reading place stay with it. The old file is moved to Readmark/_to_delete/.
+     */
+    suspend fun replace(ctx: Context, d: DocumentEntity, rel: String, input: InputStream): File {
+        val f = resolve(ctx, d, rel)
+        require(f.isFile) { "No such file" }
+        val tmp = File(f.parentFile, ".${f.name}.part")
+        tmp.outputStream().use { input.copyTo(it, 1 shl 16) }
+        check(tmp.length() > 0) { "The file was empty" }
+        val s = AppDatabase.getInstance(ctx).settingsDao().getSettingsSnapshot()
+        val root = StorageManager.getRootDirectory(ctx, s?.customStoragePath.orEmpty(), s?.storageLocationType ?: "DOCUMENTS")
+        val bin = File(File(root, "_to_delete"), folderOf(ctx, d).name).apply { mkdirs() }
+        val old = unique(bin, f.name)
+        if (!f.renameTo(old)) { f.copyTo(old); f.delete() }
+        if (!tmp.renameTo(f)) { tmp.copyTo(f); tmp.delete() }
+        return f
+    }
+
+    /** The item's page map (printed page ↔ PDF page ↔ EPUB place), kept hidden in its folder. */
+    suspend fun pageMap(ctx: Context, d: DocumentEntity): File = File(folderOf(ctx, d), ".marginalia-pages.json")
+
     /** Adds a file by moving it from elsewhere (for "attach to an existing item" on import). */
     suspend fun addByMove(ctx: Context, d: DocumentEntity, src: File): File {
         val dir = folderOf(ctx, d).apply { mkdirs() }
