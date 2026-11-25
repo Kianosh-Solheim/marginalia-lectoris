@@ -321,7 +321,9 @@ object ReadAloud {
             }
         } catch (t: Throwable) {
             android.util.Log.w("ReadAloud", "failed", t)
-            post(myGen) { state.value = state.value.copy(preparing = "", error = t.message ?: "Read aloud failed", playing = false) }
+            // The kind of failure and its first cause, so a report says what went wrong (not just a class name).
+            val why = generateSequence(t) { it.cause }.take(3).joinToString(" ← ") { "${it.javaClass.simpleName}: ${it.message ?: ""}".trim() }
+            post(myGen) { state.value = state.value.copy(preparing = "", error = "Read aloud failed — $why", playing = false) }
         }
     }
 

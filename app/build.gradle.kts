@@ -152,13 +152,15 @@ dependencies {
   // BOOX pen SDK: near-paper pen latency on BOOX e-ink tablets (Speech mode's pen page).
   implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.4.4")
   // Offline meaning search (AI search without the internet): runs multilingual-e5-small on the tablet.
-  implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+  // 1.17.1: the same onnxruntime the read-aloud engine (sherpa-onnx) is built against — its library asks for
+  // OrtGetApiBase@VERS_1.17.1, which a newer onnxruntime does not provide, so both share this one.
+  implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.1")
   implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
   // Audiobooks: playback with the screen off, media buttons and Bluetooth controls
   implementation("androidx.media3:media3-exoplayer:1.5.1")
   implementation("androidx.media3:media3-session:1.5.1")
   // Read aloud: Piper voices run on the tablet through sherpa-onnx (its own onnxruntime removed from the AAR;
-  // it uses the app's newer onnxruntime above, whose C API is backwards compatible), and the voices' .tar.bz2 packages
+  // it uses the app's onnxruntime above, the same version), and the voices' .tar.bz2 packages
   implementation(files("libs/sherpa-onnx-1.12.20-tts.aar"))
   implementation("org.apache.commons:commons-compress:1.26.2")
   implementation(libs.readium.streamer)
