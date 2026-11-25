@@ -1290,8 +1290,173 @@ function storageSection(info) {
     h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('div', null, 'Book folders last checked'), h('div', { class: 'muted set-help' }, 'Edits made to the notes and .ris/.bib files outside the app are read in.')),
       h('div', { class: 'set-control row' }, h('span', { class: 'mono', style: { fontSize: '12px' } }, when(info.lastFolderCheck)),
         h('button', { class: 'btn', onclick: async () => { try { await api('settings/check-folders', { method: 'POST' }); toast('Checking the folders…'); setTimeout(showSettings, 2500); } catch (e) { fail(e); } } }, 'Check now'))),
-    h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('div', null, 'Backup'), h('div', { class: 'muted set-help' }, 'Backups are set up on the tablet, which chooses where they are saved.')),
-      h('div', { class: 'set-control mono', style: { fontSize: '12px' } }, `Last backup: ${when(info.lastBackup)} · Automatic: ${info.autoBackup ? 'on' : 'off'}`)));
+    h('div', { class: 'set-row' }, h('div', { class: 'set-label' }, h('div', null, 'Last backup'), h('div', { class: 'muted set-help' }, 'The automatic daily backup is set up on the tablet, which chooses where it is saved.')),
+      h('div', { class: 'set-control mono', style: { fontSize: '12px' } }, `${when(info.lastBackup)} · Automatic: ${info.autoBackup ? 'on' : 'off'}`)),
+    backupRows());
+}
+
+// ------------------------------------------------------------------ backup & restore from the browser
+
+const fmtBytes = n => n >= 2 ** 30 ? (n / 2 ** 30).toFixed(1) + ' GB' : n >= 2 ** 20 ? Math.round(n / 2 ** 20) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function backupRows() {
+  const status = h('div', { class: 'mono', style: { fontSize: '12px', whiteSpace: 'pre-wrap' } });
+  const bar = h('progress', { max: '1', style: { width: '100%', display: 'none' } });
+  const say = (text, isError) => { status.textContent = text || ''; status.style.color = isError ? '#b91c1c' : ''; };
+  const showBar = frac => { if (frac === null) { bar.style.display = 'none'; return; } bar.style.display = ''; if (frac < 0) bar.removeAttribute('value'); else bar.value = frac; };
+
+  // Follows the tablet's job until it is finished; a restore ends with the tablet restarting.
+  let watching = false;
+  async function watch() {
+    if (watching) return; watching = true;
+    try {
+      for (;;) {
+        let st;
+        try { st = await api('backup/status'); } catch (e) { if (e.status === 401) return; await sleep(2000); continue; }
+        if (st.restarting) { say('Restored. The tablet is restarting — this page reloads when it is back.'); showBar(-1); await waitForTablet(); return; }
+        if (st.awaitingTablet) { say('Confirm the restore on the tablet. It is waiting for you there.'); showBar(-1); }
+        else if (st.running) { const p = st.progress; showBar(p && p.total > 0 ? p.done / p.total : -1); say(st.message); }
+        else { showBar(null); if (st.message) say(st.message, st.error); return; }
+        await sleep(1000);
+      }
+    } finally { watching = false; }
+  }
+  async function waitForTablet() {
+    await sleep(4000);
+    for (let i = 0; i < 120; i++) {
+      try { const r = await fetch('/api/session', { credentials: 'same-origin' }); if (r.ok) { location.reload(); return; } } catch (_) {}
+      await sleep(2000);
+    }
+    say('The tablet has not come back yet. Open the app on the tablet, then reload this page.', true);
+  }
+
+  // --- back up
+  const enc = h('input', { type: 'checkbox' });
+  const pw = h('input', { type: 'password', placeholder: 'Password (at least 8 characters)', autocomplete: 'new-password' });
+  const pw2 = h('input', { type: 'password', placeholder: 'Repeat password', autocomplete: 'new-password' });
+  const keys = h('input', { type: 'checkbox', disabled: true });
+  const pwBox = h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap', display: 'none' } }, pw, pw2);
+  enc.addEventListener('change', () => { pwBox.style.display = enc.checked ? '' : 'none'; keys.disabled = !enc.checked; if (!enc.checked) keys.checked = false; });
+
+  async function backup() {
+    let password = '';
+    if (enc.checked) {
+      if (pw.value.length < 8) { toast('Use a password of at least 8 characters'); return; }
+      if (pw.value !== pw2.value) { toast("The passwords don't match"); return; }
+      password = pw.value;
+    }
+    // Ask where to save first (it needs the click); not every browser can save straight into a folder.
+    let handle = null;
+    if (window.showSaveFilePicker) {
+      try { handle = await window.showSaveFilePicker({ suggestedName: 'Marginalia-Lectoris-backup.zip', types: [{ description: 'Marginalia Lectoris backup', accept: { 'application/zip': ['.zip'] } }] }); }
+      catch (e) { if (e && e.name === 'AbortError') return; handle = null; }
+    }
+    let d;
+    try { d = await api('backup/prepare', { method: 'POST', json: { password, includeKeys: keys.checked } }); }
+    catch (e) { fail(e); return; }
+    pw.value = ''; pw2.value = '';
+    const url = '/api/backup/download?t=' + encodeURIComponent(d.token);
+    if (handle) {
+      say('Backing up…'); showBar(-1);
+      const writable = await handle.createWritable();
+      try {
+        const r = await fetch(url, { credentials: 'same-origin' });
+        if (!r.ok) { const t = await r.json().catch(() => ({})); throw new Error(t.error || ('Error ' + r.status)); }
+        watch();
+        await r.body.pipeTo(writable);
+        await sleep(1200); // let the status catch up
+        watch();
+      } catch (e) { try { await writable.abort(); } catch (_) {} showBar(null); say('Backup failed: ' + (e.message || e), true); }
+    } else {
+      const a = h('a', { href: url, download: d.name, style: { display: 'none' } });
+      document.body.appendChild(a); a.click(); a.remove();
+      say('The backup is being made on the tablet and downloads as it goes. Keep this page open until it is done.');
+      await sleep(1500);
+      watch();
+    }
+  }
+
+  // --- restore
+  const file = h('input', { type: 'file', accept: '.zip,application/zip,application/octet-stream' });
+  const rpw = h('input', { type: 'password', placeholder: 'Backup password', autocomplete: 'current-password', style: { display: 'none' } });
+  const rkeys = h('input', { type: 'checkbox' }); rkeys.checked = true;
+  const rkeysLabel = h('label', { class: 'row', style: { gap: '6px', display: 'none' } }, rkeys, 'Restore API keys, if the backup has them');
+  let encrypted = false;
+  file.addEventListener('change', async () => {
+    const f = file.files && file.files[0];
+    encrypted = false;
+    if (f) { try { const b = new Uint8Array(await f.slice(0, 4).arrayBuffer()); encrypted = String.fromCharCode(...b) === 'MLBK'; } catch (_) {} }
+    rpw.style.display = encrypted ? '' : 'none'; rkeysLabel.style.display = encrypted ? '' : 'none';
+    if (f) say(`${f.name} · ${fmtBytes(f.size)}${encrypted ? ' · encrypted' : ''}`);
+  });
+
+  async function restore() {
+    const f = file.files && file.files[0];
+    if (!f) { toast('Choose a backup file first'); return; }
+    if (encrypted && !rpw.value) { toast('Enter the backup password'); return; }
+    const password = encrypted ? rpw.value : '';
+    confirmBox('Restore this backup?',
+      `${f.name} (${fmtBytes(f.size)}) is uploaded to the tablet and replaces your current library, notes and settings. ` +
+      'The backup is checked first; if anything goes wrong, the library is left as it was. You confirm it on the tablet before anything changes, and the app restarts afterwards.',
+      'Upload', async () => {
+        try {
+          const start = await api('backup/upload', { method: 'POST', json: { name: f.name, size: f.size } });
+          await uploadChunks(f, start.id, start.chunk);
+          say('Checking the backup…'); showBar(-1);
+          await api(`backup/upload/${start.id}/restore`, { method: 'POST', json: { password, restoreKeys: rkeys.checked }, timeout: 180000 });
+          rpw.value = '';
+          watch();
+        } catch (e) { showBar(null); say('Restore failed: ' + (e.message || e), true); }
+      });
+  }
+
+  async function uploadChunks(f, id, chunk) {
+    const hex = b => Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join('');
+    let offset = 0, tries = 0;
+    showBar(0);
+    while (offset < f.size) {
+      const buf = await f.slice(offset, Math.min(f.size, offset + chunk)).arrayBuffer();
+      const sha = window.crypto && crypto.subtle ? hex(await crypto.subtle.digest('SHA-256', buf)) : '';
+      try {
+        const r = await fetch(`/api/backup/upload/${id}?offset=${offset}`, {
+          method: 'PUT', credentials: 'same-origin', body: buf,
+          headers: { 'X-Marginalia': '1', 'X-Sha256': sha, 'Content-Type': 'application/octet-stream' }
+        });
+        const t = await r.json().catch(() => ({}));
+        if (!r.ok) throw new ApiError(r.status, t.error || ('Error ' + r.status));
+        offset = t.received; tries = 0;
+        showBar(offset / f.size);
+        say(`Uploading… ${Math.floor(100 * offset / f.size)} % (${fmtBytes(offset)} of ${fmtBytes(f.size)})`);
+      } catch (e) {
+        if (e.status === 401 || e.status === 404 || ++tries > 8) throw e;
+        say(`The connection dropped; trying again (${tries}/8)…`);
+        await sleep(Math.min(30000, 1000 * 2 ** tries));
+        try { offset = (await api(`backup/upload/${id}`)).received; } catch (_) {}
+      }
+    }
+  }
+
+  // Pick up a job that is already running (e.g. after reloading the page).
+  api('backup/status').then(st => { if (st.running || st.awaitingTablet || st.restarting) watch(); }).catch(() => {});
+
+  return [
+    h('div', { class: 'set-row' },
+      h('div', { class: 'set-label' }, h('div', null, 'Back up to this computer'),
+        h('div', { class: 'muted set-help' }, 'Everything: books, notes, highlights, audiobooks, recordings, presentations and settings, as one .zip. With a password the backup is encrypted, and only then can it include API keys. The password is not saved; without it the backup cannot be opened.')),
+      h('div', { class: 'set-control', style: { display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' } },
+        h('label', { class: 'row', style: { gap: '6px' } }, enc, 'Encrypt with a password'),
+        pwBox,
+        h('label', { class: 'row', style: { gap: '6px' } }, keys, 'Include API keys (encrypted backups only)'),
+        h('button', { class: 'btn fill', onclick: backup }, 'Download backup'))),
+    h('div', { class: 'set-row' },
+      h('div', { class: 'set-label' }, h('div', null, 'Restore from a backup'),
+        h('div', { class: 'muted set-help' }, 'Uploads the backup to the tablet in pieces (a dropped connection resumes). It replaces the current library, and must be confirmed on the tablet.')),
+      h('div', { class: 'set-control', style: { display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' } },
+        file, rpw, rkeysLabel,
+        h('button', { class: 'btn', onclick: restore }, 'Upload and restore'))),
+    h('div', { class: 'set-row wide' }, bar, status)
+  ];
 }
 
 // ------------------------------------------------------------------ library

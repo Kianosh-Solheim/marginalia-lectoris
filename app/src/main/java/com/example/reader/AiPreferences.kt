@@ -89,6 +89,19 @@ class AiPreferences(context: Context) {
             String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), Charsets.UTF_8)
         } catch (_: Exception) { throw IllegalStateException("Saved key is unavailable. Enter it again in Settings.") }
     }
+    /** Every saved key and credential in plain text, for password-encrypted backups only. */
+    fun exportSecrets(): JSONObject {
+        val out = JSONObject()
+        val names = runCatching { keys().keys().asSequence().toList() }.getOrDefault(emptyList())
+        names.forEach { name -> runCatching { readSecret(name) }.getOrNull()?.takeIf { it.isNotBlank() }?.let { out.put(name, it) } }
+        return out
+    }
+
+    /** Saves keys from a backup (re-encrypted with this device's key), replacing ones of the same name. */
+    fun importSecrets(secrets: JSONObject) {
+        secrets.keys().forEach { name -> secrets.optString(name).takeIf { it.isNotBlank() }?.let { saveSecret(name, it) } }
+    }
+
     fun saveSecret(name: String, value: String) {
         val data = keys()
         if (value.isBlank()) data.remove(name) else {

@@ -20,6 +20,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.example.reader.BackupJobs
 import com.example.reader.BackupManager
 import com.example.reader.CitationStyle
 import com.example.reader.Citations
@@ -52,50 +56,117 @@ private fun SectionBox(title: String, content: @Composable ColumnScope.() -> Uni
 
 // ----------------------------------------------------------------- Backup
 
+@Composable
+private fun inkFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = Color.Black, unfocusedBorderColor = Color(0xFFD4D4D8), cursorColor = Color.Black,
+    focusedLabelColor = Color.Black
+)
+
+@Composable
+private fun PasswordField(value: String, onChange: (String) -> Unit, label: String) {
+    OutlinedTextField(
+        value, onChange, label = { Text(label) }, singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        modifier = Modifier.fillMaxWidth(), colors = inkFieldColors()
+    )
+}
+
+@Composable
+private fun CheckRow(checked: Boolean, onChange: (Boolean) -> Unit, label: String, enabled: Boolean = true) {
+    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        Checkbox(checked, onChange, enabled = enabled,
+            colors = CheckboxDefaults.colors(checkedColor = Color.Black, uncheckedColor = SectionGrey))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = if (enabled) Color.Black else Color(0xFF9CA3AF))
+    }
+}
+
+/** Asks how to make the backup: optional password, optional API keys. */
+@Composable
+private fun BackupOptionsDialog(onDismiss: () -> Unit, onContinue: (BackupManager.Options) -> Unit) {
+    var encrypt by remember { mutableStateOf(false) }
+    var pw by remember { mutableStateOf("") }
+    var pw2 by remember { mutableStateOf("") }
+    var keys by remember { mutableStateOf(false) }
+    val problem = when {
+        !encrypt -> null
+        pw.length < 8 -> "Use at least 8 characters."
+        pw != pw2 -> "The passwords don't match."
+        else -> null
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        shape = RoundedCornerShape(4.dp),
+        title = { Text("Back up", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                CheckRow(encrypt, { encrypt = it; if (!it) keys = false }, "Encrypt with a password")
+                if (encrypt) {
+                    PasswordField(pw, { pw = it }, "Password")
+                    PasswordField(pw2, { pw2 = it }, "Repeat password")
+                    Text("The password is not saved anywhere. If you forget it, the backup cannot be opened.",
+                        style = MaterialTheme.typography.bodySmall, color = SectionGrey)
+                    if (pw.isNotEmpty() || pw2.isNotEmpty()) problem?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFFB91C1C)) }
+                }
+                CheckRow(keys, { keys = it }, "Include API keys", enabled = encrypt)
+                if (!encrypt) Text("API keys can only go into an encrypted backup.", style = MaterialTheme.typography.bodySmall, color = SectionGrey)
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = problem == null, onClick = {
+                onContinue(BackupManager.Options(if (encrypt) pw.toCharArray() else null, includeKeys = encrypt && keys))
+            }) { Text("Choose where to save…", color = if (problem == null) Color.Black else Color(0xFF9CA3AF), fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = SectionGrey) } }
+    )
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BackupSettingsSection() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var status by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
+    val job by BackupJobs.state.collectAsState()
+    var note by remember { mutableStateOf("") }
     var autoTarget by remember { mutableStateOf(BackupManager.autoTarget(context)) }
     var lastBackup by remember { mutableStateOf(BackupManager.lastBackupTime(context)) }
+    var askOptions by remember { mutableStateOf(false) }
+    var pendingOptions by remember { mutableStateOf<BackupManager.Options?>(null) }
     var confirmRestore by remember { mutableStateOf<android.net.Uri?>(null) }
-    var progress by remember { mutableStateOf<BackupManager.Progress?>(null) }
-    val onProgress: (BackupManager.Progress) -> Unit = { p ->
-        progress = p
-        status = if (p.total > 0) "${p.stage}… ${(p.fraction * 100).toInt()} % (${formatBytes(p.done)} of ${formatBytes(p.total)})"
-            else "${p.stage}…"
-    }
+    var restoreEncrypted by remember { mutableStateOf(false) }
+    var restorePw by remember { mutableStateOf("") }
+    var restoreKeys by remember { mutableStateOf(true) }
+    val busy = job.running || job.restarting
+    LaunchedEffect(job.finishedAt) { lastBackup = BackupManager.lastBackupTime(context) }
 
     val backupNow = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        busy = true; status = "Backing up… (large libraries can take a few minutes; keep the app open)"
-        scope.launch {
-            runCatching { BackupManager.backupToUri(context, uri, onProgress) }
-                .onSuccess { n ->
-                    status = "Backup saved: ${formatBytes(BackupManager.lastBackupBytes(context))}, including $n book files."
-                    lastBackup = BackupManager.lastBackupTime(context)
-                }
-                .onFailure { status = "Backup failed: ${it.message}" }
-            busy = false; progress = null
-        }
+        val options = pendingOptions ?: BackupManager.Options()
+        pendingOptions = null
+        if (uri == null) { options.password?.fill('\u0000'); return@rememberLauncherForActivityResult }
+        note = ""
+        if (!BackupJobs.backup(context, uri, options)) note = "A backup or restore is already running."
     }
     val chooseAuto = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         BackupManager.enableAuto(context, uri)
         autoTarget = uri
-        busy = true; status = "Automatic backup on. Making the first backup now…"
-        scope.launch {
-            runCatching { BackupManager.backupToUri(context, uri, onProgress) }
-                .onSuccess { status = "Automatic daily backup is on."; lastBackup = BackupManager.lastBackupTime(context) }
-                .onFailure { status = "First backup failed: ${it.message}" }
-            busy = false; progress = null
-        }
+        note = "Automatic daily backup is on. Making the first backup now…"
+        BackupJobs.backup(context, uri, BackupManager.Options())
     }
     val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) confirmRestore = uri
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            restoreEncrypted = runCatching { BackupManager.isEncrypted(context, uri) }.getOrDefault(false)
+            restorePw = ""; restoreKeys = true
+            confirmRestore = uri
+        }
+    }
+
+    if (askOptions) BackupOptionsDialog(onDismiss = { askOptions = false }) { options ->
+        askOptions = false
+        pendingOptions = options
+        backupNow.launch(BackupManager.suggestedFileName())
     }
 
     confirmRestore?.let { uri ->
@@ -105,25 +176,30 @@ fun BackupSettingsSection() {
             shape = RoundedCornerShape(4.dp),
             title = { Text("Restore this backup?", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) },
             text = {
-                Text(
-                    "Your current library, notes, audiobooks, recordings and settings will be replaced by the backup. " +
-                        "The backup is checked first; if anything goes wrong, your library is left as it was. " +
-                        "Files in the library folder are written back there, so Syncthing will pass them on to your other devices. " +
-                        "The app restarts when it's done."
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Your current library, notes, audiobooks, recordings and settings will be replaced by the backup. " +
+                            "The backup is checked first; if anything goes wrong, your library is left as it was. " +
+                            "Files in the library folder are written back there, so Syncthing will pass them on to your other devices. " +
+                            "The app restarts when it's done."
+                    )
+                    if (restoreEncrypted) {
+                        PasswordField(restorePw, { restorePw = it }, "Backup password")
+                        CheckRow(restoreKeys, { restoreKeys = it }, "Restore API keys, if the backup has them")
+                    }
+                }
             },
             confirmButton = {
-                TextButton(onClick = {
+                val ready = !restoreEncrypted || restorePw.isNotEmpty()
+                TextButton(enabled = ready, onClick = {
                     confirmRestore = null
-                    busy = true; status = "Restoring… (keep the app open)"
-                    scope.launch {
-                        runCatching { BackupManager.restoreFromUri(context, uri, onProgress) }
-                            .onSuccess { BackupManager.restartApp(context) }
-                            .onFailure { status = "Restore failed: ${it.message}"; busy = false; progress = null }
-                    }
-                }) { Text("Replace and restart", color = Color.Black, fontWeight = FontWeight.Bold) }
+                    note = ""
+                    val pw = if (restoreEncrypted) restorePw.toCharArray() else null
+                    restorePw = ""
+                    if (!BackupJobs.restore(context, uri, pw, restoreKeys)) note = "A backup or restore is already running."
+                }) { Text("Replace and restart", color = if (ready) Color.Black else Color(0xFF9CA3AF), fontWeight = FontWeight.Bold) }
             },
-            dismissButton = { TextButton(onClick = { confirmRestore = null }) { Text("Cancel", color = SectionGrey) } }
+            dismissButton = { TextButton(onClick = { confirmRestore = null; restorePw = "" }) { Text("Cancel", color = SectionGrey) } }
         )
     }
 
@@ -132,42 +208,73 @@ fun BackupSettingsSection() {
             "Backs up everything as one .zip: books and articles, highlights, Glossae and notes, audiobooks with their sync maps, " +
                 "recordings and transcripts, presentations, courses, sketches, bibliographic details and settings. " +
                 "In the file picker, choose Google Drive, OneDrive, Dropbox or a folder on the tablet " +
-                "(the cloud app must be installed on the tablet). API keys are not included.",
+                "(the cloud app must be installed on the tablet). It can be encrypted with a password, and only then include API keys.",
             style = MaterialTheme.typography.bodySmall, color = SectionGrey
         )
         if (lastBackup > 0) {
+            val size = BackupManager.lastBackupBytes(context)
             Text(
-                "Last backup: ${DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(lastBackup))}",
+                "Last backup: ${DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(lastBackup))}" +
+                    (if (size > 0) " · ${formatBytes(size)}" else ""),
                 fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.Black
             )
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             InkButton("Back up now", icon = Icons.Default.CloudUpload, filled = true, enabled = !busy,
-                onClick = { backupNow.launch(BackupManager.suggestedFileName()) })
+                onClick = { askOptions = true })
             InkButton("Restore from backup", icon = Icons.Default.Restore, enabled = !busy,
                 onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) })
         }
         HorizontalDivider(color = Color(0xFFE4E4E7))
         Text("Automatic daily backup", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = Color.Black)
         Text(
-            if (autoTarget != null) "On. Once a day the backup file you chose is updated, but only if something changed."
-            else "Choose a backup file once (for example in Google Drive or OneDrive); it is then updated once a day.",
+            if (autoTarget != null) "On. Once a day the backup file you chose is updated, but only if something changed. Automatic backups are not encrypted and leave out API keys."
+            else "Choose a backup file once (for example in Google Drive or OneDrive); it is then updated once a day. Automatic backups are not encrypted.",
             style = MaterialTheme.typography.bodySmall, color = SectionGrey
         )
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             InkButton(if (autoTarget == null) "Turn on…" else "Change backup file…", enabled = !busy,
                 onClick = { chooseAuto.launch("Marginalia-Lectoris-auto-backup.zip") })
             if (autoTarget != null) InkButton("Turn off", enabled = !busy, onClick = {
-                BackupManager.disableAuto(context); autoTarget = null; status = "Automatic backup is off."
+                BackupManager.disableAuto(context); autoTarget = null; note = "Automatic backup is off."
             })
         }
-        if (busy) {
-            val p = progress
+        if (job.running) {
+            val p = job.progress
             if (p != null && p.total > 0) LinearProgressIndicator(progress = { p.fraction }, modifier = Modifier.fillMaxWidth(), color = Color.Black, trackColor = Color(0xFFE4E4E7))
             else LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Color.Black, trackColor = Color(0xFFE4E4E7))
         }
-        if (status.isNotBlank()) Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.Black)
+        val status = note.ifBlank { job.message }
+        if (status.isNotBlank()) Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+            color = if (job.error && note.isBlank()) Color(0xFFB91C1C) else Color.Black)
     }
+}
+
+/** Shown anywhere in the app when a restore is asked for from the web view. */
+@Composable
+fun WebRestoreRequestDialog() {
+    val context = LocalContext.current
+    val pending by BackupJobs.pendingWebRestore.collectAsState()
+    val p = pending ?: return
+    AlertDialog(
+        onDismissRequest = {},
+        containerColor = Color.White,
+        shape = RoundedCornerShape(4.dp),
+        title = { Text("Restore requested from the browser", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) },
+        text = {
+            Text(
+                "“${p.name}” (${formatBytes(p.size)}${if (p.encrypted) ", encrypted" else ""}) was uploaded from the web view. " +
+                    "Restoring it replaces your current library, notes and settings, and the app restarts. " +
+                    "Only continue if you started this yourself."
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { BackupJobs.confirmWebRestore(context) }) {
+                Text("Replace and restart", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = { TextButton(onClick = { BackupJobs.declineWebRestore(context) }) { Text("Decline", color = SectionGrey) } }
+    )
 }
 
 private fun formatBytes(bytes: Long): String = when {
