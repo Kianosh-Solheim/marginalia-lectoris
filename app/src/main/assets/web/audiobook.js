@@ -131,6 +131,7 @@ function abSyncRow(d, reload) {
   api(`doc/${d.id}/audiobook/sync-info`).then(s => {
     clear(row);
     if (s.exists) row.append(h('span', null, h('b', null, 'Synced with the text'), h('span', { class: 'muted' }, ` · ${Math.round(s.coverage * 100)}% of the sentences · ${new Date(s.created).toLocaleDateString()} · ${s.engine}`)),
+      isEpub(d) ? h('button', { class: 'btn quiet', title: 'A copy of the EPUB with the audio and the sync built in (EPUB 3 Media Overlays), for other reading apps', onclick: () => abExportEpub(d) }, 'Export EPUB with audio…') : null,
       h('button', { class: 'btn quiet', onclick: () => abSyncDialog(d, reload) }, 'Sync again…'));
     else row.append(h('span', { class: 'muted' }, s.transcribedMs ? `Not synced yet · transcribed up to ${clockOf(s.transcribedMs)} (it continues where it stopped)` : 'Not synced with the text yet.'),
       h('button', { class: 'btn', onclick: () => abSyncDialog(d, reload) }, s.transcribedMs ? 'Continue syncing…' : 'Sync with the text…'));
@@ -423,4 +424,18 @@ async function abReaderAttach(ctx, viewer, d, bar, root) {
       player.playAt(sents[i].t);
     }
   };
+}
+
+/** Builds “<Title> – with audio.epub” in the book's folder on the tablet, then offers it for download. */
+function abExportEpub(d) {
+  confirmBox('Export the EPUB with the audio built in?',
+    'A copy of the EPUB is made in the book’s folder on the tablet, with the audio files and the sync inside (EPUB 3 Media Overlays) — other reading apps can then read it aloud with the text following. Your EPUB is not changed. The copy is as large as the book and the audio together.',
+    'Export', async () => {
+      toast('Building the EPUB on the tablet… (large audiobooks take a minute or two)', 0);
+      try {
+        const r = await api(`doc/${d.id}/audiobook/export-epub`, { method: 'POST', timeout: 1800000 });
+        toast(`Saved in the book’s folder: ${r.name} (${fmtSize(r.size)}) · ${r.placed} of ${r.sentences} sentences marked`, 6000);
+        download(`doc/${d.id}/files?rel=${encodeURIComponent(r.name)}&download=1`, 'Downloading…');
+      } catch (e) { fail(e); }
+    });
 }

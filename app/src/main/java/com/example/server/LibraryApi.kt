@@ -1150,6 +1150,10 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 HttpResponse.FileBody(f, "application/json")
             }
             rest == listOf("sync") && m == "POST" -> HttpResponse.json(withContext(Dispatchers.IO) { com.example.reader.AudiobookSync.saveMap(context, doc, JSONObject(req.bodyText(64 * 1024 * 1024))) }.toString())
+            rest == listOf("export-epub") && m == "POST" -> {
+                val r = withContext(Dispatchers.IO) { com.example.reader.AudiobookEpub.export(context, doc) }
+                HttpResponse.json(JSONObject().put("name", r.file.name).put("size", r.file.length()).put("sentences", r.sentences).put("placed", r.placed).toString())
+            }
             rest == listOf("sync-info") && m == "GET" -> HttpResponse.json(com.example.reader.AudiobookSync.info(context, doc).toString())
             rest == listOf("position") && (m == "PUT" || m == "POST") -> {
                 val b = JSONObject(req.bodyText())
