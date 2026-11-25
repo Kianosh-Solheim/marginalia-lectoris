@@ -296,12 +296,23 @@ fun ReaderScreen(
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.example.reader.AudiobookSyncMap.load(context, document) }
     }
     val audioActive = audiobookState.docId == document.id && (audiobookState.playing || showAudiobookBar)
-    val audioFollow = audiobookState.docId == document.id && audiobookState.playing
+    val audioFollow = (audiobookState.docId == document.id && audiobookState.playing) || (com.example.reader.ReadAloud.state.value.docId == document.id && com.example.reader.ReadAloud.state.value.playing)
     val audioIdx = audioSyncMap?.takeIf { audioActive }?.indexAt(audiobookState.positionMs) ?: -1
-    val audioPdfSentence = audioSyncMap?.takeIf { audioIdx >= 0 && it.kind == "pdf" }?.let { Triple(it.page[audioIdx], it.w0[audioIdx], it.w1[audioIdx]) }
-    val audioEpubSentence = audioSyncMap?.takeIf { audioIdx >= 0 && it.kind == "epub" }?.let { it.href[audioIdx] to it.text[audioIdx] }
+    // Read aloud (Piper voice): its sentence is underlined the same way, and takes precedence while it runs.
+    var showReadAloudBar by remember(document.id) { mutableStateOf(com.example.reader.ReadAloud.state.value.let { it.docId == document.id && it.playing }) }
+    val raState by com.example.reader.ReadAloud.state.collectAsState()
+    val raCur = raState.current?.takeIf { raState.docId == document.id && (raState.playing || showReadAloudBar) }
+    val audioPdfSentence = if (raCur != null) raCur.takeIf { it.page > 0 }?.let { Triple(it.page, it.w0, it.w1) }
+        else audioSyncMap?.takeIf { audioIdx >= 0 && it.kind == "pdf" }?.let { Triple(it.page[audioIdx], it.w0[audioIdx], it.w1[audioIdx]) }
+    val audioEpubSentence = if (raCur != null) raCur.takeIf { it.page == 0 }?.let { it.href to it.text }
+        else audioSyncMap?.takeIf { audioIdx >= 0 && it.kind == "epub" }?.let { it.href[audioIdx] to it.text[audioIdx] }
     var readingHref by remember(document.id) { mutableStateOf("") }
     var readingProgression by remember(document.id) { mutableStateOf(0.0) }
+    // Read aloud from a passage (a selection, Speak) or from where you are reading.
+    val readAloudFrom: (String, Int) -> Unit = { quote, pageNum ->
+        showAudiobookBar = false; showReadAloudBar = true
+        com.example.reader.ReadAloud.start(context, document, com.example.reader.ReadAloud.Start(pdfPage = if (document.filePath.endsWith(".pdf", true)) pageNum else 0, href = if (document.filePath.endsWith(".pdf", true)) "" else readingHref, text = quote))
+    }
     // Play from a selection (Speak) or a tapped paragraph: the audiobook starts at the sentence it begins in.
     val playAudioFrom: (String, Int?) -> Boolean = from@{ quote, page ->
         val map = audioSyncMap ?: return@from false
@@ -589,8 +600,8 @@ fun ReaderScreen(
 
     // Notify Activity/ViewModel whenever TTS or DAISY audio playback state changes so physical volume buttons
     // adjust media volume instead of turning pages while audio is playing!
-    LaunchedEffect(ttsState.isPlaying, daisyAudioState.isPlaying) {
-        onTtsPlayingChanged(ttsState.isPlaying || daisyAudioState.isPlaying)
+    LaunchedEffect(ttsState.isPlaying, daisyAudioState.isPlaying, raState.playing) {
+        onTtsPlayingChanged(ttsState.isPlaying || daisyAudioState.isPlaying || (raState.docId == document.id && raState.playing))
     }
 
     // Typography & Formatting states
@@ -962,8 +973,8 @@ fun ReaderScreen(
                     highlightsCount = highlights.size,
                     activeTheme = activeReaderTheme,
                     visible = isUiVisible,
-                    isTtsPlaying = ttsState.isPlaying || daisyAudioState.isPlaying,
-                    isTtsBarVisible = if (isDaisyDocument) showDaisyAudioBar else showTtsBar,
+                    isTtsPlaying = (raState.docId == document.id && raState.playing) || daisyAudioState.isPlaying,
+                    isTtsBarVisible = if (isDaisyDocument) showDaisyAudioBar else showReadAloudBar,
                     isPdfEbookMode = isPdfEbookMode,
                     pageInfoSubtitle = topBarPageSubtitle,
                     onTogglePdfEbookMode = if (isPdfDocument) {
@@ -1004,28 +1015,18 @@ fun ReaderScreen(
                     } else null,
                     isRecording = recordingNow?.docId == document.id,
                     onToggleRecording = toggleRecording,
-                    onOpenAudiobook = if (isDaisyDocument) null else ({ showAudiobookBar = !showAudiobookBar; if (showAudiobookBar) showTtsBar = false }),
+                    onOpenAudiobook = if (isDaisyDocument) null else ({ showAudiobookBar = !showAudiobookBar; if (showAudiobookBar) showReadAloudBar = false }),
                     hasAudiobook = hasAudiobook,
                     isAudiobookActive = showAudiobookBar || (audiobookState.docId == document.id && audiobookState.playing),
                     onToggleTtsBar = {
                         if (isDaisyDocument) {
                             if (!showDaisyAudioBar) {
                                 showDaisyAudioBar = true
-                                if (!daisyAudioState.isPlaying) {
-                                    daisyAudioManager.togglePlayPause()
-                                }
-                            } else {
-                                showDaisyAudioBar = false
-                            }
+                                if (!daisyAudioState.isPlaying) daisyAudioManager.togglePlayPause()
+                            } else showDaisyAudioBar = false
                         } else {
-                            if (!showTtsBar) {
-                                showTtsBar = true
-                                if (!ttsState.isPlaying) {
-                                    ttsManager.togglePlayPause(activePageTextForTts, currentActivePage)
-                                }
-                            } else {
-                                showTtsBar = false
-                            }
+                            showReadAloudBar = !showReadAloudBar
+                            if (showReadAloudBar) showAudiobookBar = false
                         }
                     },
                     onOpenAnnotationsMenu = { showObsidianHubDialog = true },
@@ -1095,8 +1096,7 @@ fun ReaderScreen(
                         },
                         onSpeakSelection = { quote, pageNum ->
                             if (!(hasAudiobook && audioSyncMap != null && playAudioFrom(quote, pageNum))) {
-                                showTtsBar = true
-                                ttsManager.speakSelection(quote, pageNum)
+                                readAloudFrom(quote, pageNum)
                             }
                         },
                         audioSentence = audioPdfSentence,
@@ -1240,8 +1240,7 @@ fun ReaderScreen(
                                     },
                                     onChaptersLoaded = { chaptersList = it },
                                     onSpeakSelection = { quote, pageNum ->
-                                        showTtsBar = true
-                                        ttsManager.speakSelection(quote, pageNum)
+                                        readAloudFrom(quote, pageNum)
                                     },
                                     onRequestHighlight = { quote, _, chapterTitle, colorHex, _, _, _ ->
                                         val (sPdf, ePdf) = book.spanForQuote(quote, syncedPdfPageAnchor)
@@ -1376,8 +1375,7 @@ fun ReaderScreen(
                             },
                             onSpeakSelection = { quote, pageNum ->
                                 if (!(hasAudiobook && audioSyncMap != null && playAudioFrom(quote, null))) {
-                                    showTtsBar = true
-                                    ttsManager.speakSelection(quote, pageNum)
+                                    readAloudFrom(quote, pageNum)
                                 }
                             },
                             audioSentence = audioEpubSentence,
@@ -1503,8 +1501,7 @@ fun ReaderScreen(
                                     autoPlay = true
                                 )
                             } else if (!(hasAudiobook && audioSyncMap != null && playAudioFrom(quote, null))) {
-                                showTtsBar = true
-                                ttsManager.speakSelection(quote, pageNum)
+                                readAloudFrom(quote, pageNum)
                             }
                         },
                         onRequestHighlight = { quote, page, chapterTitle, colorHex, paragraphCitation, pageEquivalent, epubCfi ->
@@ -1646,103 +1643,32 @@ fun ReaderScreen(
                     AudiobookBar(
                         document = document,
                         onClose = { showAudiobookBar = false },
-                        onUseTts = { showAudiobookBar = false; showTtsBar = true; if (!ttsState.isPlaying) ttsManager.togglePlayPause(activePageTextForTts, currentActivePage) },
+                        onUseTts = { showAudiobookBar = false; showReadAloudBar = true },
                         onBeforePlay = audioStartHere,
                         modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 14.dp, vertical = if (isUiVisible) 52.dp else 14.dp)
                     )
                 }
 
-                // Floating Offline Male British English & Natural Norwegian TTS Controller Bar (supports Full Card & Minimized Corner Pill)
-                AnimatedVisibility(
-                    visible = showTtsBar,
-                    enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                    exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-                    modifier = Modifier
-                        .align(if (isTtsMinimized) Alignment.BottomEnd else Alignment.BottomCenter)
-                        .padding(
-                            horizontal = 14.dp,
-                            vertical = if (isUiVisible) 52.dp else 14.dp
-                        )
-                ) {
-                    KOReaderTtsControllerCard(
-                        ttsState = ttsState,
-                        activeTheme = activeReaderTheme,
-                        isMinimized = isTtsMinimized,
-                        onToggleMinimized = {
-                            isTtsMinimized = !isTtsMinimized
-                            persistFormatting()
+                // Read aloud with a Piper voice (on the tablet): the bar at the bottom.
+                if (showReadAloudBar && !isDaisyDocument) {
+                    ReadAloudBar(
+                        document = document,
+                        startHere = {
+                            com.example.reader.ReadAloud.Start(
+                                pdfPage = if (isPdfDocument) currentActivePage else 0,
+                                href = if (isPdfDocument) "" else readingHref, progression = readingProgression,
+                                text = if (!isPdfDocument && readingHref.isBlank()) activePageTextForTts.take(300) else ""
+                            )
                         },
-                        onToggleLanguage = { lang ->
-                            ttsManager.setLanguage(lang)
-                            persistFormatting()
-                        },
-                        onTogglePlayPause = {
-                            ttsManager.togglePlayPause(activePageTextForTts, currentActivePage)
-                        },
-                        onPreviousSentence = {
-                            ttsManager.previousSentence()
-                        },
-                        onNextSentence = {
-                            ttsManager.nextSentence()
-                        },
-                        onStop = {
-                            ttsManager.stop()
-                        },
-                        onChangeSpeechRate = { newRate ->
-                            ttsManager.setSpeechRate(newRate)
-                            persistFormatting()
-                        },
-                        onOpenVoiceSettings = {
-                            showTtsSettingsDialog = true
-                        },
-                        onCloseBar = {
-                            ttsManager.stop()
-                            showTtsBar = false
-                        }
+                        onClose = { showReadAloudBar = false },
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 14.dp, vertical = if (isUiVisible) 52.dp else 14.dp)
                     )
                 }
-            
+
                 // E-ink: periodic clean refresh while turning pages, and after Glossae is toggled.
                 EinkRefreshOverlay(pageKey = currentActivePage, forceKey = glossaeEnabled)
             }
         }
-    }
-
-    // KOReader Offline Male British English & Natural Norwegian TTS Settings Dialog
-    if (showTtsSettingsDialog) {
-        KOReaderTtsSettingsDialog(
-            ttsState = ttsState,
-            onLanguageChange = { lang ->
-                ttsManager.setLanguage(lang)
-                persistFormatting()
-            },
-            onSpeechRateChange = { rate ->
-                ttsManager.setSpeechRate(rate)
-                persistFormatting()
-            },
-            onPitchChange = { pitch ->
-                ttsManager.setPitch(pitch)
-                persistFormatting()
-            },
-            onAutoAdvanceChange = { enabled ->
-                ttsManager.setAutoAdvancePage(enabled)
-                persistFormatting()
-            },
-            onSelectVoice = { voiceId ->
-                ttsManager.selectVoice(voiceId)
-                persistFormatting()
-            },
-            onInstallSystemVoices = {
-                ttsManager.openSystemTtsVoiceInstaller()
-            },
-            onResetBritishMaleDefault = {
-                ttsManager.setSpeechRate(1.05f)
-                ttsManager.setPitch(0.92f)
-                ttsManager.selectVoice("")
-                persistFormatting()
-            },
-            onDismiss = { showTtsSettingsDialog = false }
-        )
     }
 
     // The printed page numbers of this PDF, laid down by hand.

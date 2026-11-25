@@ -157,6 +157,10 @@ dependencies {
   // Audiobooks: playback with the screen off, media buttons and Bluetooth controls
   implementation("androidx.media3:media3-exoplayer:1.5.1")
   implementation("androidx.media3:media3-session:1.5.1")
+  // Read aloud: Piper voices run on the tablet through sherpa-onnx (its own onnxruntime removed from the AAR;
+  // it uses the app's newer onnxruntime above, whose C API is backwards compatible), and the voices' .tar.bz2 packages
+  implementation(files("libs/sherpa-onnx-1.12.20-tts.aar"))
+  implementation("org.apache.commons:commons-compress:1.26.2")
   implementation(libs.readium.streamer)
   implementation(libs.readium.navigator)
   implementation("com.squareup.retrofit2:converter-kotlinx-serialization:2.11.0")

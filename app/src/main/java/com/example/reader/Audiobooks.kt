@@ -257,9 +257,19 @@ object AudiobookPlayer {
         return p
     }
 
+    fun playerOrNull(): ExoPlayer? = player
+
+    /** Lets go of the shared player (read-aloud takes it over): the place is saved, nothing is loaded any more. */
+    fun detach() {
+        if (parts.isEmpty()) return
+        save(force = true)
+        player?.stop(); player?.clearMediaItems(); parts = emptyList(); state.value = State()
+    }
+
     /** Loads [docId]'s audiobook at its saved place (does nothing when it is already loaded). */
     fun load(ctx: Context, docId: Long, title: String): Boolean {
         app = ctx.applicationContext
+        if (ReadAloud.isRunning()) ReadAloud.stop()
         if (state.value.docId == docId && player != null && parts.isNotEmpty()) return true
         save(force = true)
         val ps = Audiobooks.files(ctx, docId); if (ps.isEmpty()) return false
