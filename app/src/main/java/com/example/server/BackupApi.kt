@@ -16,7 +16,7 @@ import org.json.JSONObject
  *   POST backup/upload                    {name, size} → {id, chunk}
  *   GET  backup/upload/ID                 {received, size}, to resume
  *   PUT  backup/upload/ID?offset=N        one chunk (header X-Sha256: its SHA-256)
- *   POST backup/upload/ID/restore         {password?, restoreKeys} → waits for confirmation on the tablet
+ *   POST backup/upload/ID/restore         {password?, restoreKeys, mode: replace|merge} → waits for confirmation on the tablet
  */
 class BackupApi(private val context: Context) {
 
@@ -66,7 +66,8 @@ class BackupApi(private val context: Context) {
             s.size == 3 && s[0] == "upload" && s[2] == "restore" && m == "POST" -> {
                 val b = JSONObject(req.bodyText())
                 try {
-                    BackupJobs.requestWebRestore(s[1], password(b), b.optBoolean("restoreKeys", true))
+                    val mode = if (b.optString("mode").equals("merge", true)) BackupManager.RestoreMode.MERGE else BackupManager.RestoreMode.REPLACE
+                    BackupJobs.requestWebRestore(s[1], password(b), b.optBoolean("restoreKeys", true), mode)
                 } catch (e: BackupCrypto.WrongPasswordException) {
                     throw IllegalArgumentException(e.message)
                 } catch (e: BackupCrypto.DamagedException) {
@@ -92,7 +93,8 @@ class BackupApi(private val context: Context) {
             .put("lastBackupBytes", BackupManager.lastBackupBytes(context))
         st.progress?.let { p -> o.put("progress", JSONObject().put("stage", p.stage).put("done", p.done).put("total", p.total)) }
         BackupJobs.pendingWebRestore.value?.let { p ->
-            o.put("awaitingTablet", JSONObject().put("name", p.name).put("size", p.size).put("encrypted", p.encrypted))
+            o.put("awaitingTablet", JSONObject().put("name", p.name).put("size", p.size).put("encrypted", p.encrypted)
+                .put("mode", p.mode.name.lowercase()))
         }
         return o
     }

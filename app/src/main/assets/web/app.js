@@ -1314,8 +1314,8 @@ function backupRows() {
       for (;;) {
         let st;
         try { st = await api('backup/status'); } catch (e) { if (e.status === 401) return; await sleep(2000); continue; }
-        if (st.restarting) { say('Restored. The tablet is restarting — this page reloads when it is back.'); showBar(-1); await waitForTablet(); return; }
-        if (st.awaitingTablet) { say('Confirm the restore on the tablet. It is waiting for you there.'); showBar(-1); }
+        if (st.restarting) { say(`${(st.message || 'Restored.').replace(/ Restarting…$/, '')}\nThe tablet is restarting — this page reloads when it is back.`); showBar(-1); await waitForTablet(); return; }
+        if (st.awaitingTablet) { say(`Confirm the ${st.awaitingTablet.mode === 'merge' ? 'merge' : 'restore'} on the tablet. It is waiting for you there.`); showBar(-1); }
         else if (st.running) { const p = st.progress; showBar(p && p.total > 0 ? p.done / p.total : -1); say(st.message); }
         else { showBar(null); if (st.message) say(st.message, st.error); return; }
         await sleep(1000);
@@ -1381,6 +1381,9 @@ function backupRows() {
   const file = h('input', { type: 'file', accept: '.zip,application/zip,application/octet-stream' });
   const rpw = h('input', { type: 'password', placeholder: 'Backup password', autocomplete: 'current-password', style: { display: 'none' } });
   const rkeys = h('input', { type: 'checkbox' }); rkeys.checked = true;
+  const rmode = h('select', null,
+    h('option', { value: 'replace' }, 'Replace the library with the backup'),
+    h('option', { value: 'merge' }, 'Merge: add to the library, newest change wins'));
   const rkeysLabel = h('label', { class: 'row', style: { gap: '6px', display: 'none' } }, rkeys, 'Restore API keys, if the backup has them');
   let encrypted = false;
   file.addEventListener('change', async () => {
@@ -1396,15 +1399,19 @@ function backupRows() {
     if (!f) { toast('Choose a backup file first'); return; }
     if (encrypted && !rpw.value) { toast('Enter the backup password'); return; }
     const password = encrypted ? rpw.value : '';
-    confirmBox('Restore this backup?',
-      `${f.name} (${fmtBytes(f.size)}) is uploaded to the tablet and replaces your current library, notes and settings. ` +
-      'The backup is checked first; if anything goes wrong, the library is left as it was. You confirm it on the tablet before anything changes, and the app restarts afterwards.',
+    const mode = rmode.value;
+    confirmBox(mode === 'merge' ? 'Merge this backup?' : 'Restore this backup?',
+      `${f.name} (${fmtBytes(f.size)}) is uploaded to the tablet and ` +
+      (mode === 'merge'
+        ? 'combined with your library: where both have the same book or highlight, the one changed most recently is kept, and items deleted on either side stay deleted. Settings on the tablet stay as they are. '
+        : 'replaces your current library, notes and settings. The backup is checked first; if anything goes wrong, the library is left as it was. ') +
+      'You confirm it on the tablet before anything changes, and the app restarts afterwards.',
       'Upload', async () => {
         try {
           const start = await api('backup/upload', { method: 'POST', json: { name: f.name, size: f.size } });
           await uploadChunks(f, start.id, start.chunk);
           say('Checking the backup…'); showBar(-1);
-          await api(`backup/upload/${start.id}/restore`, { method: 'POST', json: { password, restoreKeys: rkeys.checked }, timeout: 180000 });
+          await api(`backup/upload/${start.id}/restore`, { method: 'POST', json: { password, restoreKeys: rkeys.checked, mode }, timeout: 180000 });
           rpw.value = '';
           watch();
         } catch (e) { showBar(null); say('Restore failed: ' + (e.message || e), true); }
@@ -1451,9 +1458,9 @@ function backupRows() {
         h('button', { class: 'btn fill', onclick: backup }, 'Download backup'))),
     h('div', { class: 'set-row' },
       h('div', { class: 'set-label' }, h('div', null, 'Restore from a backup'),
-        h('div', { class: 'muted set-help' }, 'Uploads the backup to the tablet in pieces (a dropped connection resumes). It replaces the current library, and must be confirmed on the tablet.')),
+        h('div', { class: 'muted set-help' }, 'Uploads the backup to the tablet in pieces (a dropped connection resumes). Replace makes the library exactly the backup; Merge adds the backup to it, keeping the most recently changed version of each item. Either must be confirmed on the tablet.')),
       h('div', { class: 'set-control', style: { display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' } },
-        file, rpw, rkeysLabel,
+        file, rmode, rpw, rkeysLabel,
         h('button', { class: 'btn', onclick: restore }, 'Upload and restore'))),
     h('div', { class: 'set-row wide' }, bar, status)
   ];

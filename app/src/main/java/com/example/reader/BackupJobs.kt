@@ -46,7 +46,10 @@ object BackupJobs {
         val restarting: Boolean = false
     )
 
-    data class PendingRestore(val uploadId: String, val name: String, val size: Long, val encrypted: Boolean, val requestedAt: Long)
+    data class PendingRestore(
+        val uploadId: String, val name: String, val size: Long, val encrypted: Boolean, val requestedAt: Long,
+        val mode: BackupManager.RestoreMode = BackupManager.RestoreMode.REPLACE
+    )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow(State())
@@ -107,21 +110,26 @@ object BackupJobs {
         }
     }
 
-    fun restore(context: Context, uri: Uri, password: CharArray?, restoreKeys: Boolean): Boolean {
+    fun restore(
+        context: Context, uri: Uri, password: CharArray?, restoreKeys: Boolean,
+        mode: BackupManager.RestoreMode = BackupManager.RestoreMode.REPLACE
+    ): Boolean {
         val app = context.applicationContext
-        return start("restore", "Restoring…") { onProgress ->
-            try {
-                BackupManager.restoreFromUri(app, uri, password, restoreKeys, onProgress)
+        val merge = mode == BackupManager.RestoreMode.MERGE
+        return start("restore", if (merge) "Merging…" else "Restoring…") { onProgress ->
+            val result = try {
+                BackupManager.restoreFromUri(app, uri, password, restoreKeys, mode, onProgress)
             } finally {
                 password?.fill('\u0000')
             }
-            restartSoon(app, 400)
-            "Restored. Restarting…"
+            // A merge report stays readable for a moment before the app restarts.
+            restartSoon(app, if (merge) 4000 else 400, result)
+            "$result Restarting…"
         }
     }
 
-    private fun restartSoon(app: Context, ms: Long) {
-        _state.value = _state.value.copy(restarting = true, message = "Restored. Restarting…")
+    private fun restartSoon(app: Context, ms: Long, result: String = "Restored.") {
+        _state.value = _state.value.copy(restarting = true, message = "$result Restarting…")
         scope.launch {
             delay(ms)
             withContext(Dispatchers.Main) { BackupManager.restartApp(app) }
@@ -225,6 +233,7 @@ object BackupJobs {
     private val uploads = ConcurrentHashMap<String, Upload>()
     private var pendingPassword: CharArray? = null
     private var pendingKeys = true
+    private var pendingMode = BackupManager.RestoreMode.REPLACE
 
     private fun uploadDir(context: Context) = File(context.applicationContext.applicationInfo.dataDir, "web_restore_upload")
 
@@ -275,7 +284,10 @@ object BackupJobs {
     }
 
     /** Asks the tablet to confirm restoring the uploaded backup. The password is checked first. */
-    suspend fun requestWebRestore(id: String, password: CharArray?, restoreKeys: Boolean): PendingRestore = withContext(Dispatchers.IO) {
+    suspend fun requestWebRestore(
+        id: String, password: CharArray?, restoreKeys: Boolean,
+        mode: BackupManager.RestoreMode = BackupManager.RestoreMode.REPLACE
+    ): PendingRestore = withContext(Dispatchers.IO) {
         val u = upload(id)
         require(u.received == u.size && u.file.length() == u.size) { "The upload isn't complete yet." }
         require(!busy && _pending.value == null) { "A backup or restore is already running." }
@@ -288,7 +300,8 @@ object BackupJobs {
         pendingPassword = password?.copyOf()
         password?.fill('\u0000')
         pendingKeys = restoreKeys
-        PendingRestore(id, u.name, u.size, encrypted, System.currentTimeMillis()).also {
+        pendingMode = mode
+        PendingRestore(id, u.name, u.size, encrypted, System.currentTimeMillis(), mode).also {
             _pending.value = it
             _state.value = State("web-restore", running = false, message = "Waiting for the restore to be confirmed on the tablet…")
         }
@@ -297,21 +310,22 @@ object BackupJobs {
     fun confirmWebRestore(context: Context) {
         val p = _pending.value ?: return
         val u = uploads[p.uploadId] ?: run { _pending.value = null; return }
-        val password = pendingPassword; val keys = pendingKeys
+        val password = pendingPassword; val keys = pendingKeys; val mode = pendingMode
         pendingPassword = null
         _pending.value = null
         val app = context.applicationContext
-        val started = start("web-restore", "Restoring…") { onProgress ->
-            try {
-                u.file.inputStream().use { BackupManager.restore(app, it, u.size, password, keys, onProgress) }
+        val merge = mode == BackupManager.RestoreMode.MERGE
+        val started = start("web-restore", if (merge) "Merging…" else "Restoring…") { onProgress ->
+            val result = try {
+                u.file.inputStream().use { BackupManager.restore(app, it, u.size, password, keys, mode, onProgress) }
             } finally {
                 password?.fill('\u0000')
                 uploads.remove(u.id)
                 uploadDir(app).deleteRecursively()
             }
-            // Give the browser a moment to see that it worked before the app (and its server) restarts.
-            restartSoon(app, 2500)
-            "Restored. Restarting…"
+            // Give the browser a moment to see the result before the app (and its server) restarts.
+            restartSoon(app, if (merge) 5000 else 2500, result)
+            "$result Restarting…"
         }
         if (!started) password?.fill('\u0000')
     }
