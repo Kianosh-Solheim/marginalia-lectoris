@@ -1643,3 +1643,29 @@ html[data-theme="dark"] mark.audio-hit { border-bottom-color: #eee; }
 .pg-item:last-child { border-bottom: 0; }
 .pg-item.lost b { color: var(--accent, #b00); }
 .pg-item i { font-style: normal; color: var(--grey); }
+/* Convert books: checking and correcting the pages */
+.pg-filter { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.pg-none { padding: 14px 4px; font-size: 13px; }
+.pg-item { cursor: pointer; }
+.pg-item:hover { background: var(--card); }
+.pg-mark { display: inline-block; width: 1.2em; text-align: center; }
+.pg-item.sure .pg-mark { color: var(--grey); }
+.pg-item.unsure .pg-mark, .pg-item.lost .pg-mark { color: #b00; font-weight: 700; }
+.pg-item.out { opacity: .55; }
+.pg-review { border-top: 1px solid var(--rule); padding-top: 8px; }
+.pg-rhead { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.pg-cols { display: grid; grid-template-columns: 340px 1fr; gap: 14px; }
+.pg-left { max-height: 470px; overflow: auto; border: 1px solid var(--rule); background: #fff; }
+.pg-pdf { display: block; }
+.pg-right { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.pg-begins { font-size: 12px; }
+.pg-begins i { font-style: normal; }
+.pg-text { font-family: Georgia, "Times New Roman", serif; font-size: 14px; line-height: 1.75; max-height: 360px; overflow: auto; border: 1px solid var(--rule); padding: 8px 10px; }
+.pg-w { cursor: pointer; border-radius: 2px; }
+.pg-w:hover { background: var(--ink); color: var(--paper, #fff); }
+.pg-pin { display: inline-block; font: 600 11px/1.4 "Helvetica Neue", Arial, sans-serif; background: var(--ink); color: var(--paper, #fff); padding: 0 5px; margin: 0 3px; border-radius: 3px; }
+.pg-pin.other { background: transparent; color: var(--grey); border: 1px solid var(--rule); }
+.pg-para { display: inline-block; width: 1.2em; }
+.pg-sect { font: 11px "Helvetica Neue", Arial, sans-serif; color: var(--grey); border-top: 1px dashed var(--rule); margin: 6px 0; padding-top: 2px; }
+.pg-warn { font-size: 12px; color: #b00; }
+.pg-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
