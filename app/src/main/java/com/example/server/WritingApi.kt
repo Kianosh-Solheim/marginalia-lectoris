@@ -93,6 +93,13 @@ class WritingApi(private val context: Context) {
                 val f = TypstEngine.wasm(context)
                 if (!f.isFile) HttpResponse.error(404, "Typst is not installed") else HttpResponse.FileBody(f, "application/wasm").header("Cache-Control", "private, max-age=31536000, immutable")
             }
+            first == "ocr-status" -> HttpResponse.json(OcrEngine.status(context).toString())
+            first == "ocr-install" && m == "POST" -> { OcrEngine.install(context); HttpResponse.json(OcrEngine.status(context).toString()) }
+            first == "ocr" -> {
+                val f = OcrEngine.file(context, s.getOrNull(1).orEmpty()) ?: throw NoSuchElementException("Text recognition is not downloaded yet")
+                val type = if (f.name.endsWith(".js")) "application/javascript" else "application/octet-stream"
+                HttpResponse.FileBody(f, type).header("Cache-Control", "private, max-age=31536000, immutable")
+            }
             first == "latex-status" -> HttpResponse.json(LatexEngine.status(context).toString())
             first == "latex-install" && m == "POST" -> { LatexEngine.install(context, JSONObject(req.bodyText().ifBlank { "{}" }).optString("collection", "basic")); HttpResponse.json(LatexEngine.status(context).toString()) }
             first == "latex" -> {
@@ -298,6 +305,41 @@ open class WasmDownload(private val TAG: String, private val folder: String, pri
 object Pandoc : WasmDownload("Pandoc", "pandoc", "pandoc-1.1.0.wasm", "https://registry.npmjs.org/pandoc-wasm/-/pandoc-wasm-1.1.0.tgz",
     "IoWBsC/cbSZe71rcRtxXUxG+Auf8aGDHKYOQZA6OdwmUL2xdpQaqrSGhPa+6zfLdSar7cnyAmTWt6KU9n5kBjQ==", "package/src/pandoc.wasm",
     "b47c9de52b5b45f103c2dac6fea52591aeafe3dd6cafed13331b67575233a2ff", "3.10")
+
+/**
+ * Text recognition (OCR) for scanned PDF pages, read in the browser with tesseract.js 7: the engine
+ * (tesseract.js-core 7.0.0, SIMD, LSTM only) and the English and Norwegian models (tessdata
+ * 4.0.0_best_int, from the official @tesseract.js-data packages). Each is downloaded once, checked
+ * against known checksums and kept in its own folder.
+ */
+object OcrCore : WasmDownload("OCR", "ocr-core", "tesseract-core-simd-lstm-7.0.0.wasm.js", "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-7.0.0.tgz",
+    "WnNH518NzmbSq9zgTPeoF8c+xmilS8rFIl1YKbk/ptuuc7p6cLNELNuPAzcmsYw450ca6bLa8j3t0VAtq435Vw==", "package/tesseract-core-simd-lstm.wasm.js",
+    "c58b46a4c796c0b8afccf77591d5b875b6896b45d402bbce8caa6f5362447b38", "7.0.0")
+object OcrEng : WasmDownload("OCR", "ocr-eng", "eng-4.0.0_best_int.traineddata.gz", "https://registry.npmjs.org/@tesseract.js-data/eng/-/eng-1.0.0.tgz",
+    "mbTumm6KQPUHyzTPQaF3ObXYnx0SqqfV2nabqFVQBwD6Kl7PhGSLSzOlfFTWy0P3BjghaSKA2W9GB19Jk+ZcTg==", "package/4.0.0_best_int/eng.traineddata.gz",
+    "45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91", "eng")
+object OcrNor : WasmDownload("OCR", "ocr-nor", "nor-4.0.0_best_int.traineddata.gz", "https://registry.npmjs.org/@tesseract.js-data/nor/-/nor-1.0.0.tgz",
+    "UYIAl2T2g9Nha+uKQie4uE4zGN1a/sbs4sddsH3Ao54BguKyGbSBz4pBG/+zZY2Lnre3/z/z3d9RiVL6DVKvPw==", "package/4.0.0_best_int/nor.traineddata.gz",
+    "6c5d91a5b684da387bfcf16b38bae8d94771812dc9ef706b413c728ca1d37c93", "nor")
+
+/** The three parts of text recognition, downloaded and reported as one. */
+object OcrEngine {
+    private val parts = listOf(OcrCore, OcrEng, OcrNor)
+    fun status(ctx: Context): JSONObject {
+        val all = parts.map { it.status(ctx) }
+        return JSONObject().put("installed", all.all { it.optBoolean("installed") }).put("running", all.any { it.optBoolean("running") })
+            .put("done", all.sumOf { it.optLong("done") }).put("total", all.sumOf { it.optLong("total") })
+            .put("error", all.map { it.optString("error") }.firstOrNull { it.isNotBlank() }.orEmpty()).put("version", "tesseract.js-core 7.0.0")
+    }
+    fun install(ctx: Context) = parts.forEach { it.install(ctx) }
+    /** The file the browser asks for by name: the engine, or a language's model. */
+    fun file(ctx: Context, name: String): File? = when (name) {
+        "tesseract-core-simd-lstm.wasm.js" -> OcrCore.wasm(ctx)
+        "eng.traineddata.gz" -> OcrEng.wasm(ctx)
+        "nor.traineddata.gz" -> OcrNor.wasm(ctx)
+        else -> null
+    }?.takeIf { it.isFile }
+}
 
 /** Typst, the typesetter that makes the PDFs (typst.ts web compiler 0.7.0). */
 object TypstEngine : WasmDownload("Typst", "typst", "typst-compiler-0.7.0.wasm", "https://registry.npmjs.org/@myriaddreamin/typst-ts-web-compiler/-/typst-ts-web-compiler-0.7.0.tgz",

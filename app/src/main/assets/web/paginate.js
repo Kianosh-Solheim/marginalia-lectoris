@@ -34,6 +34,65 @@ function pgLev(a, b) {   // edit distance, for words that differ by a letter (a 
 }
 const pgSim = (a, b) => a === b ? 1 : (a && b && a.length >= 4 && pgLev(a, b) <= 1 ? 0.7 : 0);
 
+// ------------------------------------------------------------------ text recognition (OCR)
+
+let ocrWorker = null, ocrLangs = '', ocrLoading = null;
+/** Tesseract, ready to read a scanned page in the given languages. Downloaded to the tablet once. */
+async function ensureOcr(langs) {
+  const key = langs.join('+');
+  if (ocrWorker && ocrLangs === key) return ocrWorker;
+  if (ocrLoading) await ocrLoading.catch(() => {});
+  if (ocrWorker && ocrLangs === key) return ocrWorker;
+  await ensureEngine('ocr', 'text recognition', 'Scanned pages are read with Tesseract, the open-source text recognition engine, with its Norwegian and English models (about 39 MB to download, 9 MB on the tablet, from the official tesseract.js packages). After that, pages are read offline, in this browser.', 'Reading scanned pages.');
+  ocrLoading = (async () => {
+    await loadScript('vendor/tesseract/tesseract.min.js');
+    if (ocrWorker) { await ocrWorker.terminate().catch(() => {}); ocrWorker = null; }
+    const base = location.origin + '/api/writing/ocr';
+    ocrWorker = await Tesseract.createWorker(langs, 1 /* LSTM only */, {
+      workerPath: new URL('vendor/tesseract/worker.min.js', location.href).href, corePath: base + '/tesseract-core-simd-lstm.wasm.js',
+      langPath: base, gzip: true, workerBlobURL: false, cacheMethod: 'none', logger: () => {}, errorHandler: e => console.warn('OCR', e),
+    }, { debug_file: '/dev/null' });   // Tesseract's own diagnostics go nowhere
+    await ocrWorker.setParameters({ user_defined_dpi: '200' });   // pages are drawn at 200 dpi (no guessing, better reading)
+    ocrLangs = key;
+    return ocrWorker;
+  })();
+  try { return await ocrLoading; } finally { ocrLoading = null; }
+}
+/** One scanned PDF page read: its lines, placed as the PDF's own text would be (y up from the foot). */
+async function pgOcrPage(page, H, langs) {
+  const w = await ensureOcr(langs);
+  const scale = 200 / 72;   // 200 dpi: enough for book text, quick to read
+  const vp = page.getViewport({ scale });
+  const cv = document.createElement('canvas'); cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+  const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+  await page.render({ canvasContext: g, viewport: vp }).promise;
+  const { data } = await w.recognize(cv, {}, { blocks: true, text: false });
+  const lines = [];
+  const add = (ln, dy = 0) => {
+    const t = (ln.text || '').replace(/\s+/g, ' ').trim();
+    if (!t || (ln.confidence != null && ln.confidence < 30 && t.length < 4)) return;   // specks read as letters
+    lines.push({ y: H - (ln.bbox.y1 + dy) / scale, h: (ln.bbox.y1 - ln.bbox.y0) / scale, text: t,
+      words: (ln.words || []).map(x => ({ t: x.text, box: [x.bbox.x0 / scale, H - (x.bbox.y1 + dy) / scale, x.bbox.x1 / scale, H - (x.bbox.y0 + dy) / scale] })) });
+  };
+  for (const b of data.blocks || []) for (const par of b.paragraphs || []) for (const ln of par.lines || []) add(ln);
+  // a page number alone in the margin is easily missed on a page read whole: read the top and the
+  // bottom strip again, as one line of digits, when no number was found there
+  const edge = Math.max(H * 0.08, 40), px = Math.round(edge * scale);
+  const numberIn = zone => lines.some(l => (zone === 'head' ? l.y > H - edge : l.y < edge) && /(^|\s)\d{1,4}(\s|$)/.test(l.text));
+  const strips = [['head', 0], ['foot', cv.height - px]].filter(([z]) => !numberIn(z));
+  if (strips.length) {
+    await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: '0123456789' });
+    try {
+      for (const [, top] of strips) {
+        const r = await w.recognize(cv, { rectangle: { left: 0, top, width: cv.width, height: px } }, { blocks: true, text: false });
+        for (const b of r.data.blocks || []) for (const par of b.paragraphs || []) for (const ln of par.lines || []) if (/^\s*\d{1,4}\s*$/.test(ln.text || '') && (ln.confidence == null || ln.confidence > 50)) add(ln);
+      }
+    } finally { await w.setParameters({ tessedit_pageseg_mode: '3', tessedit_char_whitelist: '', user_defined_dpi: '200' }); }
+  }
+  cv.width = cv.height = 0;
+  return lines;
+}
+
 // ------------------------------------------------------------------ the PDF
 
 /** The PDF's pages: lines of text (without running heads and feet), words, and the printed page each one is. */
@@ -42,6 +101,7 @@ async function pgReadPdf(data, opts, progress) {
   const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(data) }).promise;
   let labels = null; try { labels = await pdf.getPageLabels(); } catch (_) {}
   const pages = [];
+  let ocrDone = 0, ocrTime = 0;
   for (let i = 1; i <= pdf.numPages; i++) {
     if (i % 5 === 1) progress(`Reading the PDF: page ${i} of ${pdf.numPages}`);
     const page = await pdf.getPage(i);
@@ -62,10 +122,21 @@ async function pgReadPdf(data, opts, progress) {
       let t = '', end = null;
       for (const it of ln.items) { if (end != null && it.x - end > it.h * 0.15 && !/\s$/.test(t)) t += ' '; t += it.s; end = it.x + it.w; }
       ln.text = t.replace(/\s+/g, ' ').trim();
-      const edge = Math.max(H * 0.08, 40);   // running heads and feet sit near the edge, also on a short page
-      ln.zone = ln.y > H - edge ? 'head' : ln.y < edge ? 'foot' : '';
     });
-    pages.push({ n: i, H, lines, pdfLabel: labels ? labels[i - 1] || '' : '' });
+    // a page with no text of its own is a scan: read it (OCR)
+    let ocr = false;
+    if (((lines.map(l => l.text).join(' ').match(PG_TOKEN) || []).length < 5) && opts.ocr !== false) {
+      const left = ocrDone ? Math.round(ocrTime / ocrDone * (pdf.numPages - i + 1) / 60000) : null;
+      progress(`Reading scanned page ${i} of ${pdf.numPages} (text recognition)${left != null ? ` · about ${left < 1 ? 'a minute' : left + ' min'} left` : '…'}`);
+      const t0 = performance.now();
+      const read = await pgOcrPage(page, H, opts.ocrLangs || ['nor', 'eng']);
+      ocrTime += performance.now() - t0; ocrDone++;
+      if (read.length) { lines.length = 0; lines.push(...read); ocr = true; }
+    }
+    if (opts.stop && opts.stop.stop) { await pdf.destroy(); throw new Error('Stopped.'); }
+    const edge = Math.max(H * 0.08, 40);   // running heads and feet sit near the edge, also on a short page
+    lines.forEach(ln => { ln.zone = ln.y > H - edge ? 'head' : ln.y < edge ? 'foot' : ''; });
+    pages.push({ n: i, H, lines, ocr, pdfLabel: labels ? labels[i - 1] || '' : '' });
     page.cleanup();
   }
   await pdf.destroy();
@@ -138,7 +209,7 @@ async function pgReadPdf(data, opts, progress) {
       source = 'from the PDF\'s own page numbers (no printed ones were found)';
     }
   }
-  return { pages, source, textPages: pages.filter(p => p.words.length > 5).length };
+  return { pages, source, textPages: pages.filter(p => p.words.length > 5).length, ocrPages: pages.filter(p => p.ocr).length };
 }
 
 // ------------------------------------------------------------------ the EPUB
@@ -200,7 +271,7 @@ function pgAlign(pdf, epub) {
   const P = [], starts = [];
   pdf.pages.forEach(p => { if (p.label && p.words.length) starts.push({ label: p.label, pdfPage: p.n, pi: P.length }); P.push(...p.words); });
   const E = epub.words.map(x => x.w);
-  if (!P.length) throw new Error('The PDF has no text to read. (Scanned pages are read in a coming version.)');
+  if (!P.length) throw new Error('No text could be read from the PDF, not even by text recognition.');
   if (!E.length) throw new Error('The EPUB has no text.');
   // anchors: runs of six words found exactly once in both texts
   const N = 6, key = (A, i) => A.slice(i, i + N).join(' ');
@@ -359,10 +430,13 @@ async function pgWrite(epub, placements, opts) {
 
 /** The whole job: read both, line them up. → { pdf, epub, align } (write with pgWrite after looking) */
 async function pgPaginate(pdfData, epubData, opts, progress = () => {}) {
-  progress('Reading the PDF…');
-  const pdf = await pgReadPdf(pdfData, opts, progress);
   progress('Reading the EPUB…');
   const epub = await pgReadEpub(epubData);
+  // scanned pages are read in the book's language (both models when it is neither or unknown)
+  const lang = ((epub.opf.getElementsByTagNameNS('*', 'language')[0] || {}).textContent || '').trim().toLowerCase();
+  const ocrLangs = /^(nb|nn|no)\b/.test(lang) ? ['nor'] : /^en\b/.test(lang) ? ['eng'] : ['nor', 'eng'];
+  progress('Reading the PDF…');
+  const pdf = await pgReadPdf(pdfData, Object.assign({ ocrLangs }, opts), progress);
   progress('Lining up the texts…');
   const align = pgAlign(pdf, epub);
   return { pdf, epub, align };
@@ -382,7 +456,7 @@ function paginateDialog() {
     toLibrary: localGet('ml.wc.lib', '1') === '1', download: localGet('ml.wc.dl', '0') === '1',
     category: 'BOOK', pdfPage: '', printedPage: '',
   };
-  let pdfFile = null, epubFile = null, result = null;
+  let pdfFile = null, epubFile = null, result = null, stop = { stop: false };
   modal((box, close) => {
     box.style.width = '760px';
     const status = h('div', { class: 'muted wc-status' });
@@ -432,7 +506,7 @@ function paginateDialog() {
           h('span', null, ` · numbers ${result.pdf.source}`),
           h('div', null, `${sure.length} placed with confidence · ${unsure.length} uncertain · ${lost.length} not found (put where they most likely begin)`),
           result.epub.existing ? h('div', { class: 'muted' }, `The EPUB had ${result.epub.existing} page markers already; they are replaced.`) : null,
-          result.pdf.textPages < result.pdf.pages.length * 0.8 ? h('div', { class: 'muted' }, `${result.pdf.pages.length - result.pdf.textPages} PDF pages have no text (scanned?). Reading them (OCR) comes in the next version.`) : null),
+          result.pdf.ocrPages ? h('div', { class: 'muted' }, `${result.pdf.ocrPages} scanned ${result.pdf.ocrPages === 1 ? 'page was' : 'pages were'} read with text recognition (OCR).`) : null),
         unsure.length + lost.length ? h('div', { class: 'pg-list' }, [...unsure, ...lost].sort((a, b) => a.e - b.e).slice(0, 60).map(p =>
           h('div', { class: 'pg-item' + (p.conf < 0.4 ? ' lost' : '') }, h('b', null, 'p. ' + p.label),
             h('span', null, 'PDF: ', h('i', null, p.pdfStart)), h('span', null, 'EPUB: ', h('i', null, p.epubStart))))) : null);
@@ -441,7 +515,8 @@ function paginateDialog() {
       go.disabled = true; result = null; drawResult();
       try {
         const [pd, ed] = await Promise.all([pdfFile.arrayBuffer(), epubFile.arrayBuffer()]);
-        result = await pgPaginate(pd, ed, opts, m => { status.textContent = m; });
+        stop = { stop: false };
+        result = await pgPaginate(pd, ed, Object.assign({ stop }, opts), m => { status.textContent = m; });
         status.textContent = '';
       } catch (e) { console.error(e); status.textContent = e.message || String(e); }
       go.disabled = false; drawResult();
@@ -460,10 +535,10 @@ function paginateDialog() {
       } catch (e) { console.error(e); status.textContent = 'Could not write the EPUB: ' + (e.message || e); save.disabled = false; }
     });
     box.append(h('h2', null, 'Convert books'), convertTabs('pages', close),
-      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'The same book as a PDF with its printed page numbers and as an EPUB without them: the EPUB gets the printed page numbers, so notes, citations and “go to page” follow the book. Both must be the same edition.'),
+      h('p', { class: 'muted', style: { fontSize: '13px' } }, 'The same book as a PDF with its printed page numbers and as an EPUB without them: the EPUB gets the printed page numbers, so notes, citations and “go to page” follow the book. Both must be the same edition. Scanned PDFs are read with text recognition (OCR), a few seconds a page.'),
       pdfPick, epubPick, slots, optsBox, status, out,
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), go, save));
     draw();
     wcDropTarget = addFiles;
-  }, () => { wcDropTarget = null; });
+  }, () => { wcDropTarget = null; stop.stop = true; });   // closing stops a reading in progress
 }
