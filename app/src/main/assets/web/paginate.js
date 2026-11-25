@@ -255,7 +255,7 @@ async function pgReadEpub(data) {
       const v = n.nodeValue;
       PG_TOKEN.lastIndex = 0;
       let m;
-      while ((m = PG_TOKEN.exec(v))) { const w = pgWord(m[0]); if (w) words.push({ w, fi, node: n, off: m.index }); }
+      while ((m = PG_TOKEN.exec(v))) { const w = pgWord(m[0]); if (w) words.push({ w, fi, node: n, off: m.index, len: m[0].length }); }
     }
   }
   const nav = [...items.values()].find(x => /\bnav\b/.test(x.props));
@@ -324,6 +324,7 @@ function pgAlign(pdf, epub) {
 async function pgWrite(epub, placements, opts) {
   const byNode = new Map();
   for (const pl of placements) {
+    if (pl.skip) continue;   // left out in the check
     const w = epub.words[pl.e]; if (!w) continue;
     const list = byNode.get(w.node) || []; list.push({ pl, w }); byNode.set(w.node, list);
   }
@@ -493,30 +494,113 @@ function paginateDialog() {
       go.disabled = !(pdfFile && epubFile);
       drawResult();
     };
+    // ---- check and correct: every page, or the uncertain ones; a page opens beside its PDF page
+    let filter = 'unsure', openAt = null;
+    const state = p => p.skip ? 'out' : p.hand ? 'hand' : p.conf >= 0.75 ? 'sure' : p.conf >= 0.4 ? 'unsure' : 'lost';
+    const MARK = { sure: ['✓', 'Placed with confidence'], unsure: ['?', 'Uncertain'], lost: ['!', 'Not found: put where it most likely begins'], hand: ['✎', 'Checked by hand'], out: ['–', 'Left out'] };
+    const shown = () => result.align.placements.filter(p => filter === 'all' || ['unsure', 'lost'].includes(state(p)) || p.touched);
+    const wordText = w => w.node.nodeValue.substr(w.off, w.len);
+    const pdfStartLines = p => { const pg = result.pdf.pages[p.pdfPage - 1]; return pg ? pg.body.slice(0, 2).map(l => l.text).join(' ') : p.pdfStart; };
+    const renderPdf = async (n, canvas, width) => {
+      if (!result.view) result.view = pdfjsLib.getDocument({ data: result.pdfBytes.slice() }).promise;
+      const doc = await result.view, page = await doc.getPage(n);
+      const vp0 = page.getViewport({ scale: 1 }), dpr = window.devicePixelRatio || 1;
+      const vp = page.getViewport({ scale: width / vp0.width * dpr });
+      canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height); canvas.style.width = width + 'px';
+      const g = canvas.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: g, viewport: vp }).promise;
+    };
+    const move = (p, e) => {
+      const W = result.epub.words; e = Math.max(0, Math.min(W.length - 1, e));
+      p.e = e; p.hand = true; p.touched = true; p.skip = false; p.conf = 1;
+      p.epubStart = W.slice(e, e + 10).map(x => x.w).join(' ');
+      drawResult();
+    };
+    const review = idx => {
+      const list = shown(), p = list[idx]; if (!p) { openAt = null; return drawResult(); }
+      const all = result.align.placements, at = all.indexOf(p), W = result.epub.words;
+      const others = new Map(all.filter(q => q !== p && !q.skip).map(q => [q.e, q.label]));
+      const prev = all.slice(0, at).reverse().find(q => !q.skip), next = all.slice(at + 1).find(q => !q.skip);
+      const canvas = h('canvas', { class: 'pg-pdf' });
+      renderPdf(p.pdfPage, canvas, 330).catch(e => console.warn(e));
+      // the EPUB's text around the marker, every word a place to put it
+      const from = Math.max(0, p.e - 60), to = Math.min(W.length, p.e + 140);
+      const text = h('div', { class: 'pg-text' });
+      const blockOf = n => n.parentNode && n.parentNode.closest ? n.parentNode.closest('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, dd, figcaption, div') : null;
+      let lastBlock = null, here = null;
+      for (let i = from; i < to; i++) {
+        const w = W[i], blk = blockOf(w.node);
+        if (i > from && W[i - 1].fi !== w.fi) text.append(h('div', { class: 'pg-sect' }, 'next section'));
+        else if (i > from && blk !== lastBlock) text.append(h('br'), h('span', { class: 'pg-para' }));
+        lastBlock = blk;
+        if (i === p.e && !p.skip) { here = h('span', { class: 'pg-pin' }, 'p. ' + p.label); text.append(here); }
+        else if (others.has(i)) text.append(h('span', { class: 'pg-pin other' }, 'p. ' + others.get(i)));
+        text.append(h('span', { class: 'pg-w', title: 'Page ' + p.label + ' begins here', onclick: () => move(p, i) }, wordText(w)));
+        // what stands between this word and the next, as written (punctuation, spaces)
+        const nx = W[i + 1];
+        const gap = nx && nx.node === w.node ? w.node.nodeValue.slice(w.off + w.len, nx.off) : (w.node.nodeValue.slice(w.off + w.len).replace(/\s+$/, '') + ' ');
+        text.append(gap.replace(/\s+/g, ' ') || (nx && nx.node !== w.node ? ' ' : ''));
+      }
+      const warn = !p.skip && ((prev && p.e <= prev.e) ? `This puts p. ${p.label} before the marker of p. ${prev.label}.` : (next && p.e >= next.e) ? `This puts p. ${p.label} after the marker of p. ${next.label}.` : '');
+      const [icon, what] = MARK[state(p)];
+      out.append(h('div', { class: 'pg-review' },
+        h('div', { class: 'pg-rhead' },
+          h('b', null, `p. ${p.label}`), h('span', { class: 'muted' }, ` · PDF page ${p.pdfPage} · ${icon} ${what}`),
+          h('span', { class: 'spacer' }),
+          h('button', { class: 'chip', disabled: idx === 0, onclick: () => { openAt = idx - 1; drawResult(); } }, '← Previous'),
+          h('button', { class: 'chip', disabled: idx >= list.length - 1, onclick: () => { openAt = idx + 1; drawResult(); } }, 'Next →'),
+          h('button', { class: 'chip', onclick: () => { openAt = null; drawResult(); } }, 'Back to the list')),
+        h('div', { class: 'pg-cols' },
+          h('div', { class: 'pg-left' }, canvas),
+          h('div', { class: 'pg-right' },
+            h('div', { class: 'pg-begins' }, h('span', { class: 'muted' }, 'The PDF page begins: '), h('i', null, pdfStartLines(p))),
+            text,
+            warn ? h('div', { class: 'pg-warn' }, warn) : null,
+            h('div', { class: 'pg-acts' },
+              h('span', { class: 'muted' }, 'Click the word the page begins with, or:'),
+              h('button', { class: 'chip', disabled: p.skip, onclick: () => move(p, p.e - 1) }, '◀ One word'),
+              h('button', { class: 'chip', disabled: p.skip, onclick: () => move(p, p.e + 1) }, 'One word ▶'),
+              p.skip ? h('button', { class: 'chip', onclick: () => { p.skip = false; p.touched = true; drawResult(); } }, 'Put this page back')
+                : h('button', { class: 'chip', onclick: () => { p.skip = true; p.touched = true; drawResult(); } }, 'Leave this page out'),
+              p.hand ? null : h('button', { class: 'chip', disabled: p.skip, onclick: () => { p.hand = true; p.touched = true; p.conf = 1; drawResult(); } }, 'It is right'))))));
+      if (here) requestAnimationFrame(() => { text.scrollTop = Math.max(0, here.offsetTop - text.offsetTop - 80); });
+    };
     const drawResult = () => {
       clear(out);
       save.hidden = !result;
       go.textContent = result ? 'Find again' : 'Find the pages';
+      box.style.width = result ? '1000px' : '760px';
       if (!result) return;
-      const pl = result.align.placements;
-      const sure = pl.filter(p => p.conf >= 0.75), unsure = pl.filter(p => p.conf >= 0.4 && p.conf < 0.75), lost = pl.filter(p => p.conf < 0.4);
+      const pl = result.align.placements, count = k => pl.filter(p => state(p) === k).length;
       out.append(
         h('div', { class: 'pg-sum' },
           h('b', null, `${pl.length} printed pages${pl.length ? ` (pp. ${pl[0].label}–${pl[pl.length - 1].label})` : ''}`),
           h('span', null, ` · numbers ${result.pdf.source}`),
-          h('div', null, `${sure.length} placed with confidence · ${unsure.length} uncertain · ${lost.length} not found (put where they most likely begin)`),
+          h('div', null, [`${count('sure')} placed with confidence`, `${count('unsure')} uncertain`, `${count('lost')} not found`, count('hand') ? `${count('hand')} checked by hand` : '', count('out') ? `${count('out')} left out` : ''].filter(Boolean).join(' · ')),
           result.epub.existing ? h('div', { class: 'muted' }, `The EPUB had ${result.epub.existing} page markers already; they are replaced.`) : null,
-          result.pdf.ocrPages ? h('div', { class: 'muted' }, `${result.pdf.ocrPages} scanned ${result.pdf.ocrPages === 1 ? 'page was' : 'pages were'} read with text recognition (OCR).`) : null),
-        unsure.length + lost.length ? h('div', { class: 'pg-list' }, [...unsure, ...lost].sort((a, b) => a.e - b.e).slice(0, 60).map(p =>
-          h('div', { class: 'pg-item' + (p.conf < 0.4 ? ' lost' : '') }, h('b', null, 'p. ' + p.label),
-            h('span', null, 'PDF: ', h('i', null, p.pdfStart)), h('span', null, 'EPUB: ', h('i', null, p.epubStart))))) : null);
+          result.pdf.ocrPages ? h('div', { class: 'muted' }, `${result.pdf.ocrPages} scanned ${result.pdf.ocrPages === 1 ? 'page was' : 'pages were'} read with text recognition (OCR).`) : null));
+      if (openAt != null) return review(openAt);
+      const list = shown();
+      out.append(h('div', { class: 'pg-filter' },
+        h('button', { class: 'chip' + (filter === 'unsure' ? ' on' : ''), onclick: () => { filter = 'unsure'; drawResult(); } }, `To check (${count('unsure') + count('lost')})`),
+        h('button', { class: 'chip' + (filter === 'all' ? ' on' : ''), onclick: () => { filter = 'all'; drawResult(); } }, `All pages (${pl.length})`),
+        h('span', { class: 'muted', style: { fontSize: '12px' } }, 'Click a page to see it beside the PDF and move its marker.')));
+      if (!list.length) { out.append(h('div', { class: 'pg-none muted' }, 'Nothing left to check. Save the EPUB, or look through all pages.')); return; }
+      out.append(h('div', { class: 'pg-list' }, list.map((p, i) => {
+        const [icon, what] = MARK[state(p)];
+        return h('div', { class: 'pg-item ' + state(p), onclick: () => { openAt = i; drawResult(); } },
+          h('b', null, h('span', { class: 'pg-mark', title: what }, icon), ' p. ' + p.label),
+          h('span', null, 'PDF: ', h('i', null, p.pdfStart)), h('span', null, 'EPUB: ', h('i', null, p.skip ? '(left out)' : p.epubStart)));
+      })));
     };
     go.addEventListener('click', async () => {
       go.disabled = true; result = null; drawResult();
       try {
         const [pd, ed] = await Promise.all([pdfFile.arrayBuffer(), epubFile.arrayBuffer()]);
-        stop = { stop: false };
+        stop = { stop: false }; filter = 'unsure'; openAt = null;
+        const pdfBytes = new Uint8Array(pd.slice(0));   // pdf.js may take the buffer it reads; this copy shows the pages in the check
         result = await pgPaginate(pd, ed, Object.assign({ stop }, opts), m => { status.textContent = m; });
+        result.pdfBytes = pdfBytes;
         status.textContent = '';
       } catch (e) { console.error(e); status.textContent = e.message || String(e); }
       go.disabled = false; drawResult();
@@ -526,11 +610,12 @@ function paginateDialog() {
       try {
         status.textContent = 'Writing the EPUB…';
         const blob = await pgWrite(result.epub, result.align.placements, opts);
+        const kept = result.align.placements.filter(p => !p.skip).length;
         const name = epubFile.name.replace(/\.epub$/i, '') + ' (with page numbers).epub';
         const file = new File([blob], name, { type: 'application/epub+zip' });
         if (opts.download) { const a = h('a', { href: URL.createObjectURL(file), download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
         if (opts.toLibrary) { status.textContent = 'Adding to the library…'; await wcToLibrary([file], opts.category); }
-        toast(`Made “${name}” with ${result.align.placements.length} printed pages`, 4000);
+        toast(`Made “${name}” with ${kept} printed pages`, 4000);
         close();
       } catch (e) { console.error(e); status.textContent = 'Could not write the EPUB: ' + (e.message || e); save.disabled = false; }
     });
@@ -540,5 +625,5 @@ function paginateDialog() {
       h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Cancel'), go, save));
     draw();
     wcDropTarget = addFiles;
-  }, () => { wcDropTarget = null; stop.stop = true; });   // closing stops a reading in progress
+  }, () => { wcDropTarget = null; stop.stop = true; if (result && result.view) result.view.then(d => d.destroy()).catch(() => {}); });   // closing stops a reading in progress
 }
