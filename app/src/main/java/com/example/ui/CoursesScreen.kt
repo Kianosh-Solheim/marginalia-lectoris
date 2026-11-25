@@ -88,6 +88,7 @@ private fun niceDate(iso: String): String = runCatching { LocalDate.parse(iso).f
 
 @Composable
 fun CoursesScreen(onClose: () -> Unit, onOpenDocument: (DocumentEntity) -> Unit, onOpenDocumentAtPage: (DocumentEntity, Int, HighlightEntity?) -> Unit) {
+    openSession.value?.let { (cid, sid, title) -> SessionView(cid, sid, title) { openSession.value = null }; return }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var data by remember { mutableStateOf<JSONObject?>(null) }
@@ -227,7 +228,14 @@ private fun CourseDetail(row: CourseRow, docs: Map<Long, DocumentEntity>, notes:
                     Spacer(Modifier.weight(1f))
                     Text(x.optString("kind", "Lecture"), fontSize = 12.sp, color = CGrey)
                 }
-                if (x.optString("topic").isNotBlank() || x.optString("lecturer").isNotBlank()) Text(x.optString("topic") + (x.optString("lecturer").takeIf { it.isNotBlank() }?.let { (if (x.optString("topic").isBlank()) "" else " · ") + it } ?: ""), fontFamily = FontFamily.Serif, fontSize = 17.sp, color = Color.Black)
+                // Tap the topic for the session's own page: slides, a note per slide, recording, transcript.
+                val sessionTitle = x.optString("topic").ifBlank { x.optString("kind", "Lecture") }
+                Row(Modifier.fillMaxWidth().clickable { openSession.value = Triple(c.optString("id"), x.optString("id"), listOf(c.optString("code"), sessionTitle).filter { it.isNotBlank() }.joinToString(" · ")) },
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(sessionTitle + (x.optString("lecturer").takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), fontFamily = FontFamily.Serif, fontSize = 17.sp, color = Color.Black, modifier = Modifier.weight(1f))
+                    Text(if (x.optJSONObject("slides") != null) "Slides · notes ›" else "Open ›", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black,
+                        modifier = Modifier.border(1.dp, Color.Black).padding(horizontal = 6.dp, vertical = 2.dp))
+                }
                 if (x.optString("note").isNotBlank()) Text(x.optString("note"), fontSize = 13.sp, color = CGrey)
                 x.optJSONArray("readings").objects().forEach { r ->
                     ReadingLine(r, r.optLong("docId", 0L).takeIf { it > 0 }?.let { docs[it] }, notes, tag,

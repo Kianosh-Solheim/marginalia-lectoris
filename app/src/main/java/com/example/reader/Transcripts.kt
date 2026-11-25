@@ -55,15 +55,26 @@ object Transcripts {
     }.sortedBy { it.start }
 
     /** Stores the transcript, writes the Markdown file and the highlights' spoken comments. */
-    suspend fun save(context: Context, doc: DocumentEntity, info: Recordings.Info, segments: List<Segment>, language: String, engine: String) {
+    suspend fun save(context: Context, doc: DocumentEntity?, info: Recordings.Info, segments: List<Segment>, language: String, engine: String) {
         val o = JSONObject().put("language", language).put("engine", engine).put("created", System.currentTimeMillis())
             .put("segments", JSONArray().apply { segments.forEach { put(JSONObject().put("start", it.start).put("end", it.end).put("text", it.text)) } })
         File(info.audio.parentFile, info.id + ".transcript.json").writeText(o.toString(1))
         val tl = Recordings.timeline(info)
         tl.put("language", language)
         runCatching { info.timeline.writeText(tl.toString(1)) }
-        val settings = AppDatabase.getInstance(context).settingsDao().getSettingsSnapshot() ?: SettingsEntity()
-        info.transcript.writeText(markdown(doc, info, tl, segments, language, engine, settings))
+        // A course session's recording: speech placed under the slides; the session note lists it.
+        if (tl.optString("kind") == "session") {
+            val ref = CourseSessions.find(context, tl.optString("courseId"), tl.optString("sessionId"))
+            val dir = ref?.let { CourseSessions.folder(context, it) }
+            info.transcript.writeText(CourseSessions.transcriptMarkdown(info, tl, segments, language, engine, dir))
+            if (ref != null && dir != null) CourseSessions.writeMoc(ref, dir, CourseSessions.docTitles(context, ref))
+            Recordings.changes.value++
+            return
+        }
+        val db = AppDatabase.getInstance(context)
+        val book = doc ?: db.documentDao().getDocumentById(tl.optLong("documentId")) ?: throw IllegalStateException("The book of this recording is no longer in the library.")
+        val settings = db.settingsDao().getSettingsSnapshot() ?: SettingsEntity()
+        info.transcript.writeText(markdown(book, info, tl, segments, language, engine, settings))
         SpokenComments.init(context)
         SpokenComments.setForRecording(info.id, spokenComments(info, tl, segments))
         Recordings.changes.value++
@@ -147,7 +158,7 @@ object Transcripts {
         return listOf(AiProvider.GEMINI, AiProvider.OPENAI, AiProvider.CUSTOM).filter { p.hasKey(it) }
     }
 
-    fun startOnline(context: Context, doc: DocumentEntity, info: Recordings.Info, provider: AiProvider, language: String) {
+    fun startOnline(context: Context, doc: DocumentEntity?, info: Recordings.Info, provider: AiProvider, language: String) {
         val app = context.applicationContext
         if (progress.value.containsKey(info.id)) return
         setProgress(info.id, "Starting…")

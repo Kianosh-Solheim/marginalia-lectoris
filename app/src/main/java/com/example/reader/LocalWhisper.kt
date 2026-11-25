@@ -66,9 +66,9 @@ object LocalWhisper {
 
     fun modelsOnDevice(context: Context): List<String> = modelDir(context).listFiles()?.filter { it.extension == "bin" }?.map { it.name }.orEmpty()
 
-    private var pending: Triple<DocumentEntity, Recordings.Info, String>? = null
+    private var pending: Triple<DocumentEntity?, Recordings.Info, String>? = null
 
-    fun start(context: Context, doc: DocumentEntity, info: Recordings.Info, language: String) {
+    fun start(context: Context, doc: DocumentEntity?, info: Recordings.Info, language: String) {
         if (state.value.busy) { Transcripts.lastError.value = Transcripts.lastError.value + (info.id to "Another recording is being transcribed on the tablet. Wait until it finishes."); return }
         if (!WhisperNative.available) { Transcripts.lastError.value = Transcripts.lastError.value + (info.id to "Offline transcription is not part of this build. Use the PC or an online service."); return }
         pending = Triple(doc, info, language)
@@ -128,7 +128,7 @@ object LocalWhisper {
                     }
                 }
                 status(service, info.id, "Linking to your highlights…")
-                Transcripts.save(service, AppDatabase.getInstance(service).documentDao().getDocumentById(doc.id) ?: doc, info,
+                Transcripts.save(service, doc?.let { AppDatabase.getInstance(service).documentDao().getDocumentById(it.id) ?: it }, info,
                     segs.filter { it.text.isNotBlank() && !it.text.startsWith("[") }, lang.ifBlank { "auto" }, "Whisper on the tablet")
             } catch (e: Throwable) {
                 Log.w("Whisper", "failed", e)

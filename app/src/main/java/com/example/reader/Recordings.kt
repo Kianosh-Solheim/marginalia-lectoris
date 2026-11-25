@@ -46,7 +46,9 @@ object Recordings {
 
     data class Active(
         val docId: Long, val title: String, val audio: File, val timeline: File,
-        val startedAt: Long, val paused: Boolean, val elapsedMs: Long
+        val startedAt: Long, val paused: Boolean, val elapsedMs: Long,
+        /** "<courseId>/<sessionId>" when recording a course session (docId is then 0). */
+        val sessionKey: String = "", val slide: Int = 0
     )
 
     /** The recording running now, or null. [Active.elapsedMs] is refreshed about once a second. */
@@ -64,6 +66,7 @@ object Recordings {
     private var watcher: Job? = null
     private var ticker: Job? = null
     private var lastPage = -1
+    private var appContext: Context? = null
 
     /** Audio time now, in ms (pauses not counted). */
     fun now(): Long {
@@ -91,8 +94,10 @@ object Recordings {
         val transcribed: Boolean get() = transcript.isFile
     }
 
-    fun list(context: Context, doc: DocumentEntity, settings: SettingsEntity): List<Info> {
-        val dir = folderFor(context, doc, settings)
+    fun list(context: Context, doc: DocumentEntity, settings: SettingsEntity): List<Info> = listIn(folderFor(context, doc, settings))
+
+    /** The recordings in a folder (a book's or a course session's "Recordings"). */
+    fun listIn(dir: File): List<Info> {
         return (dir.listFiles() ?: emptyArray()).filter { it.isFile && it.extension.equals("m4a", true) }
             .mapNotNull { info(it) }
             .sortedByDescending { it.startedAt }
@@ -111,6 +116,8 @@ object Recordings {
     fun find(context: Context, doc: DocumentEntity, settings: SettingsEntity, id: String): Info? =
         list(context, doc, settings).firstOrNull { it.id == id }
 
+    internal fun remember(context: Context) { appContext = context.applicationContext }
+
     fun timeline(info: Info): JSONObject = runCatching { JSONObject(info.timeline.readText()) }.getOrDefault(JSONObject())
 
     // ------------------------------------------------------------------------ start / stop
@@ -120,6 +127,15 @@ object Recordings {
         val app = context.applicationContext
         val i = Intent(app, RecordingService::class.java).setAction(RecordingService.ACTION_START)
             .putExtra("docId", doc.id).putExtra("page", page).putExtra("label", pageLabel).putExtra("chapter", chapter)
+        if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(i) else app.startService(i)
+    }
+
+    /** Records a course session (lecture): slide changes go on the timeline instead of pages. */
+    fun startSession(context: Context, courseId: String, sessionId: String, slide: Int) {
+        if (active.value != null) return
+        val app = context.applicationContext
+        val i = Intent(app, RecordingService::class.java).setAction(RecordingService.ACTION_START)
+            .putExtra("course", courseId).putExtra("session", sessionId).putExtra("page", slide)
         if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(i) else app.startService(i)
     }
 
@@ -133,6 +149,52 @@ object Recordings {
     }
 
     /** Called by the service. Returns false when the microphone could not be started. */
+    @SuppressLint("MissingPermission")
+    internal suspend fun beginSession(context: Context, courseId: String, sessionId: String, slide: Int): Boolean {
+        val ref = CourseSessions.find(context, courseId, sessionId) ?: run { error.value = "The session was not found in the courses."; return false }
+        val dir = CourseSessions.recordingsDir(CourseSessions.folder(context, ref))
+        val title = "${ref.base} – ${ref.topic}"
+        val stamp = SimpleDateFormat("yyyy-MM-dd HH.mm", Locale.ROOT).format(Date())
+        var base = MarkdownExporter.sanitizeFilename("${ref.base} – $stamp")
+        var n = 2
+        while (File(dir, "$base.m4a").exists()) base = MarkdownExporter.sanitizeFilename("${ref.base} – $stamp ($n)").also { n++ }
+        val audio = File(dir, "$base.m4a")
+        val tl = File(dir, "$base.timeline.json")
+        val r = runCatching { startRecorder(context, audio, 16000, 40000) }
+            .recoverCatching { startRecorder(context, audio, 44100, 64000) }
+            .getOrElse { e -> error.value = "Could not use the microphone: ${e.message}"; Log.w(TAG, "start", e); audio.delete(); return false }
+        recorder = r
+        synchronized(events) { while (events.length() > 0) events.remove(0) }
+        meta = JSONObject().put("version", 1).put("kind", "session").put("courseId", courseId).put("sessionId", sessionId)
+            .put("documentId", 0).put("documentTitle", title).put("started", System.currentTimeMillis())
+            .put("audio", audio.name).put("language", "auto")
+        clockBase = 0; clockStart = SystemClock.elapsedRealtime(); lastPage = -1
+        active.value = Active(0, title, audio, tl, System.currentTimeMillis(), false, 0, "$courseId/$sessionId", slide)
+        error.value = ""
+        add(JSONObject().put("type", "start").put("slide", slide))
+        lastPage = slide
+        ticker = scope.launch {
+            var tick = 0
+            while (active.value != null) {
+                active.value?.let { a -> active.value = a.copy(elapsedMs = now()) }
+                if (++tick % 10 == 0) save()
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+        save()
+        return true
+    }
+
+    /** The session page reports the slide showing (1-based). Repeats are ignored. */
+    fun slide(courseId: String, sessionId: String, slide: Int) {
+        val a = active.value ?: return
+        if (a.sessionKey != "$courseId/$sessionId" || slide <= 0 || slide == lastPage) return
+        lastPage = slide
+        active.value = a.copy(slide = slide)
+        add(JSONObject().put("type", "slide").put("slide", slide))
+        save()
+    }
+
     @SuppressLint("MissingPermission")
     internal suspend fun begin(context: Context, docId: Long, page: Int, label: String, chapter: String): Boolean {
         val db = AppDatabase.getInstance(context)
@@ -223,6 +285,7 @@ object Recordings {
         active.value = null
         if (!a.audio.isFile || a.audio.length() < 1024) { a.audio.delete(); a.timeline.delete() }
         changes.value++
+        if (a.sessionKey.isNotBlank()) { val tl = JSONObject(meta.toString()); appContext?.let { c -> scope.launch { runCatching { CourseSessions.refreshFromTimeline(c, tl) } } } }
     }
 
     // ------------------------------------------------------------------------ the timeline
@@ -248,6 +311,7 @@ object Recordings {
     /** The reader reports where you are. Repeated reports of the same page are ignored. */
     fun page(docId: Long, page: Int, label: String, chapter: String) {
         val a = active.value ?: return
+        if (a.sessionKey.isNotBlank()) return
         if (page == lastPage || page <= 0) return
         lastPage = page
         add(JSONObject().put("type", "page").put("page", page).put("label", label).put("chapter", chapter)
@@ -319,8 +383,14 @@ class RecordingService : Service() {
                 val page = intent.getIntExtra("page", 1)
                 val label = intent.getStringExtra("label").orEmpty()
                 val chapter = intent.getStringExtra("chapter").orEmpty()
+                val course = intent.getStringExtra("course").orEmpty()
+                val session = intent.getStringExtra("session").orEmpty()
+                Recordings.remember(applicationContext)
                 scope.launch {
-                    val ok = kotlinx.coroutines.withContext(Dispatchers.IO) { Recordings.begin(this@RecordingService, docId, page, label, chapter) }
+                    val ok = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        if (course.isNotBlank()) Recordings.beginSession(this@RecordingService, course, session, page)
+                        else Recordings.begin(this@RecordingService, docId, page, label, chapter)
+                    }
                     if (!ok) { stopSelfNow(); return@launch }
                     foreground(null)
                     // Keep the notification's pause/resume button in step.

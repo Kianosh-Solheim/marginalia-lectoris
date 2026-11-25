@@ -234,6 +234,7 @@ function route() {
   if (parts[0] === 'lexicon') { state.tab = 'lexicon'; return showLexicon(); }
   if (parts[0] === 'courses') { state.tab = 'courses'; return showCourses(parts); }
   if (parts[0] === 'calendar') { state.tab = 'calendar'; return showCalendar(parts); }
+  if (parts[0] === 'course' && parts[1] && parts[2] === 'session' && parts[3]) { state.tab = 'courses'; return showSession(decodeURIComponent(parts[1]), decodeURIComponent(parts[3]), params); }
   if (parts[0] === 'course' && parts[1]) { state.tab = 'courses'; return showCourse(decodeURIComponent(parts[1])); }
   if (parts[0] === 'matrix') { state.tab = 'matrix'; return parts[1] ? showMatrix(parts[1]) : showMatrices(); }
   if (parts[0] === 'writing') { state.tab = 'writing'; return showWriting(params); }
@@ -539,7 +540,9 @@ async function showTranscript(d, r) {
 /** Whisper running in this browser (transformers.js). The model is downloaded once and kept by the browser. */
 const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6';
 let asrCache = {};
-async function transcribeHere(d, r, reload) {
+/** [pathOf] gives the recording's API path for a tail (audio, transcript); a book's recording by default. */
+async function transcribeHere(d, r, reload, pathOf) {
+  const rp = pathOf || (t => recPath(d, r, t));
   askLanguage(r, async lang => {
     const gpu = !!navigator.gpu;
     let cancelled = false;
@@ -576,7 +579,7 @@ async function transcribeHere(d, r, reload) {
       const asr = await asrCache[key];
       if (cancelled) return;
       setP('Reading the recording…', 0);
-      const buf = await (await fetch('/api/' + recPath(d, r, 'audio'), { credentials: 'same-origin' })).arrayBuffer();
+      const buf = await (await fetch('/api/' + rp('audio'), { credentials: 'same-origin' })).arrayBuffer();
       const actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       const audio = await actx.decodeAudioData(buf);
       actx.close();
@@ -598,7 +601,7 @@ async function transcribeHere(d, r, reload) {
         });
       }
       setP('Linking to your highlights on the tablet…', 1);
-      await api(recPath(d, r, 'transcript'), { method: 'POST', json: { segments, language: detected || 'auto', engine: 'Whisper in the browser (' + (gpu ? 'WebGPU' : 'CPU') + ')' } });
+      await api(rp('transcript'), { method: 'POST', json: { segments, language: detected || 'auto', engine: 'Whisper in the browser (' + (gpu ? 'WebGPU' : 'CPU') + ')' } });
       close(); toast('Transcribed — saved on the tablet'); reload();
     } catch (e) {
       console.error(e);
