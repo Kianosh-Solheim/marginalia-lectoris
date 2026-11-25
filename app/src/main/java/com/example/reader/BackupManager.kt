@@ -52,7 +52,10 @@ import kotlin.coroutines.coroutineContext
  *
  * Restoring checks every file against the manifest and refuses a backup made by a newer version of
  * the app before anything is changed, and swaps the data in so a failure rolls back to the library
- * as it was. API keys are never included (they are encrypted to this device).
+ * as it was.
+ *
+ * A backup can be encrypted with a password ([BackupCrypto]); only then can it also carry the API
+ * keys (settings/secrets.json), which otherwise never leave the tablet.
  */
 object BackupManager {
     private const val TAG = "Backup"
@@ -73,6 +76,13 @@ object BackupManager {
         "pdf", "epub", "jpg", "jpeg", "png", "webp", "gif", "heic", "avif", "mp3", "m4a", "m4b", "aac",
         "ogg", "opus", "flac", "mp4", "webm", "zip", "cbz", "docx", "pptx", "xlsx", "odp", "odt", "gz", "7z"
     )
+
+    /** How a backup is made. The password is never stored. */
+    class Options(val password: CharArray? = null, val includeKeys: Boolean = false) {
+        val encrypted: Boolean get() = password != null && password.isNotEmpty()
+    }
+
+    class PasswordRequiredException : IllegalArgumentException("This backup is encrypted. Enter its password.")
 
     data class Progress(val stage: String, val done: Long, val total: Long, val current: String = "") {
         val fraction: Float get() = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
@@ -195,6 +205,7 @@ object BackupManager {
     suspend fun writeBackup(
         context: Context,
         out: OutputStream,
+        options: Options = Options(),
         onProgress: (Progress) -> Unit = {}
     ): Int = withContext(Dispatchers.IO) {
         val app = context.applicationContext
@@ -211,7 +222,17 @@ object BackupManager {
         val files = JSONArray()
         val buffer = ByteArray(1 shl 16)
 
-        ZipOutputStream(out.buffered(1 shl 16)).use { zip ->
+        val sink: OutputStream = if (options.encrypted) BackupCrypto.EncryptingOutputStream(out, options.password!!) else out
+        val secrets = if (options.encrypted && options.includeKeys) AiPreferences(app).exportSecrets() else null
+        ZipOutputStream(sink.buffered(1 shl 16)).use { zip ->
+            if (secrets != null && secrets.length() > 0) {
+                val bytes = secrets.toString().toByteArray(Charsets.UTF_8)
+                zip.putNextEntry(ZipEntry("settings/secrets.json"))
+                zip.write(bytes)
+                zip.closeEntry()
+                files.put(JSONObject().put("entry", "settings/secrets.json").put("bytes", bytes.size)
+                    .put("sha256", MessageDigest.getInstance("SHA-256").digest(bytes).hex()))
+            }
             for (item in plan.items) {
                 coroutineContext.ensureActive()
                 val f = item.file
@@ -241,6 +262,8 @@ object BackupManager {
                 .put("app", app.packageName)
                 .put("appVersion", appVersion(app))
                 .put("dbVersion", dbVersion)
+                .put("encrypted", options.encrypted)
+                .put("includesKeys", secrets != null && secrets.length() > 0)
                 .put("paths", JSONObject()
                     .put("root", plan.root.path)
                     .put("files", app.filesDir.canonicalPath)
@@ -263,10 +286,10 @@ object BackupManager {
         plan.books
     }
 
-    suspend fun backupToUri(context: Context, uri: Uri, onProgress: (Progress) -> Unit = {}): Int = withContext(Dispatchers.IO) {
+    suspend fun backupToUri(context: Context, uri: Uri, options: Options = Options(), onProgress: (Progress) -> Unit = {}): Int = withContext(Dispatchers.IO) {
         val out = context.contentResolver.openOutputStream(uri, "wt") ?: error("Could not open the backup destination.")
         try {
-            out.use { writeBackup(context, it, onProgress) }
+            out.use { writeBackup(context, it, options, onProgress) }
         } catch (t: Throwable) {
             // Don't leave a half-written backup behind that looks like a good one.
             runCatching { android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri) }
@@ -356,10 +379,27 @@ object BackupManager {
         } ?: -1L
     }.getOrDefault(-1L)
 
-    suspend fun restoreFromUri(context: Context, uri: Uri, onProgress: (Progress) -> Unit = {}) {
+    /** True when the backup behind [uri] is password-encrypted. */
+    suspend fun isEncrypted(context: Context, uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        context.contentResolver.openInputStream(uri)?.use { isEncrypted(it) } ?: false
+    }
+
+    suspend fun isEncrypted(file: File): Boolean = withContext(Dispatchers.IO) { file.inputStream().use { isEncrypted(it) } }
+
+    private fun isEncrypted(input: InputStream): Boolean {
+        val first = ByteArray(4)
+        var n = 0
+        while (n < 4) { val r = input.read(first, n, 4 - n); if (r < 0) break; n += r }
+        return BackupCrypto.isEncrypted(first.copyOf(n))
+    }
+
+    suspend fun restoreFromUri(
+        context: Context, uri: Uri, password: CharArray? = null, restoreKeys: Boolean = true,
+        onProgress: (Progress) -> Unit = {}
+    ) {
         val size = sizeOf(context, uri)
         val input = context.contentResolver.openInputStream(uri) ?: error("Could not open the backup file.")
-        input.use { restore(context, it, size, onProgress) }
+        input.use { restore(context, it, size, password, restoreKeys, onProgress) }
     }
 
     /**
@@ -370,6 +410,8 @@ object BackupManager {
         context: Context,
         input: InputStream,
         sizeHint: Long = -1L,
+        password: CharArray? = null,
+        restoreKeys: Boolean = true,
         onProgress: (Progress) -> Unit = {}
     ) = withContext(Dispatchers.IO) {
         val app = context.applicationContext
@@ -390,7 +432,15 @@ object BackupManager {
             // 1. Unpack into staging, hashing every file and validating entry paths.
             val hashes = HashMap<String, String>()
             val counting = CountingInputStream(input.buffered(1 shl 16))
-            ZipInputStream(counting).use { zip ->
+            counting.mark(8)
+            val encrypted = isEncrypted(counting)
+            counting.reset()
+            val plain: InputStream = if (encrypted) {
+                if (password == null || password.isEmpty()) throw PasswordRequiredException()
+                onProgress(Progress("Checking the password", 0, 0))
+                BackupCrypto.DecryptingInputStream(counting, password).buffered(1 shl 16)
+            } else counting
+            ZipInputStream(plain).use { zip ->
                 val buffer = ByteArray(1 shl 16)
                 var e = zip.nextEntry
                 while (e != null) {
@@ -451,6 +501,10 @@ object BackupManager {
             // 4. Swap database, settings and the app's data folder in, with rollback on failure.
             onProgress(Progress("Installing", 0, 0))
             install(app, staging, replaceAll = format >= 2)
+            if (restoreKeys) File(staging, "settings/secrets.json").takeIf { it.isFile }?.let { f ->
+                runCatching { AiPreferences(app).importSecrets(JSONObject(f.readText())) }
+                    .onFailure { Log.w(TAG, "Could not restore the API keys", it) }
+            }
             onProgress(Progress("Done", 1, 1))
         } finally {
             staging.deleteRecursively()
@@ -726,6 +780,9 @@ object BackupManager {
 
     private class CountingInputStream(input: InputStream) : FilterInputStream(input) {
         var count = 0L; private set
+        private var marked = 0L
+        override fun mark(readlimit: Int) { super.mark(readlimit); marked = count }
+        override fun reset() { super.reset(); count = marked }
         override fun read(): Int = super.read().also { if (it >= 0) count++ }
         override fun read(b: ByteArray, off: Int, len: Int): Int = super.read(b, off, len).also { if (it > 0) count += it }
         override fun skip(n: Long): Long = super.skip(n).also { count += it }

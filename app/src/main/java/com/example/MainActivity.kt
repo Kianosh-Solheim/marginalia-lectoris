@@ -78,6 +78,8 @@ class MainActivity : FragmentActivity() {
         setContent {
             ReadMarkTheme {
                 com.example.ui.KeepScreenOnEffect(this)
+                // A restore started from the web view waits for confirmation here.
+                com.example.ui.WebRestoreRequestDialog()
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val openWidgetMgr by openWidgetManagerRequest.collectAsStateWithLifecycle()
                     val configWidgetId by configuringAppWidgetId.collectAsStateWithLifecycle()
