@@ -185,6 +185,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             var fresh = repository.getDocumentById(document.id) ?: document
+            fresh = runCatching { com.example.reader.ItemFiles.repairType(getApplication(), fresh) }.getOrDefault(fresh)
             // A note made in another file of the item opens in that file (which becomes the main file).
             if (targetHighlight != null) com.example.reader.ItemFiles.noteFile(getApplication(), fresh.id, targetHighlight.id)?.let { name ->
                 runCatching { fresh = com.example.reader.ItemFiles.setMain(getApplication(), fresh, name) }

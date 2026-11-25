@@ -171,6 +171,19 @@ object ItemFiles {
         return nd
     }
 
+    /**
+     * The item's file type, put right when it no longer fits its main file (a PDF card whose main file is an
+     * EPUB, or the other way round): readers choose their engine by the type, and a wrong one fails to open it.
+     */
+    suspend fun repairType(ctx: Context, d: DocumentEntity): DocumentEntity {
+        if (!isFileItem(d)) return d
+        val want = when (File(d.filePath).extension.lowercase()) { "pdf" -> "PDF"; "epub" -> "EPUB"; else -> return d }
+        if (d.fileType.equals(want, true)) return d
+        val nd = d.copy(fileType = want, epubVersion = "", epubLayoutType = "")
+        AppDatabase.getInstance(ctx).documentDao().updateDocument(nd)
+        return nd
+    }
+
     fun typeFor(f: File): String = when (f.extension.lowercase()) {
         "pdf" -> "PDF"
         "zip" -> if (runCatching { DaisyParserEngine.isDaisyZipArchive(f) }.getOrDefault(false)) "DAISY" else "EPUB"

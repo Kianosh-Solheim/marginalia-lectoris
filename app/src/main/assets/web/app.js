@@ -62,8 +62,10 @@ function fmtDate(ms) { try { return new Date(ms).toLocaleDateString(undefined, {
 function pct(p) { return Math.round((p || 0) * 100); }
 function splitTags(s) { return (s || '').split(',').map(t => t.trim().replace(/^#/, '')).filter(Boolean); }
 function norm(s) { return (s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, ''); }
-function isPdf(d) { return (d.fileType || '').toUpperCase() === 'PDF' || /\.pdf$/i.test(d.fileName || ''); }
-function isEpub(d) { return (d.fileType || '').toUpperCase() === 'EPUB' || /\.epub$/i.test(d.fileName || ''); }
+// The file itself decides (its name), the stored type only when there is no name: a card whose type is out of date
+// (a PDF card whose main file is now an EPUB) must not open the EPUB in the PDF reader ("Invalid PDF structure").
+function isPdf(d) { const n = d.fileName || ''; if (/\.pdf$/i.test(n)) return true; if (/\.(epub|zip|html?|xhtml|txt|md|markdown)$/i.test(n)) return false; return (d.fileType || '').toUpperCase() === 'PDF'; }
+function isEpub(d) { const n = d.fileName || ''; if (/\.epub$/i.test(n)) return true; if (/\.(pdf|html?|xhtml|txt|md|markdown)$/i.test(n)) return false; return (d.fileType || '').toUpperCase() === 'EPUB'; }
 function canRead(d) { return isPdf(d) || isEpub(d); }
 
 class ApiError extends Error { constructor(status, msg) { super(msg); this.status = status; } }

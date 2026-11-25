@@ -283,7 +283,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
     }
 
     private suspend fun docRoute(req: HttpRequest, id: Long, rest: List<String>): HttpResponse {
-        val doc = db.documentDao().getDocumentById(id) ?: throw NoSuchElementException("This book is no longer in the library.")
+        val doc = com.example.reader.ItemFiles.repairType(context, db.documentDao().getDocumentById(id) ?: throw NoSuchElementException("This book is no longer in the library."))
         val m = req.method
         val what = rest.firstOrNull().orEmpty()
         return when {
