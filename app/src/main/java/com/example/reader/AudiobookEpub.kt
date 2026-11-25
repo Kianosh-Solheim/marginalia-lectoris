@@ -111,7 +111,8 @@ object AudiobookEpub {
                         p.s.id = id
                     } else {
                         // Crossing other markup: the sentence's paragraph stands for it.
-                        val block = nodes[p.a].parents().firstOrNull { it.normalName() in BLOCKS } ?: continue
+                        val parent = nodes[p.a].parent() as? Element ?: continue
+                        val block = (listOf(parent) + parent.parents()).firstOrNull { it.normalName() in BLOCKS } ?: continue
                         if (block.id().isBlank()) block.attr("id", id)
                         p.s.id = block.id()
                     }
