@@ -1,0 +1,41 @@
+# Builds the app for a pull request (no release, no signing), so compile errors show before merging.
+name: Check build
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Android SDK
+        run: |
+          test -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}" || { echo "::error::No Android SDK on this runner"; exit 1; }
+          yes | "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - name: Speech recognition source (whisper.cpp, MIT)
+        run: git clone --quiet --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp app/src/main/cpp/whisper.cpp
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '9.3.1'
+      - name: Build (unsigned)
+        env:
+          APP_VERSION_CODE: '1'
+          APP_VERSION_NAME: '0.0-check'
+        run: |
+          set -o pipefail
+          gradle --no-configuration-cache :app:assembleRelease 2>&1 | tee build.log || {
+            grep -E '^e: |error:|What went wrong' -A2 build.log | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+            exit 1
+          }

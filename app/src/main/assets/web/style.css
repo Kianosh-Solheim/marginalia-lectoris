@@ -1579,3 +1579,47 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .rabook .abplayer { border: none; padding: 0; background: transparent; gap: 4px; }
 mark.audio-hit { background: transparent; color: transparent; border-bottom: 2.5px solid #111; padding: 0; }
 html[data-theme="dark"] mark.audio-hit { border-bottom-color: #eee; }
+
+/* ---------------------------------------------------------------- a course session's page (session.js) */
+.crssesslink { text-decoration: none; border-bottom: 1px solid var(--line); } .crssesslink:hover { border-bottom-color: var(--ink); }
+.sesspage { max-width: 1500px; }
+.sesspage.tablet { padding-top: 8px; }
+.sesshead h1 { margin: 2px 0 6px; }
+.sesshead .crschips a.crschip { text-decoration: none; } .sesshead .crschips a.crschip:hover { border-color: var(--ink); }
+.sessbody { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); gap: 18px; align-items: start; margin-top: 10px; }
+@media (max-width: 980px) { .sessbody { grid-template-columns: 1fr; } }
+.sessleft, .sessright { min-width: 0; }
+.sesstitle { font-size: 12px; margin-bottom: 4px; }
+.sessstage { position: relative; width: 100%; background: #fff; border: 1px solid var(--ink); overflow: hidden; }
+.sessslide { position: absolute; inset: 0; overflow: hidden; }
+.sessslide > * { position: absolute !important; left: 0; top: 0; }
+.sessnav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.sesscount { min-width: 64px; text-align: center; }
+.sesstools { gap: 4px; flex-wrap: wrap; }
+.sessthumbs { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 8px; }
+.sessthumb { position: relative; flex: 0 0 120px; padding: 0; border: 1px solid var(--line); background: #fff; cursor: pointer; }
+.sessthumb.on { border: 2px solid var(--ink); }
+.sessthumbimg { position: relative; width: 100%; overflow: hidden; pointer-events: none; }
+.sessthumbimg > * { position: absolute !important; left: 0; top: 0; }
+.sessthumb .n { position: absolute; left: 2px; bottom: 2px; font-size: 10px; background: #fff; padding: 0 3px; border: 1px solid var(--line); }
+.sessthumb .marks { position: absolute; right: 2px; top: 2px; font-size: 10px; background: var(--ink); color: #fff; padding: 0 3px; }
+.sessthumb .marks:empty { display: none; }
+.sessnoslides { border: 1px dashed var(--ink); padding: 24px; text-align: center; }
+.sesstabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.sesstabs .chip.rec:not(.on) { border-color: var(--red); color: var(--red); }
+.sesspane { border-top: 1px solid var(--ink); padding-top: 10px; }
+.sessnote { width: 100%; min-height: 180px; font-family: var(--serif); font-size: 15px; line-height: 1.5; padding: 8px; border: 1px solid var(--ink); resize: vertical; }
+.sessspeaker { margin: 6px 0; font-size: 13px; color: var(--grey); } .sessspeaker p { margin: 2px 0; }
+.sessallnotes { display: flex; flex-direction: column; gap: 2px; }
+.sessnoteline { text-align: left; border: 0; border-bottom: 1px solid var(--rule); background: none; padding: 4px 2px; cursor: pointer; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sessnoteline.on { background: var(--wash); }
+.sesstranscript { max-height: 62vh; }
+.sesstrsec { padding: 2px 6px; border-left: 3px solid transparent; }
+.sesstrsec.on { border-left-color: var(--ink); background: var(--wash); }
+.sesstrsec p { cursor: pointer; } .sesstrsec p:hover { text-decoration: underline dotted; }
+.sessrecnow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px; border: 2px solid var(--ink); }
+.sessrecnow .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--red); } .sessrecnow .dot.paused { background: #9ca3af; }
+.sesspick { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; margin-top: 4px; }
+.sesspick .crsres.on { border-color: var(--ink); background: var(--wash); }
+.sesspage.eink .sessthumb .marks, .sesspage.eink .sessrecnow .dot { background: #000; }
+.sesspage.eink .sesstrsec.on, .sesspage.eink .sessnoteline.on { background: none; text-decoration: underline; }

@@ -170,6 +170,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 val text = kotlinx.coroutines.withContext(Dispatchers.IO) { com.example.reader.Courses.pdfText(context, bytes) }
                 return HttpResponse.json(JSONObject().put("text", text).toString()).header("Cache-Control", "no-store")
             }
+            // A session's own page: slide notes, ink, recordings (kept in the session's folder).
+            s.size >= 4 && s[0] == "courses" && s[1] == "session" -> return sessionRoute(req, s[2], s[3], s.drop(4))
             s.size == 2 && s[0] == "courses" && m == "POST" -> {
                 val b = runCatching { JSONObject(req.bodyText()) }.getOrDefault(JSONObject())
                 val out = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -1183,8 +1185,14 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 .toString()).header("Cache-Control", "no-store")
         }
         val info = recs.find(context, doc, settings, rest[0]) ?: throw NoSuchElementException("No such recording.")
+        return recordingActions(doc, info, req, rest.getOrNull(1).orEmpty())
+    }
+
+    /** One recording (a book's, or a course session's when [doc] is null): audio, timeline, transcript, transcribe, delete. */
+    private suspend fun recordingActions(doc: DocumentEntity?, info: com.example.reader.Recordings.Info, req: HttpRequest, action: String): HttpResponse {
+        val recs = com.example.reader.Recordings
         val m = req.method
-        return when (rest.getOrNull(1).orEmpty()) {
+        return when (action) {
             "audio" -> HttpResponse.FileBody(info.audio, "audio/mp4", if (req.query["download"] == "1") info.audio.name else null)
             "timeline" -> HttpResponse.json(recs.timeline(info).toString())
             "transcript" -> when (m) {
@@ -1217,8 +1225,98 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 }
                 HttpResponse.json(recJson(info).toString())
             }
-            "" -> if (m == "DELETE") { recs.delete(info); HttpResponse.json("{}") } else HttpResponse.json(recJson(info).toString())
+            "" -> if (m == "DELETE") {
+                val tl = recs.timeline(info)
+                recs.delete(info)
+                if (tl.optString("kind") == "session") com.example.reader.CourseSessions.refreshFromTimeline(context, tl)
+                HttpResponse.json("{}")
+            } else HttpResponse.json(recJson(info).toString())
             else -> throw NoSuchElementException("Unknown address.")
+        }
+    }
+
+    /**
+     * A course session's page: notes per slide, pen marks, recording (on the tablet's microphone) and its recordings.
+     *   GET                      everything the page shows
+     *   PUT  notes {slide, text} · PUT ink {slide, strokes} · POST slide {slide}
+     *   POST record {action: start | stop | pause | resume, slide}
+     *   …/recordings/<id>[/audio|timeline|transcript|transcribe]
+     */
+    private suspend fun sessionRoute(req: HttpRequest, courseId: String, sessionId: String, rest: List<String>): HttpResponse {
+        val cs = com.example.reader.CourseSessions
+        val recs = com.example.reader.Recordings
+        val ref = withContext(Dispatchers.IO) { cs.find(context, courseId, sessionId) } ?: throw NoSuchElementException("No such session.")
+        val key = "$courseId/$sessionId"
+        val m = req.method
+        if (rest.isEmpty() && m == "GET") {
+            // Looking does not make the folder; it is made with the first note, pen mark or recording.
+            val dir = withContext(Dispatchers.IO) { cs.existing(context, ref) }
+            val active = recs.active.value
+            val mine = active?.takeIf { it.sessionKey == key }
+            return HttpResponse.json(JSONObject()
+                    .put("folder", dir?.absolutePath ?: JSONObject.NULL)
+                    .put("notes", if (dir == null) JSONObject() else withContext(Dispatchers.IO) { cs.notes(dir) })
+                    .put("ink", if (dir == null) JSONObject() else cs.ink(dir))
+                    .put("recordings", JSONArray().apply { if (dir != null) recs.listIn(File(dir, "Recordings")).forEach { put(recJson(it)) } })
+                    .put("recording", if (mine == null) JSONObject.NULL else JSONObject().put("elapsedMs", mine.elapsedMs).put("paused", mine.paused).put("slide", mine.slide))
+                    .put("busyElsewhere", active != null && mine == null)
+                    .put("error", recs.error.value.ifBlank { null } ?: JSONObject.NULL)
+                    .put("mic", androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                    .put("online", JSONArray().apply { com.example.reader.Transcripts.onlineProviders(context).forEach { put(JSONObject().put("id", it.name).put("label", it.label)) } })
+                    .put("offline", com.example.reader.WhisperNative.available)
+                    .toString()).header("Cache-Control", "no-store")
+        }
+        if (rest == listOf("slide") && m == "POST") {
+            val slide = JSONObject(req.bodyText()).optInt("slide")
+            if (slide > 0) cs.lastSlide[key] = slide
+            recs.slide(courseId, sessionId, slide)
+            return HttpResponse.json("{\"ok\":true}")
+        }
+        val dir = cs.folder(context, ref)
+        return when {
+            rest == listOf("notes") && (m == "PUT" || m == "POST") -> {
+                val b = JSONObject(req.bodyText(4 * 1024 * 1024))
+                withContext(Dispatchers.IO) {
+                    cs.setNote(ref, dir, b.optInt("slide"), b.optString("text"))
+                    cs.writeMoc(ref, dir, cs.docTitles(context, ref))
+                }
+                HttpResponse.json("{\"ok\":true}")
+            }
+            rest == listOf("ink") && (m == "PUT" || m == "POST") -> {
+                val b = JSONObject(req.bodyText(8 * 1024 * 1024))
+                val slide = b.optInt("slide"); require(slide in 1..2000) { "Bad slide number." }
+                withContext(Dispatchers.IO) { cs.setInk(dir, slide, b.optJSONArray("strokes") ?: JSONArray()) }
+                HttpResponse.json("{\"ok\":true}")
+            }
+            rest == listOf("moc") && m == "POST" -> {
+                withContext(Dispatchers.IO) { cs.writeMoc(ref, dir, cs.docTitles(context, ref)) }
+                HttpResponse.json("{\"ok\":true}")
+            }
+            rest == listOf("record") && m == "POST" -> {
+                val b = JSONObject(req.bodyText())
+                val active = recs.active.value
+                when (b.optString("action")) {
+                    "start" -> {
+                        require(active == null) { if (active?.sessionKey == key) "Already recording." else "The tablet is already recording something else (${active?.title}). Stop that first." }
+                        require(androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            "The app may not use the tablet's microphone yet. Open the session on the tablet and press Record there once to allow it."
+                        }
+                        recs.error.value = ""
+                        try { recs.startSession(context, courseId, sessionId, b.optInt("slide", 1)) }
+                        catch (e: Exception) { throw IllegalStateException("The tablet could not start recording (${e.javaClass.simpleName}). Bring Marginalia to the front on the tablet and try again.") }
+                    }
+                    "stop" -> if (active?.sessionKey == key) recs.stop(context)
+                    "pause" -> if (active?.sessionKey == key) recs.pause(context)
+                    "resume" -> if (active?.sessionKey == key) recs.resume(context)
+                    else -> throw IllegalArgumentException("Unknown action.")
+                }
+                HttpResponse.json("{\"ok\":true}")
+            }
+            rest.firstOrNull() == "recordings" && rest.size >= 2 -> {
+                val info = recs.listIn(cs.recordingsDir(dir)).firstOrNull { it.id == rest[1] } ?: throw NoSuchElementException("No such recording.")
+                recordingActions(null, info, req, rest.getOrNull(2).orEmpty())
+            }
+            else -> throw NoSuchElementException("No such action")
         }
     }
 
