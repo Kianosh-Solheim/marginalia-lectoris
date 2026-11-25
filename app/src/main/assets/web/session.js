@@ -100,6 +100,7 @@ async function showSession(courseId, sessionId, params) {
     if (done) { clearTimeout(inkTimer); const slide = cur + 1; inkTimer = setTimeout(() => api(P('ink'), { method: 'PUT', json: { slide, strokes: ink[slide] || [] } }).then(markThumbs).catch(fail), 500); }
   });
   let inkTimer = 0;
+  if (eink) inkL.color('#111111');
   stageWrap.append(inkL.el);
   const counter = h('span', { class: 'mono sesscount' });
   const tools = h('span', { class: 'row sesstools' });
@@ -221,7 +222,7 @@ async function showSession(courseId, sessionId, params) {
     noteHead.textContent = count ? `Your note on slide ${cur + 1}` : 'Notes';
     mine.disabled = !count;
     mine.value = count ? (notes[cur + 1] || '') : '';
-    if (!count) mine.placeholder = 'Add the slides to write a note for each slide.';
+    mine.placeholder = count ? 'Your note on this slide… (saved as its own note in the session’s folder, ready for Obsidian)' : 'Add the slides to write a note for each slide.';
     saved.textContent = '';
     const sp = deck && deck.slideInfo ? (deck.slideInfo(cur).notes || '').trim() : '';
     speaker.hidden = !sp;
