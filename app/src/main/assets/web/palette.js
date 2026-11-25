@@ -23,7 +23,7 @@ function paletteActions() {
     ['Take notes here (from the tablet)', 'Switch', () => relaySet(!relay.on), 'relay companion tablet highlight note dialog computer'],
     ['Tablet screen', 'Go to', go('#/screen'), 'remote control mirror see tablet display'],
     ['LaTeX: compile a test document', 'LaTeX', () => latexTest(), 'tex pdf compiler biblatex test'],
-    ['Search in the texts', 'Search', () => { if (window.paletteTextMode) window.paletteTextMode(); }, 'find full text words inside books articles pdf ctrl+f', true],
+    ['Search in the texts', 'Search', () => { if (window.paletteTextMode) window.paletteTextMode('texts'); }, 'find full text words inside books articles pdf ctrl+f', true],
     ['Notes', 'Go to', go('#/notes'), 'vault highlights'], ['Writing', 'Go to', go('#/writing'), 'documents editor'], ['Courses', 'Go to', go('#/courses'), 'programme semester course outline syllabus readings teachers'], ['Calendar', 'Go to', go('#/calendar'), 'google calendar week month events timetable schedule'], ['Lexicon', 'Go to', go('#/lexicon'), 'words vocabulary definitions dictionary glossary'], ['Literature matrices', 'Go to', go('#/matrix'), 'matrix table compare sources synthesis'], ['Search in the texts', 'Go to', go('#/search'), 'full text find'],
     ['Zotero', 'Go to', go('#/zotero'), ''], ['Presentations', 'Go to', go('#/presentations'), 'slides'], ['Settings', 'Go to', go('#/settings'), 'preferences backup ai'],
     ['New writing document', 'Do', async () => { try { const d = await api('writing', { method: 'POST', json: { title: 'Untitled' } }); location.hash = '#/write/' + encodeURIComponent(d.id) + '?new=1'; } catch (e) { fail(e); } }, 'create write'],
@@ -66,7 +66,7 @@ function openPalette(opts) {
   const bk = window.paletteBook || null;
   const PLACE = bk ? 'Search in this text — or open a book, a note, a document, or type what you want to do…' : 'Open a book, a note, a document — or type what you want to do…';
   const input = h('input', { type: 'search', placeholder: PLACE, spellcheck: 'false' });
-  const list = h('div', { class: 'pallist' }), side = h('div', { class: 'palside' }), foot = h('div', { class: 'palfoot muted' });
+  const tabs = h('div', { class: 'paltabs', role: 'tablist' }), list = h('div', { class: 'pallist' }), side = h('div', { class: 'palside' }), foot = h('div', { class: 'palfoot muted' });
   let items = [], sel = 0, data = { books: [], notes: [], docs: [] };
   let preview = localGet('ml.palPreview', '') === '1', sub = null, bibTimer = 0;   // sub: { of, query, sel } while the actions of one item are listed
   const close = () => { back.remove(); document.removeEventListener('keydown', onKey, true); clearTimeout(bibTimer); clearTimeout(bookTimer); };
@@ -96,19 +96,27 @@ function openPalette(opts) {
   ].filter(Boolean); };
   const actsOf = it => !it ? [] : it.doc ? bookActs(it.doc) : it.note ? noteActs(it.note) : [];
   const bookItem = (d, s) => ({ title: d.title, kind: d.category === 'ARTICLE' ? 'Article' : 'Book', s, doc: d, more: abstractOf(d) });
+  const noteItem = (n, s) => ({ title: n.title || 'Untitled', kind: 'Note', sub: n.documentTitle || '', note: n, s });
+  const docHay = d => norm([d.title, d.author, d.displayAuthor, d.year, d.citekey, d.tags, abstractOf(d)].join(' '));
+  // ---- what is searched: one tab each, ← → moves between them
+  const SCOPES = (bk ? [['this', 'This text']] : []).concat([['all', 'Everything'], ['sources', 'Sources'], ['books', 'Books'], ['articles', 'Articles'], ['notes', 'Notes'], ['texts', 'Texts']]);
+  const PLACES = { this: 'Search in this text…', all: PLACE, sources: 'Search your books and articles…', books: 'Search your books…', articles: 'Search your articles…',
+    notes: 'Search your notes: titles, tags, quotes and what you wrote…', texts: 'Search in the texts of your books and articles…' };
+  let scope = 'all';
   // ---- the texts of the books: searched on the tablet a moment after typing stops
-  let textMode = false, texts = null, textSeq = 0, textTimer = 0, textBusy = false;
-  const TEXT_PLACE = bk ? 'Search in this text…' : 'Search in the texts of your books and articles…';
-  // With a text open, Ctrl+F means this text only; a leading / still searches all the books.
-  const bookOnly = () => !!bk && textMode && !input.value.trim().startsWith('/');
+  let texts = null, textSeq = 0, textTimer = 0, textBusy = false;
+  // This text only on its own tab; a leading / searches the texts of all the books from any tab.
+  const bookOnly = () => scope === 'this' && !input.value.trim().startsWith('/');
   const textQuery = () => { const v = input.value.trim(); return v.startsWith('/') ? v.slice(1).trim() : v; };
-  const textOn = () => (textMode && !bk) || input.value.trim().startsWith('/');
+  const textOn = () => scope === 'texts' || input.value.trim().startsWith('/');
+  /** The tab that is lit: a leading / counts as the Texts tab. */
+  const tabOf = () => textOn() ? 'texts' : scope;
   // ---- this text: searched a moment after typing stops
   let inBook = null, bookSeq = 0, bookTimer = 0, bookBusy = false;
   const searchBook = () => {
     clearTimeout(bookTimer);
     const q = input.value.trim();
-    if (!bk || sub || q.length < 2 || q.startsWith('/')) { inBook = null; bookBusy = false; return; }
+    if (!bk || sub || q.length < 2 || q.startsWith('/') || !(scope === 'all' || scope === 'this')) { inBook = null; bookBusy = false; return; }
     if (inBook && inBook.q === q) return;
     bookBusy = true;
     bookTimer = setTimeout(async () => {
@@ -134,7 +142,7 @@ function openPalette(opts) {
   const searchTexts = () => {
     clearTimeout(textTimer);
     const q = textQuery();
-    if (sub || q.length < 3 || bookOnly()) { texts = null; textBusy = false; return; }
+    if (sub || q.length < 3 || bookOnly() || !(scope === 'all' || textOn())) { texts = null; textBusy = false; return; }
     if (texts && texts.q === q) return;
     textBusy = true;
     textTimer = setTimeout(async () => {
@@ -171,7 +179,7 @@ function openPalette(opts) {
       const q = input.value.trim();
       if (q.length >= 2) {
         out.push({ title: `Show “${q}” in the search panel`, kind: 'This text', sub: 'All matches, ↑ ↓, Fuzzy/Exact, this chapter only, Ask AI', run: () => bk.open(q, null) });
-        out.push({ title: `Search all books for “${q}”`, kind: 'Search', sub: 'The texts of your library', keepOpen: true, run: () => { textMode = false; input.value = '/' + q; input.placeholder = PLACE; box.classList.remove('textmode'); find(); input.focus(); } });
+        out.push({ title: `Search all books for “${q}”`, kind: 'Search', sub: 'The texts of your library', keepOpen: true, run: () => { input.value = q; setScope('texts'); } });
       }
       items = out; if (fromTexts !== true) sel = 0; draw(); return;
     }
@@ -187,6 +195,18 @@ function openPalette(opts) {
       items = out; sel = Math.min(sel, Math.max(0, out.length - 1)); draw(); return;
     }
     const push = (arr, max) => arr.filter(x => x.s >= 0).sort((a, b) => b.s - a.s).slice(0, max).forEach(x => out.push(x));
+    if (scope === 'notes') {
+      // Notes: what they say counts too, not only their titles.
+      if (!terms.length) data.notes.slice().sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 100).forEach(n => out.push(noteItem(n, 0)));
+      else push(data.notes.map(n => noteItem(n, score(norm([n.title, n.tags, n.documentTitle, n.documentAuthor, n.highlightedText, n.userNotes].join(' ')), n.title || '', terms))), 100);
+      items = out; if (fromTexts !== true) sel = 0; draw(); return;
+    }
+    if (scope === 'sources' || scope === 'books' || scope === 'articles') {
+      const docs = scope === 'sources' ? data.books : data.books.filter(d => (d.category === 'ARTICLE') === (scope === 'articles'));
+      if (!terms.length) docs.slice().sort((a, b) => (b.lastRead || 0) - (a.lastRead || 0)).slice(0, 100).forEach(d => out.push(bookItem(d, 0)));
+      else push(docs.map(d => bookItem(d, score(docHay(d), d.title, terms))), 100);
+      items = out; if (fromTexts !== true) sel = 0; draw(); return;
+    }
     if (!terms.length) {
       // Nothing typed: what was open last, then the places.
       data.books.slice().sort((a, b) => (b.lastRead || 0) - (a.lastRead || 0)).slice(0, 5).forEach(d => out.push(bookItem(d, 0)));
@@ -195,10 +215,10 @@ function openPalette(opts) {
       // In a text: its matches come first.
       bookItems(5).forEach(x => out.push(x));
       push(actions.map(a => Object.assign({ s: score(a.hay, a.title, terms) + 1 }, a)).map(a => { if (a.s < 1) a.s = -1; return a; }), 5);
-      push(data.books.map(d => bookItem(d, score(norm([d.title, d.author, d.displayAuthor, d.year, d.citekey, d.tags, abstractOf(d)].join(' ')), d.title, terms))), 8);
+      push(data.books.map(d => bookItem(d, score(docHay(d), d.title, terms))), 8);
       push(data.docs.map(d => ({ title: d.title, kind: 'Document', sub: `${d.words || 0} words`, s: score(norm(d.title), d.title, terms), run: () => { location.hash = '#/write/' + encodeURIComponent(d.id); } })), 4);
-      push(data.notes.map(n => ({ title: n.title || 'Untitled', kind: 'Note', sub: n.documentTitle || '', note: n, s: score(norm([n.title, n.tags, n.documentTitle].join(' ')), n.title || '', terms) })), 8);
-      // A taste of what the texts say; Ctrl+F shows more.
+      push(data.notes.map(n => noteItem(n, score(norm([n.title, n.tags, n.documentTitle].join(' ')), n.title || '', terms))), 8);
+      // A taste of what the texts say; the Texts tab shows more.
       textItems(5).forEach(x => out.push(x));
     }
     items = out; if (fromTexts !== true) sel = 0; draw();
@@ -241,12 +261,14 @@ function openPalette(opts) {
   };
   const drawFoot = () => {
     const it = items[sel], k = (key, what) => [h('kbd', null, key), ' ' + what];
+    const home = bk ? 'this' : 'texts', fLabel = scope === home ? 'search everything' : bk ? 'only this text' : 'search the texts';
     const parts = sub ? [k('↑ ↓', 'move'), k('Enter', 'do it'), k('Esc', 'back')]
       : it && it.doc ? [k('Enter', 'open'), k('Tab', 'all actions'), k('Ctrl+G', 'its notes'), k('Ctrl+D', 'copy citation'), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
       : it && it.note ? [k('Enter', 'open'), k('Tab', 'all actions'), k('Ctrl+Enter', 'open the source there'), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
-      : it && it.inBook ? [k('Enter', 'go there'), k('↑ ↓', 'move'), k('Ctrl+F', bookOnly() ? 'search everything' : 'only this text'), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
-      : it && it.textHit ? [k('Enter', 'open at the place'), k('Ctrl+Enter', 'full search'), k('Ctrl+F', textMode ? 'everything' : 'only texts'), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
-      : [k('↑ ↓', 'move'), k('Enter', 'open'), k('Ctrl+F', textMode ? 'search everything' : bk ? 'only this text' : 'search the texts'), k('Ctrl+I', preview ? 'hide preview' : 'preview'), k('Esc', 'close')];
+      : it && it.inBook ? [k('Enter', 'go there'), k('↑ ↓', 'move'), k('Ctrl+F', fLabel), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
+      : it && it.textHit ? [k('Enter', 'open at the place'), k('Ctrl+Enter', 'full search'), k('Ctrl+F', fLabel), k('Ctrl+I', preview ? 'hide preview' : 'preview')]
+      : [k('↑ ↓', 'move'), k('Enter', 'open'), k('Ctrl+F', fLabel), k('Ctrl+I', preview ? 'hide preview' : 'preview'), k('Esc', 'close')];
+    if (!sub) parts.unshift(k('← →', 'change type'));
     clear(foot); parts.forEach((p, i) => { if (i) foot.append(' · '); foot.append(...p); });
   };
   /** Citations need the item's details; they are fetched from the tablet a moment after it is highlighted. */
@@ -257,12 +279,22 @@ function openPalette(opts) {
     bibTimer = setTimeout(() => { api('doc/' + id).then(det => { paletteBib.set(id, det); if (sub && sub.of.doc && sub.of.doc.id === id) find(); }).catch(() => {}); }, 180);
   };
   const mark = () => { list.querySelectorAll('.palrow').forEach((r, k) => r.classList.toggle('on', k === sel)); drawSide(); drawFoot(); warm(); };
+  const drawTabs = () => {
+    clear(tabs); tabs.hidden = !!sub;
+    const on = tabOf();
+    SCOPES.forEach(([id, label]) => tabs.append(h('button', { type: 'button', role: 'tab', class: id === on ? 'on' : '', 'aria-selected': id === on ? 'true' : 'false',
+      onmousedown: e => e.preventDefault(), onclick: () => setScope(id) }, label)));
+  };
   const draw = () => {
-    clear(list);
+    clear(list); drawTabs();
     box.classList.toggle('wide', preview);
     if (sub) list.append(h('div', { class: 'palsub' }, h('span', { class: 'muted' }, 'Actions for '), h('b', null, sub.of.title)));
     if (!items.length && bookOnly()) list.append(h('div', { class: 'palnone muted' }, input.value.trim().length < 2 ? 'Write what to look for in this text.' : bookBusy ? 'Searching this text…' : 'Nothing found in this text.'));
-    else if (!items.length) list.append(h('div', { class: 'palnone muted' }, textOn() ? (textQuery().length < 3 ? 'Write at least three letters to search in the texts.' : textBusy ? 'Searching the texts…' : 'Nothing found in the texts.') : 'Nothing found.'));
+    else if (!items.length) {
+      const blank = !input.value.trim(), none = { sources: 'No books or articles yet.', books: 'No books yet.', articles: 'No articles yet.', notes: 'No notes yet.' };
+      list.append(h('div', { class: 'palnone muted' }, textOn() ? (textQuery().length < 3 ? 'Write at least three letters to search in the texts.' : textBusy ? 'Searching the texts…' : 'Nothing found in the texts.')
+        : blank && none[scope] ? none[scope] : 'Nothing found.'));
+    }
     if (bookOnly() && bookBusy && items.length) list.prepend(h('div', { class: 'palsec' }, h('span', { class: 'muted' }, 'Searching this text…')));
     if (textOn() && textBusy && items.length) list.prepend(h('div', { class: 'palsec' }, h('span', { class: 'muted' }, 'Searching the texts…')));
     if (texts && texts.indexing && texts.indexing.running && textOn()) list.append(h('div', { class: 'palnone muted', style: { fontSize: '12px' } }, 'Some books are still being read for search; more may turn up later.'));
@@ -277,7 +309,7 @@ function openPalette(opts) {
         const n = inBook ? inBook.hits.length : 0;
         list.append(h('div', { class: 'palsec' }, h('span', null, 'In this text'), h('span', { class: 'muted' }, `${n} match${n === 1 ? '' : 'es'}${inBook && inBook.status && inBook.status.state && inBook.status.state !== 'done' ? ' so far' : ''}${bookOnly() ? '' : ' · Ctrl+F shows all'}`)));
       }
-      if (it.textHit && !it.inBook && (i === 0 || !items[i - 1].textHit || items[i - 1].inBook)) list.append(h('div', { class: 'palsec' }, h('span', null, 'In the texts'), h('span', { class: 'muted' }, texts && texts.q ? `${textTotal()} page${textTotal() === 1 ? '' : 's'} in ${texts.books.length} book${texts.books.length === 1 ? '' : 's'}${textOn() ? '' : ' · Ctrl+F shows more'}` : '')));
+      if (it.textHit && !it.inBook && (i === 0 || !items[i - 1].textHit || items[i - 1].inBook)) list.append(h('div', { class: 'palsec' }, h('span', null, 'In the texts'), h('span', { class: 'muted' }, texts && texts.q ? `${textTotal()} page${textTotal() === 1 ? '' : 's'} in ${texts.books.length} book${texts.books.length === 1 ? '' : 's'}${textOn() ? '' : ' · the Texts tab (→) shows more'}` : '')));
       const row = h('div', { class: 'palrow' + (i === sel ? ' on' : '') + (it.doc ? ' book' : '') + (it.textHit ? ' hit' : ''), onclick: e => { sel = i; if (sub) { close(); it.run(e); } else act(it, e.ctrlKey && e.shiftKey ? 'Ctrl+Shift+Enter' : e.altKey ? 'Alt+Enter' : e.ctrlKey ? 'Ctrl+Enter' : 'Enter') || act(it, 'Enter'); } }, ...[
         cover,
         it.textHit ? h('span', { class: 'palmain' }, h('span', { class: 'palt' }, it.title, it.inBook ? null : it.hitDoc ? h('span', { class: 'muted', style: { fontWeight: 400 } }, '  ' + meta(it.hitDoc)) : (it.noteHit ? h('span', { class: 'muted', style: { fontWeight: 400 } }, '  ' + (it.noteHit.docTitle || '')) : null)),
@@ -293,15 +325,17 @@ function openPalette(opts) {
     const on = list.querySelector('.palrow.on'); if (on) on.scrollIntoView({ block: 'nearest' });
     drawSide(); drawFoot(); warm();
   };
-  const setTextMode = on => {
-    textMode = on; texts = null; inBook = null;
-    if (on && input.value.trim().startsWith('/')) input.value = input.value.trim().slice(1).trim();
-    input.placeholder = on ? TEXT_PLACE : PLACE; box.classList.toggle('textmode', on);
+  /** Switches what is searched; what is typed stays. */
+  const setScope = s => {
+    if (!SCOPES.some(x => x[0] === s)) s = 'all';
+    scope = s; texts = null; inBook = null; textBusy = false; bookBusy = false;
+    if (s !== 'all' && input.value.trim().startsWith('/')) input.value = input.value.trim().slice(1).trim();
+    input.placeholder = PLACES[s]; box.classList.toggle('textmode', s === 'texts' || s === 'this');
     find(); input.focus();
   };
-  window.paletteTextMode = () => setTextMode(true);
+  window.paletteTextMode = which => setScope(which || (bk ? 'this' : 'texts'));
   const enter = it => { sub = { of: it, query: input.value, sel }; input.value = ''; input.placeholder = 'Choose an action…'; sel = 0; find(); };
-  const leave = () => { const s = sub; sub = null; input.value = s.query; input.placeholder = PLACE; find(); sel = Math.min(s.sel, Math.max(0, items.length - 1)); draw(); };
+  const leave = () => { const s = sub; sub = null; input.value = s.query; input.placeholder = PLACES[scope]; find(); sel = Math.min(s.sel, Math.max(0, items.length - 1)); draw(); };
   const onKey = e => {
     const ctrl = e.ctrlKey || e.metaKey, letter = e.key.length === 1 ? e.key.toUpperCase() : e.key;
     const key = (ctrl ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (e.shiftKey && e.key === 'Enter' ? 'Shift+' : '') + letter;
@@ -310,7 +344,13 @@ function openPalette(opts) {
     else if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); mark(); const on = list.querySelector('.palrow.on'); if (on) on.scrollIntoView({ block: 'nearest' }); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); mark(); const on = list.querySelector('.palrow.on'); if (on) on.scrollIntoView({ block: 'nearest' }); }
     else if (key === 'Ctrl+I') { stop(); preview = !preview; localSet('ml.palPreview', preview ? '1' : ''); draw(); }
-    else if (key === 'Ctrl+F' && !sub) { stop(); setTextMode(!textMode); }
+    else if (key === 'Ctrl+F' && !sub) { stop(); const home = bk ? 'this' : 'texts'; setScope(scope === home ? 'all' : home); }
+    else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !sub && !ctrl && !e.altKey && !e.shiftKey) {
+      // ← → change what is searched (Home and End still move in the text; Shift and Ctrl+arrows still select and jump words).
+      stop();
+      const i = SCOPES.findIndex(x => x[0] === tabOf()), j = Math.max(0, Math.min(SCOPES.length - 1, i + (e.key === 'ArrowRight' ? 1 : -1)));
+      if (j !== i) setScope(SCOPES[j][0]);
+    }
     else if (e.key === 'Tab') { stop(); if (sub) leave(); else if (actsOf(items[sel]).length) enter(items[sel]); }
     else if (e.key === 'Backspace' && sub && !input.value) { stop(); leave(); }
     else if (sub) { if (e.key === 'Enter') { stop(); const it = items[sel]; if (it) { close(); it.run(e); } } }
@@ -320,16 +360,17 @@ function openPalette(opts) {
   document.addEventListener('keydown', onKey, true);
   input.addEventListener('input', find);
   back.addEventListener('mousedown', e => { if (e.target === back) close(); });
-  box.append(input, h('div', { class: 'palbody' }, list, side), foot);
+  box.append(input, tabs, h('div', { class: 'palbody' }, list, side), foot);
   back.append(box); document.body.append(back);
   input.focus();
-  if (opts.book && bk) { input.value = bk.q(); setTextMode(true); input.select(); }
+  if (opts.book && bk) { input.value = bk.q(); setScope('this'); input.select(); }
   find();
   paletteLoad(false).then(d => { data = d; find(); });
 }
 function shortcutsDialog() {
   const rows = [
     ['Everywhere', [['Ctrl+K', 'Open anything, or do anything (the command palette)'], ['?', 'This list']]],
+    ['In the command palette', [['← →', 'Change what is searched: This text (in a book), Everything, Sources (books and articles), Books, Articles, Notes, Texts'], ['Ctrl+F', 'Straight to This text in a book, otherwise to Texts; again goes back to Everything'], ['/ at the start', 'Search the texts of all the books, from any tab']]],
     ['In the command palette, on a book or article', [['Enter', 'Open in the reader'], ['Ctrl+Enter', 'Open its book page'], ['Tab', 'List everything that can be done with it'], ['Ctrl+G', 'Go to its notes'], ['Ctrl+I', 'Show or hide the preview with the whole abstract'], ['Ctrl+D', 'Copy the in-text citation'], ['Ctrl+B', 'Copy the full reference'], ['Ctrl+Y', 'Copy the citekey'], ['Ctrl+Shift+Enter', 'Open in a new tab'], ['Alt+Enter', 'Open in the other pane']]],
     ['Notes', [['/', 'Search the notes'], ['[[', 'In a note: link to another note']]],
     ['Reader', [['← →', 'Previous and next page'], ['Ctrl+F', 'Search in this text (the palette; Enter goes to the match)'], ['Ctrl+K', 'The palette: matches in this text first, then everything else']]],
