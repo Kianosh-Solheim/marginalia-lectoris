@@ -15,6 +15,9 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.example.data.StorageManager
 import com.example.data.local.AppDatabase
+import com.example.data.local.SyncTriggers
+import android.content.ContentValues
+import android.database.Cursor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -80,6 +83,24 @@ object BackupManager {
     /** How a backup is made. The password is never stored. */
     class Options(val password: CharArray? = null, val includeKeys: Boolean = false) {
         val encrypted: Boolean get() = password != null && password.isNotEmpty()
+    }
+
+    /** Replace: the library becomes the backup. Merge: the backup is combined with what is here, newest change wins. */
+    enum class RestoreMode { REPLACE, MERGE }
+
+    class MergeReport {
+        var booksAdded = 0; var booksUpdated = 0; var booksRemoved = 0
+        var highlightsAdded = 0; var highlightsUpdated = 0; var highlightsRemoved = 0
+        var filesAdded = 0; var filesUpdated = 0; var skippedOlder = 0
+        fun summary(): String {
+            val parts = mutableListOf<String>()
+            fun part(n: Int, what: String) { if (n > 0) parts += "$n $what" }
+            part(booksAdded, "books added"); part(booksUpdated, "books updated"); part(booksRemoved, "books removed (deleted elsewhere)")
+            part(highlightsAdded, "highlights added"); part(highlightsUpdated, "highlights updated"); part(highlightsRemoved, "highlights removed (deleted elsewhere)")
+            part(filesAdded, "files added"); part(filesUpdated, "files updated")
+            if (skippedOlder > 0) parts += "$skippedOlder older items kept as they are here"
+            return if (parts.isEmpty()) "Merged: nothing in the backup was newer than what is here." else "Merged: " + parts.joinToString(", ") + "."
+        }
     }
 
     class PasswordRequiredException : IllegalArgumentException("This backup is encrypted. Enter its password.")
@@ -395,16 +416,17 @@ object BackupManager {
 
     suspend fun restoreFromUri(
         context: Context, uri: Uri, password: CharArray? = null, restoreKeys: Boolean = true,
-        onProgress: (Progress) -> Unit = {}
-    ) {
+        mode: RestoreMode = RestoreMode.REPLACE, onProgress: (Progress) -> Unit = {}
+    ): String {
         val size = sizeOf(context, uri)
         val input = context.contentResolver.openInputStream(uri) ?: error("Could not open the backup file.")
-        input.use { restore(context, it, size, password, restoreKeys, onProgress) }
+        return input.use { restore(context, it, size, password, restoreKeys, mode, onProgress) }
     }
 
     /**
-     * Restores a backup over the current library. Call [restartApp] afterwards so every screen and
-     * setting is reloaded from the restored data.
+     * Restores a backup: over the current library ([RestoreMode.REPLACE]) or combined with it
+     * ([RestoreMode.MERGE]). Returns a line describing what happened. Call [restartApp] afterwards
+     * so every screen and setting is reloaded.
      */
     suspend fun restore(
         context: Context,
@@ -412,8 +434,9 @@ object BackupManager {
         sizeHint: Long = -1L,
         password: CharArray? = null,
         restoreKeys: Boolean = true,
+        mode: RestoreMode = RestoreMode.REPLACE,
         onProgress: (Progress) -> Unit = {}
-    ) = withContext(Dispatchers.IO) {
+    ): String = withContext(Dispatchers.IO) {
         val app = context.applicationContext
         val dataDir = File(app.applicationInfo.dataDir)
         // Staging lives next to filesDir (same disk), so swapping in is a rename, not a copy.
@@ -494,31 +517,43 @@ object BackupManager {
                 "This backup comes from a newer version of the app (library version $backupVersion, this app has $currentVersion). Update the app first, then restore."
             }
 
+            val merge = mode == RestoreMode.MERGE
+            require(!merge || format >= 2) { "This backup was made by an older version of the app and can only be restored with Replace." }
+            val report = MergeReport()
+
             // 3. Place library files and fix stored paths that point somewhere else on this tablet.
-            if (format >= 2) placeLibraryFiles(app, staging, manifest, stagedDb, throttle)
+            if (format >= 2) placeLibraryFiles(app, staging, manifest, stagedDb, throttle, if (merge) report else null)
             else placeLegacyBooks(app, staging, manifest, stagedDb)
 
-            // 4. Swap database, settings and the app's data folder in, with rollback on failure.
-            onProgress(Progress("Installing", 0, 0))
-            install(app, staging, replaceAll = format >= 2)
+            // 4. Replace: swap database, settings and the app's data folder in, with rollback on failure.
+            //    Merge: combine the databases in one transaction, then the data folder file by file.
+            onProgress(Progress(if (merge) "Merging" else "Installing", 0, 0))
+            if (merge) mergeInstall(app, staging, report) else install(app, staging, replaceAll = format >= 2)
             if (restoreKeys) File(staging, "settings/secrets.json").takeIf { it.isFile }?.let { f ->
-                runCatching { AiPreferences(app).importSecrets(JSONObject(f.readText())) }
-                    .onFailure { Log.w(TAG, "Could not restore the API keys", it) }
+                runCatching {
+                    val keys = JSONObject(f.readText())
+                    if (merge) { // keep keys already on this tablet
+                        val here = AiPreferences(app).exportSecrets()
+                        here.keys().forEach { keys.remove(it) }
+                    }
+                    AiPreferences(app).importSecrets(keys)
+                }.onFailure { Log.w(TAG, "Could not restore the API keys", it) }
             }
             onProgress(Progress("Done", 1, 1))
+            if (merge) report.summary() else "Restored."
         } finally {
             staging.deleteRecursively()
         }
     }
 
     /** Format 2: library folder, external files and path fixes. */
-    private suspend fun placeLibraryFiles(app: Context, staging: File, manifest: JSONObject, stagedDb: File, throttle: Throttle) {
+    private suspend fun placeLibraryFiles(app: Context, staging: File, manifest: JSONObject, stagedDb: File, throttle: Throttle, merge: MergeReport?) {
         val paths = manifest.optJSONObject("paths") ?: JSONObject()
 
         // Where the library folder goes on this tablet: the same custom folder if it can be used here,
         // otherwise the app's default folder.
         var custom = ""; var type = "DOCUMENTS"
-        SQLiteDatabase.openDatabase(stagedDb.path, null, SQLiteDatabase.OPEN_READWRITE).use { sdb ->
+        if (merge == null) SQLiteDatabase.openDatabase(stagedDb.path, null, SQLiteDatabase.OPEN_READWRITE).use { sdb ->
             runCatching {
                 sdb.rawQuery("SELECT customStoragePath, storageLocationType FROM app_settings LIMIT 1", null).use { c ->
                     if (c.moveToFirst()) { custom = c.getString(0).orEmpty(); type = c.getString(1) ?: "DOCUMENTS" }
@@ -533,7 +568,8 @@ object BackupManager {
                 }
             }
         }
-        val newRoot = StorageManager.getRootDirectory(app, custom, type).canonicalFile
+        // Merging keeps this tablet's settings, and so its library folder.
+        val newRoot = if (merge != null) libraryRoot(app) else StorageManager.getRootDirectory(app, custom, type).canonicalFile
         val mappings = mutableListOf<Pair<String, String>>()
         paths.optString("root").takeIf { it.isNotBlank() }?.let { mappings += it to newRoot.path }
         paths.optString("files").takeIf { it.isNotBlank() }?.let { mappings += it to app.filesDir.canonicalPath }
@@ -553,8 +589,16 @@ object BackupManager {
                 coroutineContext.ensureActive()
                 val target = File(newRoot, f.relativeTo(stagedRoot).path)
                 done += f.length()
-                moveFile(f, target)
-                if (target.extension.equals("json", true)) placedJson += target
+                val mtime = f.lastModified()
+                val existed = target.isFile
+                if (merge != null && existed && target.lastModified() >= mtime) {
+                    merge.skippedOlder++; f.delete()
+                } else {
+                    moveFile(f, target)
+                    if (mtime > 0) target.setLastModified(mtime)
+                    if (merge != null) { if (existed) merge.filesUpdated++ else merge.filesAdded++ }
+                    if (target.extension.equals("json", true)) placedJson += target
+                }
                 throttle.emit(Progress("Restoring library folder", done, total, target.name))
             }
         }
@@ -566,6 +610,7 @@ object BackupManager {
             val staged = File(staging, x.getString("entry"))
             if (!staged.exists()) continue
             val original = File(x.getString("path"))
+            if (merge != null && original.exists()) continue // already here
             val fallback = File(newRoot, "Restored files/$i/${original.name}")
             val placed = listOf(original, fallback).firstOrNull { dest ->
                 runCatching { dest.parentFile?.mkdirs(); moveFile(staged, dest); true }.getOrDefault(false)
@@ -688,6 +733,252 @@ object BackupManager {
         com.example.reader.Lexicon.reload()
     }
 
+    // ------------------------------------------------------------------ merge
+
+    /** Per-book folders in the app's data folder, named after the book's database id. */
+    private val PER_BOOK_DIRS = setOf("audiobooks", "folder_sync")
+
+    private fun columns(db: SQLiteDatabase, table: String): List<String> {
+        val out = mutableListOf<String>()
+        runCatching {
+            db.rawQuery("PRAGMA table_info(\"$table\")", null).use { c ->
+                val i = c.getColumnIndex("name")
+                while (c.moveToNext()) out += c.getString(i)
+            }
+        }
+        return out
+    }
+
+    private fun rows(db: SQLiteDatabase, table: String): List<Map<String, Any?>> {
+        val out = mutableListOf<Map<String, Any?>>()
+        db.rawQuery("SELECT * FROM \"$table\"", null).use { c ->
+            while (c.moveToNext()) {
+                val row = HashMap<String, Any?>()
+                for (i in 0 until c.columnCount) {
+                    row[c.getColumnName(i)] = when (c.getType(i)) {
+                        Cursor.FIELD_TYPE_INTEGER -> c.getLong(i)
+                        Cursor.FIELD_TYPE_FLOAT -> c.getDouble(i)
+                        Cursor.FIELD_TYPE_STRING -> c.getString(i)
+                        Cursor.FIELD_TYPE_BLOB -> c.getBlob(i)
+                        else -> null
+                    }
+                }
+                out += row
+            }
+        }
+        return out
+    }
+
+    private fun ContentValues.putAny(k: String, v: Any?) {
+        when (v) {
+            null -> putNull(k)
+            is Long -> put(k, v)
+            is Double -> put(k, v)
+            is String -> put(k, v)
+            is ByteArray -> put(k, v)
+            else -> put(k, v.toString())
+        }
+    }
+
+    private fun Map<String, Any?>.long(k: String): Long = (this[k] as? Number)?.toLong() ?: 0L
+    private fun Map<String, Any?>.str(k: String): String = this[k]?.toString().orEmpty()
+
+    private fun docUpdated(r: Map<String, Any?>) = r.long("updatedAt").takeIf { it > 0 } ?: maxOf(r.long("dateAdded"), r.long("lastReadTimestamp"))
+    private fun hlUpdated(r: Map<String, Any?>) = r.long("updatedAt").takeIf { it > 0 } ?: r.long("createdTimestamp")
+
+    /** The same book on two devices that never shared IDs (e.g. backups from before merging existed). */
+    private fun docKey(r: Map<String, Any?>) = listOf("title", "author", "fileType", "category")
+        .joinToString("|") { r.str(it).trim().lowercase(Locale.ROOT) }
+
+    private fun hlKey(docId: Long, r: Map<String, Any?>) =
+        "$docId|${r.str("highlightedText").trim().take(500)}|${r.str("epubCfi")}|${r.long("pageNumber")}"
+
+    private fun tombstones(db: SQLiteDatabase): MutableMap<String, Long> {
+        val out = HashMap<String, Long>()
+        runCatching {
+            db.rawQuery("SELECT kind, uuid, deletedAt FROM tombstones", null).use { c ->
+                while (c.moveToNext()) out["${c.getString(0)}:${c.getString(1)}"] = c.getLong(2)
+            }
+        }
+        return out
+    }
+
+    /**
+     * Merges the staged backup into the library here. Books and highlights are matched by their
+     * permanent ID (or, for items from before IDs existed, by title/author and by quote + position);
+     * where both sides have an item, the one changed most recently wins. Deletions recorded on either
+     * side are respected. Settings stay as they are on this tablet.
+     */
+    private fun mergeInstall(app: Context, staging: File, report: MergeReport) {
+        val stagedDbFile = File(staging, "db/$DB_NAME")
+        // Make the live database one complete file, then work on it directly.
+        runCatching { AppDatabase.getInstance(app).openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").use { it.moveToFirst() } }
+        AppDatabase.closeForRestore()
+        val docIdMap = HashMap<Long, Long>() // backup id → id here (-1: deleted here, not brought back)
+
+        SQLiteDatabase.openDatabase(stagedDbFile.path, null, SQLiteDatabase.OPEN_READONLY).use { b ->
+            SQLiteDatabase.openDatabase(app.getDatabasePath(DB_NAME).path, null, SQLiteDatabase.OPEN_READWRITE).use { live ->
+                live.setForeignKeyConstraintsEnabled(true) // deleting a book removes its highlights
+                SyncTriggers.drop(live::execSQL)
+                live.beginTransaction()
+                try {
+                    mergeTables(live, b, docIdMap, report)
+                    live.setTransactionSuccessful()
+                } finally {
+                    live.endTransaction()
+                    SyncTriggers.create(live::execSQL)
+                }
+            }
+        }
+
+        // The app's data folder, file by file: newer files from the backup replace older ones here.
+        val stagedFiles = File(staging, "files")
+        val filesDir = app.filesDir
+        stagedFiles.listFiles()?.filter { it.name !in SKIP_IN_FILES }?.forEach { top ->
+            val files = if (top.isDirectory) walkFiles(top).toList() else listOf(top)
+            files.forEach { f ->
+                var rel = f.relativeTo(stagedFiles).invariantPath()
+                if (top.name in PER_BOOK_DIRS) {
+                    val parts = rel.split('/')
+                    val id = parts.getOrNull(1)?.toLongOrNull()
+                    if (id != null) {
+                        val mapped = docIdMap[id] ?: id
+                        if (mapped < 0) return@forEach
+                        rel = (listOf(parts[0], mapped.toString()) + parts.drop(2)).joinToString("/")
+                    }
+                }
+                val target = File(filesDir, rel)
+                val mtime = f.lastModified()
+                if (target.isFile && target.lastModified() >= mtime) { report.skippedOlder++; return@forEach }
+                val existed = target.isFile
+                moveFile(f, target)
+                if (mtime > 0) target.setLastModified(mtime)
+                if (existed) report.filesUpdated++ else report.filesAdded++
+            }
+        }
+        com.example.reader.Lexicon.reload()
+    }
+
+    private fun mergeTables(live: SQLiteDatabase, b: SQLiteDatabase, docIdMap: HashMap<Long, Long>, report: MergeReport) {
+        val liveTombs = tombstones(live)
+        val backupTombs = tombstones(b)
+
+        // ---- documents
+        val docCols = columns(live, "documents").toSet()
+        val bDocCols = columns(b, "documents").filter { it in docCols }
+        val liveDocs = rows(live, "documents")
+        val liveByUuid = liveDocs.filter { it.str("uuid").isNotBlank() }.associateBy { it.str("uuid") }
+        val liveByKey = liveDocs.groupBy { docKey(it) }.mapValues { it.value.first() }
+        val liveIds = liveDocs.map { it.long("id") }.toMutableSet()
+        val matchedLive = HashSet<Long>()
+
+        for (r in rows(b, "documents")) {
+            val bid = r.long("id")
+            val uuid = r.str("uuid")
+            val upd = docUpdated(r)
+            val match = (if (uuid.isNotBlank()) liveByUuid[uuid] else null) ?: liveByKey[docKey(r)]?.takeIf { it.long("id") !in matchedLive }
+            if (match != null) {
+                val id = match.long("id")
+                matchedLive += id
+                docIdMap[bid] = id
+                if (upd > docUpdated(match)) {
+                    val cv = ContentValues()
+                    bDocCols.filter { it != "id" && it != "uuid" }.forEach { cv.putAny(it, r[it]) }
+                    // Keep this tablet's file locations when the files are here.
+                    if (File(match.str("filePath").removePrefix("file://")).exists()) cv.putAny("filePath", match["filePath"])
+                    if (match.str("coverUri").isNotBlank() && File(match.str("coverUri").removePrefix("file://")).exists()) cv.putAny("coverUri", match["coverUri"])
+                    if ("updatedAt" in docCols) cv.put("updatedAt", upd)
+                    live.update("documents", cv, "id = ?", arrayOf(id.toString()))
+                    report.booksUpdated++
+                } else if (upd < docUpdated(match)) report.skippedOlder++
+                continue
+            }
+            val deletedHere = if (uuid.isNotBlank()) liveTombs["document:$uuid"] else null
+            if (deletedHere != null && deletedHere >= upd) { docIdMap[bid] = -1; report.skippedOlder++; continue }
+            val cv = ContentValues()
+            bDocCols.filter { it != "id" }.forEach { cv.putAny(it, r[it]) }
+            if (bid > 0 && bid !in liveIds) cv.put("id", bid) // keeps per-book folders and notes lined up
+            if ("uuid" in docCols && uuid.isBlank()) cv.put("uuid", java.util.UUID.randomUUID().toString().replace("-", ""))
+            if ("updatedAt" in docCols) cv.put("updatedAt", upd)
+            val newId = live.insertOrThrow("documents", null, cv)
+            liveIds += newId
+            docIdMap[bid] = newId
+            if (deletedHere != null) live.delete("tombstones", "kind = 'document' AND uuid = ?", arrayOf(uuid))
+            report.booksAdded++
+        }
+        // Books deleted on the other device after they were last changed here
+        for (d in liveDocs) {
+            val uuid = d.str("uuid")
+            val deleted = backupTombs["document:$uuid"] ?: continue
+            if (uuid.isNotBlank() && deleted > docUpdated(d)) {
+                live.delete("documents", "id = ?", arrayOf(d.long("id").toString()))
+                report.booksRemoved++
+            }
+        }
+
+        // ---- highlights
+        val hlCols = columns(live, "highlights").toSet()
+        val bHlCols = columns(b, "highlights").filter { it in hlCols }
+        val liveHls = rows(live, "highlights")
+        val hlByUuid = liveHls.filter { it.str("uuid").isNotBlank() }.associateBy { it.str("uuid") }
+        val hlByKey = liveHls.associateBy { hlKey(it.long("documentId"), it) }
+        val hlIds = liveHls.map { it.long("id") }.toMutableSet()
+        val liveDocIds = rows(live, "documents").map { it.long("id") }.toSet()
+
+        for (r in rows(b, "highlights")) {
+            val docId = docIdMap[r.long("documentId")] ?: continue
+            if (docId < 0 || docId !in liveDocIds) continue
+            val uuid = r.str("uuid")
+            val upd = hlUpdated(r)
+            val match = (if (uuid.isNotBlank()) hlByUuid[uuid] else null) ?: hlByKey[hlKey(docId, r)]
+            if (match != null) {
+                if (upd > hlUpdated(match)) {
+                    val cv = ContentValues()
+                    bHlCols.filter { it != "id" && it != "uuid" }.forEach { cv.putAny(it, r[it]) }
+                    cv.put("documentId", docId)
+                    if ("updatedAt" in hlCols) cv.put("updatedAt", upd)
+                    live.update("highlights", cv, "id = ?", arrayOf(match.long("id").toString()))
+                    report.highlightsUpdated++
+                } else if (upd < hlUpdated(match)) report.skippedOlder++
+                continue
+            }
+            val deletedHere = if (uuid.isNotBlank()) liveTombs["highlight:$uuid"] else null
+            if (deletedHere != null && deletedHere >= upd) { report.skippedOlder++; continue }
+            val cv = ContentValues()
+            bHlCols.filter { it != "id" }.forEach { cv.putAny(it, r[it]) }
+            val bid = r.long("id")
+            if (bid > 0 && bid !in hlIds) cv.put("id", bid)
+            cv.put("documentId", docId)
+            if ("uuid" in hlCols && uuid.isBlank()) cv.put("uuid", java.util.UUID.randomUUID().toString().replace("-", ""))
+            if ("updatedAt" in hlCols) cv.put("updatedAt", upd)
+            hlIds += live.insertOrThrow("highlights", null, cv)
+            if (deletedHere != null) live.delete("tombstones", "kind = 'highlight' AND uuid = ?", arrayOf(uuid))
+            report.highlightsAdded++
+        }
+        for (h in liveHls) {
+            val uuid = h.str("uuid")
+            val deleted = backupTombs["highlight:$uuid"] ?: continue
+            if (uuid.isNotBlank() && deleted > hlUpdated(h)) {
+                if (live.delete("highlights", "id = ?", arrayOf(h.long("id").toString())) > 0) report.highlightsRemoved++
+            }
+        }
+
+        // ---- deletion records: keep the most recent of both sides
+        if (columns(live, "tombstones").isNotEmpty()) {
+            backupTombs.forEach { (key, at) ->
+                val kind = key.substringBefore(':'); val uuid = key.substringAfter(':')
+                val here = liveTombs[key]
+                val stillHere = when (kind) {
+                    "document" -> live.rawQuery("SELECT 1 FROM documents WHERE uuid = ? LIMIT 1", arrayOf(uuid)).use { it.moveToFirst() }
+                    else -> live.rawQuery("SELECT 1 FROM highlights WHERE uuid = ? LIMIT 1", arrayOf(uuid)).use { it.moveToFirst() }
+                }
+                if (!stillHere && (here == null || at > here)) {
+                    live.execSQL("INSERT OR REPLACE INTO tombstones (kind, uuid, deletedAt) VALUES (?, ?, ?)", arrayOf(kind, uuid, at))
+                }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ path rewriting
 
     /** The forms an absolute path appears in: plain, followed by a separator or quote, and JSON-escaped. */
@@ -705,6 +996,8 @@ object BackupManager {
     /** Replaces old path prefixes in every text column of every ordinary table in the staged database. */
     private fun rewriteDatabasePaths(dbFile: File, mappings: List<Pair<String, String>>) {
         SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { sdb ->
+            // Path fixes are not edits: keep the change times (the triggers come back when the app opens it).
+            SyncTriggers.drop(sdb::execSQL)
             val tables = mutableListOf<Pair<String, String>>()
             sdb.rawQuery("SELECT name, sql FROM sqlite_master WHERE type = 'table'", null).use { c ->
                 while (c.moveToNext()) tables += c.getString(0) to (c.getString(1) ?: "")

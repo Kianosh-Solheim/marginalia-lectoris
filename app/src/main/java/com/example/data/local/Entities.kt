@@ -47,7 +47,11 @@ data class DocumentEntity(
     val lastPositionLoc: Int = 0,
     val lastPositionLabel: String = "",
     val lastPositionSnippet: String = "",
-    val lastPositionChapter: String = ""
+    val lastPositionChapter: String = "",
+    // For merging backups: a permanent ID and the time of the last change, both kept up to date by
+    // database triggers (see SyncTriggers), so no code that edits documents has to set them.
+    val uuid: String = "",
+    val updatedAt: Long = 0L
 )
 
 @Entity(
@@ -80,7 +84,17 @@ data class HighlightEntity(
     val epubCfi: String = "", // Canonical EPUB CFI 1.1 selection range (e.g. "epubcfi(/6/2[ch1]!/4/4[p2],/1:0,/1:42)")
     val colorHex: String = "#E4E4E7",
     val tags: String = "", // Comma-separated individual note tags (e.g. "epistemology, methodology")
-    val createdTimestamp: Long = System.currentTimeMillis()
+    val createdTimestamp: Long = System.currentTimeMillis(),
+    val uuid: String = "",
+    val updatedAt: Long = 0L
+)
+
+/** Something deleted on this device, so merging a backup doesn't bring it back. Written by triggers. */
+@Entity(tableName = "tombstones", primaryKeys = ["kind", "uuid"])
+data class TombstoneEntity(
+    val kind: String, // "document" | "highlight"
+    val uuid: String,
+    val deletedAt: Long
 )
 
 @Entity(tableName = "app_settings")

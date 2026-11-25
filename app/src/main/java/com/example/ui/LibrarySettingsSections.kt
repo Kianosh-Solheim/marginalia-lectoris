@@ -137,6 +137,7 @@ fun BackupSettingsSection() {
     var restoreEncrypted by remember { mutableStateOf(false) }
     var restorePw by remember { mutableStateOf("") }
     var restoreKeys by remember { mutableStateOf(true) }
+    var restoreMerge by remember { mutableStateOf(false) }
     val busy = job.running || job.restarting
     LaunchedEffect(job.finishedAt) { lastBackup = BackupManager.lastBackupTime(context) }
 
@@ -158,7 +159,7 @@ fun BackupSettingsSection() {
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             restoreEncrypted = runCatching { BackupManager.isEncrypted(context, uri) }.getOrDefault(false)
-            restorePw = ""; restoreKeys = true
+            restorePw = ""; restoreKeys = true; restoreMerge = false
             confirmRestore = uri
         }
     }
@@ -177,11 +178,21 @@ fun BackupSettingsSection() {
             title = { Text("Restore this backup?", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        InkChip("Replace", !restoreMerge, { restoreMerge = false })
+                        InkChip("Merge", restoreMerge, { restoreMerge = true })
+                    }
                     Text(
-                        "Your current library, notes, audiobooks, recordings and settings will be replaced by the backup. " +
-                            "The backup is checked first; if anything goes wrong, your library is left as it was. " +
-                            "Files in the library folder are written back there, so Syncthing will pass them on to your other devices. " +
-                            "The app restarts when it's done."
+                        if (restoreMerge)
+                            "Books, highlights and notes from the backup are added to your library. Where both have the same item, " +
+                                "the one changed most recently is kept, and items deleted on either side stay deleted. " +
+                                "Your settings here stay as they are. Newer files from the backup are written into the library folder " +
+                                "(Syncthing passes them on). The app restarts when it's done."
+                        else
+                            "Your current library, notes, audiobooks, recordings and settings will be replaced by the backup. " +
+                                "The backup is checked first; if anything goes wrong, your library is left as it was. " +
+                                "Files in the library folder are written back there, so Syncthing will pass them on to your other devices. " +
+                                "The app restarts when it's done."
                     )
                     if (restoreEncrypted) {
                         PasswordField(restorePw, { restorePw = it }, "Backup password")
@@ -196,8 +207,9 @@ fun BackupSettingsSection() {
                     note = ""
                     val pw = if (restoreEncrypted) restorePw.toCharArray() else null
                     restorePw = ""
-                    if (!BackupJobs.restore(context, uri, pw, restoreKeys)) note = "A backup or restore is already running."
-                }) { Text("Replace and restart", color = if (ready) Color.Black else Color(0xFF9CA3AF), fontWeight = FontWeight.Bold) }
+                    val mode = if (restoreMerge) BackupManager.RestoreMode.MERGE else BackupManager.RestoreMode.REPLACE
+                    if (!BackupJobs.restore(context, uri, pw, restoreKeys, mode)) note = "A backup or restore is already running."
+                }) { Text(if (restoreMerge) "Merge and restart" else "Replace and restart", color = if (ready) Color.Black else Color(0xFF9CA3AF), fontWeight = FontWeight.Bold) }
             },
             dismissButton = { TextButton(onClick = { confirmRestore = null; restorePw = "" }) { Text("Cancel", color = SectionGrey) } }
         )
@@ -256,6 +268,7 @@ fun WebRestoreRequestDialog() {
     val context = LocalContext.current
     val pending by BackupJobs.pendingWebRestore.collectAsState()
     val p = pending ?: return
+    val merge = p.mode == BackupManager.RestoreMode.MERGE
     AlertDialog(
         onDismissRequest = {},
         containerColor = Color.White,
@@ -264,13 +277,14 @@ fun WebRestoreRequestDialog() {
         text = {
             Text(
                 "“${p.name}” (${formatBytes(p.size)}${if (p.encrypted) ", encrypted" else ""}) was uploaded from the web view. " +
-                    "Restoring it replaces your current library, notes and settings, and the app restarts. " +
+                    (if (merge) "Merging adds it to your library (the most recently changed version of each item is kept), and the app restarts. "
+                    else "Restoring it replaces your current library, notes and settings, and the app restarts. ") +
                     "Only continue if you started this yourself."
             )
         },
         confirmButton = {
             TextButton(onClick = { BackupJobs.confirmWebRestore(context) }) {
-                Text("Replace and restart", color = Color.Black, fontWeight = FontWeight.Bold)
+                Text(if (merge) "Merge and restart" else "Replace and restart", color = Color.Black, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = { TextButton(onClick = { BackupJobs.declineWebRestore(context) }) { Text("Decline", color = SectionGrey) } }
