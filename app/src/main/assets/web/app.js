@@ -312,7 +312,7 @@ function header() {
   file.addEventListener('change', () => { if (file.files.length) uploadFiles([...file.files]); file.value = ''; });
   const more = menuButton('☰', [
     EMBEDDED ? null : ['Tabs', 'Several things open at once, two of them side by side', () => { localSet('ml.tabs', '1'); showWorkspace(location.hash || '#/'); }],
-    ['Convert web pages', 'Saved chapters (HTML) → EPUB or PDF, with the printed page numbers', () => convertDialog()],
+    ['Convert books', 'Web pages → EPUB or PDF, or a PDF\'s page numbers into an EPUB', () => convertDialog()],
     ['Colours', 'Light, dark, or as the computer has it', () => themeDialog()],
     ['Settings', 'Search, AI, backups, notes export…', () => { location.hash = '#/settings'; }],
     [(typeof relay !== 'undefined' && relay.on && !EMBEDDED) ? '✓ Take notes here' : 'Take notes here', 'Highlights made on the tablet open here for title, note and links', () => relaySet(!(typeof relay !== 'undefined' && relay.on))],
@@ -320,7 +320,7 @@ function header() {
     ['Keyboard shortcuts', 'What the keys do', () => shortcutsDialog()],
     ['Sign out', 'Sign this browser out', async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); }],
   ].filter(Boolean), 'btn quiet morebtn');
-  more.classList.add('right'); more.querySelector('button').title = 'More: tabs, convert web pages, colours, settings, shortcuts, sign out';
+  more.classList.add('right'); more.querySelector('button').title = 'More: tabs, convert books, colours, settings, shortcuts, sign out';
   return h('header', { class: 'top' }, h('div', { class: 'top-inner' },
     h('div', { class: 'brand', onclick: () => { location.hash = '#/'; } }, 'Marginalia Lectoris', h('small', null, state.device || 'Tablet')),
     h('nav', { class: 'tabs' }, places.map(([k, label, href]) =>

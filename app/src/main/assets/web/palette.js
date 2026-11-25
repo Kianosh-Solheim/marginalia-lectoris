@@ -28,7 +28,8 @@ function paletteActions() {
     ['Zotero', 'Go to', go('#/zotero'), ''], ['Presentations', 'Go to', go('#/presentations'), 'slides'], ['Settings', 'Go to', go('#/settings'), 'preferences backup ai'],
     ['New writing document', 'Do', async () => { try { const d = await api('writing', { method: 'POST', json: { title: 'Untitled' } }); location.hash = '#/write/' + encodeURIComponent(d.id) + '?new=1'; } catch (e) { fail(e); } }, 'create write'],
     ['Colours: dark', 'Do', theme('dark'), 'theme night mode'], ['Colours: light', 'Do', theme('light'), 'theme day mode'], ['Colours: follow the computer', 'Do', theme('auto'), 'theme auto'],
-    ['Convert web pages to EPUB or PDF', 'Do', () => convertDialog(), 'html singlefile sage oxford cambridge idunn chapter ebook epub pdf page numbers'],
+    ['Convert books: web pages to EPUB or PDF', 'Do', () => convertDialog(), 'convert web pages html singlefile sage oxford cambridge idunn tibi chapter ebook epub pdf page numbers'],
+    ['Convert books: page numbers from a PDF into an EPUB', 'Do', () => paginateDialog(), 'convert paginate printed pages page numbers epub pdf align page list'],
     ['Keyboard shortcuts', 'Help', () => shortcutsDialog(), 'keys help'],
     ['Sign out', 'Do', async () => { try { await api('logout', { method: 'POST' }); } catch (_) {} showLogin(); }, 'log out'],
   ];

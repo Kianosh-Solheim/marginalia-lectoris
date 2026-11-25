@@ -1195,7 +1195,7 @@ function convertDialog() {
         close();
       } catch (e) { console.error(e); status.textContent = 'Could not convert: ' + (e.message || e); go.disabled = false; }
     });
-    box.append(h('h2', null, 'Convert web pages to EPUB or PDF'),
+    box.append(h('h2', null, 'Convert books'), convertTabs('web', close),
       h('p', { class: 'muted', style: { marginTop: '-6px', fontSize: '13px' } }, 'Chapters you have saved from a publisher\'s reading page, or a whole book in one file (Tibi/NLB), become a book for the tablet, keeping the printed page numbers, notes, figures and tables. Sage Knowledge, Oxford Academic, Cambridge Core, Idunn and Tibi are recognised; other sites are read with general rules.'),
       pick, list, h('div', { class: 'fields wc-fields' }, h('label', null, h('span', { class: 'label' }, 'Title'), title), h('label', null, h('span', { class: 'label' }, 'Author(s)'), authors)),
       optsBox, status,
