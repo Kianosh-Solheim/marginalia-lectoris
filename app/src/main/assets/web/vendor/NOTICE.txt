@@ -12,3 +12,7 @@ Third-party code in this folder:
   (downloaded once to the tablet from the npm package @myriaddreamin/typst-ts-web-compiler 0.7.0, Apache-2.0).
 - typst-fonts/: Libertinus Serif (OFL-1.1), New Computer Modern Math (GUST Font License), DejaVu Sans Mono
   (Bitstream Vera / DejaVu licence), from typst/typst-assets v0.13.1.
+- tesseract/: tesseract.js 7.0.0 (Apache-2.0), https://github.com/naptha/tesseract.js — text recognition (OCR)
+  for scanned PDF pages. The engine (tesseract.js-core 7.0.0, Apache-2.0, built from Tesseract OCR,
+  Apache-2.0) and the English and Norwegian models (@tesseract.js-data eng and nor 1.0.0, from tessdata,
+  Apache-2.0) are downloaded once to the tablet from the npm registry and checked against known checksums.
