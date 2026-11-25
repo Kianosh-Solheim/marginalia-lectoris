@@ -260,14 +260,17 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                                 com.example.reader.NoteSuggestionEngine.parseTagsList(b.optString("tags"))) else h.tags,
                             colorHex = b.optString("colorHex", h.colorHex).ifBlank { h.colorHex },
                             highlightedText = b.optString("highlightedText", h.highlightedText).ifBlank { h.highlightedText },
+                            // Its place in the EPUB, when the file was replaced by a new version of itself.
+                            epubCfi = if (b.has("epubCfi")) b.optString("epubCfi").trim() else h.epubCfi,
                             // The printed page typed in by hand; the pages in the file ("|PDF:4–5") stay as they are.
-                            printedPageLabel = if (b.has("printedPageLabel")) {
+                            // "auto": found in the file, so a page typed in by hand earlier is kept.
+                            printedPageLabel = if (b.has("printedPageLabel") && !(b.optBoolean("auto") && com.example.reader.PageNumbering.isManual(context, h.id))) {
                                 val typed = b.optString("printedPageLabel").trim().replace(Regex("\\s*[-–—]+\\s*"), "–")
                                 val pdf = h.printedPageLabel.substringAfter("|PDF:", "")
                                 if (pdf.isNotBlank()) "$typed|PDF:$pdf" else typed
                             } else h.printedPageLabel
                         )
-                        if (b.has("printedPageLabel") && updated.printedPageLabel != h.printedPageLabel) com.example.reader.PageNumbering.setManual(context, h.id, true)
+                        if (b.has("printedPageLabel") && !b.optBoolean("auto") && updated.printedPageLabel != h.printedPageLabel) com.example.reader.PageNumbering.setManual(context, h.id, true)
                         ops.updateHighlight(updated)
                         HttpResponse.json(hlJson(updated).toString())
                     }
@@ -376,6 +379,26 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                     if (!f.isFile) throw NoSuchElementException("No such file")
                     HttpResponse.FileBody(f, MiniHttpServer.mimeFor(f.name), if (req.query["download"] == "1") f.name else null)
                 }
+            }
+            // A file replaced by a new version of itself (same name: its notes and place stay with it).
+            what == "files" && m == "POST" && req.query["op"] == "replace" -> {
+                require(req.contentLength > 0) { "The file is empty." }
+                val f = com.example.reader.ItemFiles.replace(context, doc, req.query["rel"].orEmpty(), req.body)
+                HttpResponse.json(com.example.reader.ItemFiles.json(context, doc).put("replaced", f.name).toString())
+            }
+            // The page map made when an EPUB was given the printed pages of a PDF.
+            what == "pagemap" && m == "GET" -> {
+                val f = com.example.reader.ItemFiles.pageMap(context, doc)
+                if (!f.isFile) throw NoSuchElementException("No page map") else HttpResponse.FileBody(f, "application/json")
+            }
+            what == "pagemap" && (m == "PUT" || m == "POST") -> {
+                val f = com.example.reader.ItemFiles.pageMap(context, doc)
+                f.parentFile?.mkdirs()
+                val tmp = File(f.parentFile, ".marginalia-pages.json.part")
+                tmp.outputStream().use { req.body.copyTo(it, 1 shl 16) }
+                JSONObject(tmp.readText())   // only JSON is kept
+                if (!tmp.renameTo(f)) { tmp.copyTo(f, overwrite = true); tmp.delete() }
+                HttpResponse.json("{}")
             }
             what == "files" && m == "POST" && req.query["op"] == "upload" -> {
                 val name = File(req.query["name"].orEmpty()).name.ifBlank { "file" }

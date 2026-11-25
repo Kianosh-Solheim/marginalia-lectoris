@@ -1669,3 +1669,12 @@ html[data-theme="dark"] mark.audio-hit { border-bottom-color: #eee; }
 .pg-sect { font: 11px "Helvetica Neue", Arial, sans-serif; color: var(--grey); border-top: 1px dashed var(--rule); margin: 6px 0; padding-top: 2px; }
 .pg-warn { font-size: 12px; color: #b00; }
 .pg-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.pg-lib { display: flex; align-items: flex-start; gap: 8px; margin-top: 4px; }
+.pg-lib > .label { width: 120px; padding-top: 7px; }
+.pg-libq { flex: 1; position: relative; }
+.pg-libq input { width: 100%; }
+.pg-hits { position: absolute; left: 0; right: 0; top: 100%; z-index: 5; background: var(--paper, #fff); border: 1px solid var(--rule); border-top: 0; }
+.pg-hits:empty { display: none; }
+.pg-hit { display: flex; flex-direction: column; padding: 5px 9px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--rule); }
+.pg-hit:hover { background: var(--card); }
+.pg-hit span { font-size: 11px; }
