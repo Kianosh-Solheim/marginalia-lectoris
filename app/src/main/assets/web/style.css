@@ -1322,6 +1322,12 @@ main.lxpage { max-width: 860px; margin: 0 auto; padding: 22px 16px 60px; }
 .palrow.hit .palsnip { -webkit-line-clamp: 2; }
 .palrow.hit .palsnip mark, .palquote mark { background: var(--hl, #fde68a); color: inherit; padding: 0 1px; }
 .palbox.textmode input[type=search] { border-bottom: 2px solid var(--indigo, #3730a3); }
+/* Palette: what is searched, one tab each (← → moves between them) */
+.paltabs { display: flex; gap: 2px; padding: 6px 12px; border-bottom: 1px solid var(--rule); overflow-x: auto; scrollbar-width: none; flex: none; }
+.paltabs[hidden] { display: none; }
+.paltabs button { border: 1px solid transparent; background: none; color: var(--ink); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+.paltabs button:hover { border-color: var(--rule); }
+.paltabs button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 /* A note's details with the cover of its source at the left */
 .nvhead { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 18px; }
 .nvhead .nvprops { margin-bottom: 0; }
