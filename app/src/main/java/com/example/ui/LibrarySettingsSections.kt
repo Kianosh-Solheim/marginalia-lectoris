@@ -62,15 +62,24 @@ fun BackupSettingsSection() {
     var autoTarget by remember { mutableStateOf(BackupManager.autoTarget(context)) }
     var lastBackup by remember { mutableStateOf(BackupManager.lastBackupTime(context)) }
     var confirmRestore by remember { mutableStateOf<android.net.Uri?>(null) }
+    var progress by remember { mutableStateOf<BackupManager.Progress?>(null) }
+    val onProgress: (BackupManager.Progress) -> Unit = { p ->
+        progress = p
+        status = if (p.total > 0) "${p.stage}… ${(p.fraction * 100).toInt()} % (${formatBytes(p.done)} of ${formatBytes(p.total)})"
+            else "${p.stage}…"
+    }
 
     val backupNow = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        busy = true; status = "Backing up… (large libraries can take a few minutes)"
+        busy = true; status = "Backing up… (large libraries can take a few minutes; keep the app open)"
         scope.launch {
-            runCatching { BackupManager.backupToUri(context, uri) }
-                .onSuccess { n -> status = "Backup saved, including $n book files."; lastBackup = BackupManager.lastBackupTime(context) }
+            runCatching { BackupManager.backupToUri(context, uri, onProgress) }
+                .onSuccess { n ->
+                    status = "Backup saved: ${formatBytes(BackupManager.lastBackupBytes(context))}, including $n book files."
+                    lastBackup = BackupManager.lastBackupTime(context)
+                }
                 .onFailure { status = "Backup failed: ${it.message}" }
-            busy = false
+            busy = false; progress = null
         }
     }
     val chooseAuto = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -79,10 +88,10 @@ fun BackupSettingsSection() {
         autoTarget = uri
         busy = true; status = "Automatic backup on. Making the first backup now…"
         scope.launch {
-            runCatching { BackupManager.backupToUri(context, uri) }
+            runCatching { BackupManager.backupToUri(context, uri, onProgress) }
                 .onSuccess { status = "Automatic daily backup is on."; lastBackup = BackupManager.lastBackupTime(context) }
                 .onFailure { status = "First backup failed: ${it.message}" }
-            busy = false
+            busy = false; progress = null
         }
     }
     val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -95,17 +104,22 @@ fun BackupSettingsSection() {
             containerColor = Color.White,
             shape = RoundedCornerShape(4.dp),
             title = { Text("Restore this backup?", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) },
-            text = { Text("Your current library, notes and settings will be replaced by the backup. The app restarts when it's done.") },
+            text = {
+                Text(
+                    "Your current library, notes, audiobooks, recordings and settings will be replaced by the backup. " +
+                        "The backup is checked first; if anything goes wrong, your library is left as it was. " +
+                        "Files in the library folder are written back there, so Syncthing will pass them on to your other devices. " +
+                        "The app restarts when it's done."
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmRestore = null
-                    busy = true; status = "Restoring…"
+                    busy = true; status = "Restoring… (keep the app open)"
                     scope.launch {
-                        runCatching {
-                            context.contentResolver.openInputStream(uri)?.use { BackupManager.restore(context, it) }
-                                ?: error("Could not open the backup file.")
-                        }.onSuccess { BackupManager.restartApp(context) }
-                            .onFailure { status = "Restore failed: ${it.message}"; busy = false }
+                        runCatching { BackupManager.restoreFromUri(context, uri, onProgress) }
+                            .onSuccess { BackupManager.restartApp(context) }
+                            .onFailure { status = "Restore failed: ${it.message}"; busy = false; progress = null }
                     }
                 }) { Text("Replace and restart", color = Color.Black, fontWeight = FontWeight.Bold) }
             },
@@ -115,7 +129,8 @@ fun BackupSettingsSection() {
 
     SectionBox("Backup") {
         Text(
-            "Backs up everything: books, notes, highlights, bibliographic details, sketches and settings, as one .zip. " +
+            "Backs up everything as one .zip: books and articles, highlights, Glossae and notes, audiobooks with their sync maps, " +
+                "recordings and transcripts, presentations, courses, sketches, bibliographic details and settings. " +
                 "In the file picker, choose Google Drive, OneDrive, Dropbox or a folder on the tablet " +
                 "(the cloud app must be installed on the tablet). API keys are not included.",
             style = MaterialTheme.typography.bodySmall, color = SectionGrey
@@ -146,9 +161,19 @@ fun BackupSettingsSection() {
                 BackupManager.disableAuto(context); autoTarget = null; status = "Automatic backup is off."
             })
         }
-        if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Color.Black, trackColor = Color(0xFFE4E4E7))
+        if (busy) {
+            val p = progress
+            if (p != null && p.total > 0) LinearProgressIndicator(progress = { p.fraction }, modifier = Modifier.fillMaxWidth(), color = Color.Black, trackColor = Color(0xFFE4E4E7))
+            else LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Color.Black, trackColor = Color(0xFFE4E4E7))
+        }
         if (status.isNotBlank()) Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.Black)
     }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1L shl 30 -> String.format(java.util.Locale.ROOT, "%.1f GB", bytes / (1L shl 30).toDouble())
+    bytes >= 1L shl 20 -> String.format(java.util.Locale.ROOT, "%.0f MB", bytes / (1L shl 20).toDouble())
+    else -> String.format(java.util.Locale.ROOT, "%.0f KB", bytes / 1024.0)
 }
 
 // ----------------------------------------------------------------- Citations
