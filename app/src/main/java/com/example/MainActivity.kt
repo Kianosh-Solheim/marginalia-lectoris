@@ -62,6 +62,7 @@ class MainActivity : FragmentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CrashLog.install(applicationContext)   // keeps the error of any crash, for Settings → Why the app closed
         com.example.reader.SearchIndex.kick(this)   // full-text index of the books, in the background
         super.onCreate(savedInstanceState)
         com.example.reader.BibStore.init(applicationContext)
