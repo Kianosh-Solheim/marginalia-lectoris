@@ -17,12 +17,12 @@ import org.jsoup.parser.Parser
  * - [OFF]: resources are served untouched.
  * - [INLINE_LABELS]: page numbers on, book off: a small label in the text where each printed page begins
  *   (paginated and scroll).
- * - [PAGINATED_STRICT]: "1:1 Print Edition". The DOM is split at every print page marker and each
- *   printed page is wrapped in its own `<section class="ml-printpage">` that starts on a fresh
- *   column (screen). An injected script shrinks a page's text (down to [MIN_FIT_SCALE]) until the
- *   whole printed page fits on one screen.
- * - [SCROLL_DIVIDERS]: vertical scroll. A thin rule with the page number underneath is inserted
- *   at every marker (mid-paragraph markers split the paragraph).
+ * - [PAGINATED_STRICT]: like the printed book, in pages. The DOM is split at every print page marker and
+ *   each printed page is wrapped in its own `<section class="ml-printpage">` that starts on a fresh
+ *   column (page); a page longer than the screen runs on to the next column, as in the web view. A blank
+ *   page gets its own (empty) section.
+ * - [SCROLL_DIVIDERS]: like the printed book, in scroll. A line labelled "Page N" is inserted at every
+ *   marker (mid-paragraph markers split the paragraph).
  */
 enum class PrintPageLayoutMode {
     OFF, INLINE_LABELS, PAGINATED_STRICT, SCROLL_DIVIDERS;
@@ -54,8 +54,6 @@ data class PrintPageTarget(val id: String, val label: String)
  * the current-page label keep resolving.
  */
 object PrintPageHtmlRewriter {
-
-    const val MIN_FIT_SCALE = 0.70
 
     private val INLINE_TAGS = setOf(
         "a", "abbr", "b", "bdi", "bdo", "big", "cite", "code", "data", "del", "dfn", "em", "font",
@@ -110,9 +108,6 @@ object PrintPageHtmlRewriter {
             PrintPageLayoutMode.INLINE_LABELS -> LABEL_CSS
             else -> DIVIDER_CSS
         }))
-        if (mode == PrintPageLayoutMode.PAGINATED_STRICT) {
-            head.appendChild(scriptElement(isXhtml, FIT_SCRIPT))
-        }
 
         doc.outputSettings().apply {
             prettyPrint(false)
@@ -330,10 +325,6 @@ object PrintPageHtmlRewriter {
         Element("style").attr("type", "text/css").attr("id", "ml-printpage-style")
             .appendChild(DataNode(if (isXhtml) "/*<![CDATA[*/\n$css\n/*]]>*/" else css))
 
-    private fun scriptElement(isXhtml: Boolean, js: String): Element =
-        Element("script").attr("type", "text/javascript").attr("id", "ml-printpage-fit")
-            .appendChild(DataNode(if (isXhtml) "//<![CDATA[\n$js\n//]]>" else js))
-
     private val STRICT_CSS = """
         section.ml-printpage { display: block !important; margin: 0 !important; padding: 0 !important; }
         section.ml-printpage + section.ml-printpage {
@@ -379,62 +370,4 @@ object PrintPageHtmlRewriter {
         }
     """.trimIndent()
 
-    /**
-     * Shrink-to-fit for strict 1:1 pages. Readium paginates with CSS columns (one column = one screen),
-     * so a printed page that overflows is fragmented across columns, which makes its bounding box wider
-     * than one screen. For such pages we binary-search a CSS zoom between 1 and MIN_FIT_SCALE.
-     * Re-runs when Readium changes user settings (it writes CSS variables on <html style>), on resize,
-     * and when web fonts finish loading.
-     */
-    private val FIT_SCRIPT = """
-        (function () {
-          var MIN = $MIN_FIT_SCALE;
-          var timer = null;
-          function isScroll() {
-            var v = getComputedStyle(document.documentElement).getPropertyValue('--USER__view');
-            return v && v.indexOf('scroll') >= 0;
-          }
-          function overflows(s) {
-            var w = window.innerWidth;
-            if (s.getClientRects().length > 1) return true;
-            var r = s.getBoundingClientRect();
-            return r.width > w * 1.25;
-          }
-          function fit() {
-            var sections = document.querySelectorAll('section.ml-printpage');
-            var i;
-            for (i = 0; i < sections.length; i++) sections[i].style.zoom = '';
-            if (isScroll()) { document.documentElement.removeAttribute('data-ml-scaled'); return; }
-            var scaled = 0;
-            for (i = 0; i < sections.length; i++) {
-              var s = sections[i];
-              if (!overflows(s)) continue;
-              var lo = MIN, hi = 1.0, best = MIN;
-              s.style.zoom = String(MIN);
-              if (overflows(s)) { scaled++; continue; }
-              for (var k = 0; k < 7; k++) {
-                var mid = (lo + hi) / 2;
-                s.style.zoom = String(mid);
-                if (overflows(s)) { hi = mid; } else { best = mid; lo = mid; }
-              }
-              s.style.zoom = String(Math.floor(best * 100) / 100);
-              scaled++;
-            }
-            if (scaled > 0) document.documentElement.setAttribute('data-ml-scaled', String(scaled));
-            else document.documentElement.removeAttribute('data-ml-scaled');
-          }
-          function schedule() {
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(function () { requestAnimationFrame(fit); }, 120);
-          }
-          window.mlPrintPageFit = fit;
-          document.addEventListener('DOMContentLoaded', function () {
-            schedule();
-            if (document.fonts && document.fonts.ready) document.fonts.ready.then(schedule);
-            new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
-          });
-          window.addEventListener('load', schedule);
-          window.addEventListener('resize', schedule);
-        })();
-    """.trimIndent()
 }

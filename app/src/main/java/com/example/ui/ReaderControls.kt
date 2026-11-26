@@ -1923,7 +1923,7 @@ internal fun ReaderFormattingBottomSheet(
                                         color = Color.Black
                                     )
                                     Text(
-                                        text = "Pages: each printed page starts on a new screen, with the chapter and author at the top and the page number at the foot; a long page's text is shrunk (to at most 70%) so it fits. Scroll: a line across the text where each printed page begins, labelled with its number",
+                                        text = "Pages: each printed page starts on a new screen, with the chapter and author at the top and the page number at the foot; a long page runs on to the next screen. Scroll: a line across the text where each printed page begins, labelled with its number",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = Color(0xFF71717A)
                                     )
