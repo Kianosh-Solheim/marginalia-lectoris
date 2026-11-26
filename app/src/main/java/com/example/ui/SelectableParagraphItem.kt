@@ -85,6 +85,11 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.ui.theme.inkShadow
+import com.example.ui.theme.inkFrame
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.unit.sp
 import com.example.data.local.HighlightEntity
 import com.example.model.parseHighlightColor
@@ -134,6 +139,7 @@ data class ActiveSelectionToolbarState(
     val onCancelContinuation: (() -> Unit)? = null
 )
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun SelectionActionToolbarCard(
     state: ActiveSelectionToolbarState,
@@ -144,12 +150,9 @@ internal fun SelectionActionToolbarCard(
     val context = LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
 
-    var selectedColorHex by remember { mutableStateOf("#FFEB3B") }
+    var selectedColorHex by remember { mutableStateOf(LastHighlightColour.hex) }
     var isMoreMenuExpanded by remember { mutableStateOf(false) }
     var showAskAi by remember { mutableStateOf(false) }
-    val selectedColor = remember(selectedColorHex) {
-        Color(parseHighlightColor(selectedColorHex))
-    }
 
     val koreaderColors = remember {
         listOf(
@@ -196,838 +199,294 @@ internal fun SelectionActionToolbarCard(
 
     val resolvedLocus = state.plainLocus.ifBlank { headerPageSubtitle }
 
-    Surface(
+    // Sized for the tool that made the selection: compact for the pen, larger for a finger.
+    val stylus = LastInputTool.isStylus
+    val swatchSize = if (stylus) 28.dp else 40.dp
+    val cellHeight = if (stylus) com.example.ui.theme.Ink.PenTarget else com.example.ui.theme.Ink.TouchTarget
+    val cellFont = if (stylus) 11.sp else 13.sp
+
+    var showDictionary by remember { mutableStateOf(false) }
+    val readerDocument = LocalReaderDocument.current
+    var showSetAs by remember { mutableStateOf(false) }
+    var showCite by remember { mutableStateOf(false) }
+    if (showDictionary) {
+        DictionaryLookupDialog(
+            passage = state.quote,
+            language = rememberBookLanguage(sample = state.dictionaryContext),
+            contextPassage = state.dictionaryContext,
+            dismiss = { showDictionary = false }
+        )
+    }
+    if (showSetAs && readerDocument != null) {
+        SetAsDialog(selection = state.quote, document = readerDocument, onDismiss = { showSetAs = false },
+            pageNumber = state.pageNumber, chapterTitle = state.chapterTitle)
+    }
+    if (showAskAi) {
+        AskAiDialog(quote = state.quote, locus = resolvedLocus, document = readerDocument, onDismiss = { showAskAi = false })
+    }
+    if (showCite && readerDocument != null) {
+        CiteDialog(
+            document = readerDocument,
+            quote = state.quote,
+            page = com.example.reader.Citations.pageFor(
+                state.printedPageLabel, state.pageEquivalent, state.paragraphCitation,
+                state.pageNumber, state.isPdfDocument
+            ),
+            pageNumber = state.pageNumber,
+            chapterTitle = state.chapterTitle,
+            onDismiss = { showCite = false }
+        )
+    }
+
+    val copyToClipboard: (String, String) -> Unit = { text, toast ->
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Quote", text))
+        Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
+    }
+
+    // The web view's selection bar: one-tap swatches, then the actions in one ruled strip.
+    Column(
         modifier = modifier
-            .fillMaxWidth()
-            .border(BorderStroke(2.dp, Color.Black), RoundedCornerShape(0.dp))
+            .inkShadow(3.dp)
+            .background(com.example.ui.theme.Ink.Paper)
+            .inkFrame()
+            .padding(6.dp)
             .testTag("selection_action_toolbar"),
-        shape = RoundedCornerShape(0.dp),
-        color = Color.White,
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // 1. Top Row: Highlight Color Swatches Bar + Close Button
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFFF7F7F5))
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .weight(1f)
-                        .horizontalScroll(rememberScrollState())
-                ) {
-                    koreaderColors.forEach { (label, c, hex) ->
-                        val isSelected = selectedColorHex.equals(hex, ignoreCase = true)
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(30.dp)
-                                .clip(CircleShape)
-                                .background(c)
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.dp,
-                                    color = Color.Black,
-                                    shape = CircleShape
-                                )
-                                .clickable {
-                                    if (isSelected) {
-                                        state.onQuickSaveHighlight(hex)
-                                    } else {
-                                        selectedColorHex = hex
-                                    }
-                                }
-                                .testTag("highlight_swatch_${label.lowercase()}")
-                        ) {
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "$label selected",
-                                    tint = Color.Black,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                IconButton(
-                    onClick = state.onClearSelection,
-                    modifier = Modifier
-                        .size(28.dp)
-                        .border(1.dp, Color.Black, RoundedCornerShape(0.dp))
-                        .background(Color.White)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Clear Selection",
-                        tint = Color.Black,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
-
-            HorizontalDivider(thickness = 1.5.dp, color = Color.Black)
-
-            var showDictionary by remember { mutableStateOf(false) }
-            if (showDictionary) {
-                DictionaryLookupDialog(
-                    passage = state.quote,
-                    language = rememberBookLanguage(sample = state.dictionaryContext),
-                    contextPassage = state.dictionaryContext,
-                    dismiss = { showDictionary = false }
-                )
-            }
-
-            // 2. Segmented Primary Action Row (Icon + Label cells in E-Ink Editorial Style)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.White),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Action 1: Highlight (1-tap quick save in selected color)
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .background(selectedColor.copy(alpha = 0.45f))
-                        .clickable {
-                            state.onQuickSaveHighlight(selectedColorHex)
-                        }
-                        .padding(vertical = 10.dp, horizontal = 4.dp)
-                        .testTag("selection_quick_highlight_button"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Highlight",
-                        tint = Color.Black,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Highlight",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black,
-                        maxLines = 1
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(48.dp)
-                        .background(Color.Black)
-                )
-
-                // Action 2: Add Note (opens CreateHighlightDialog with selected color)
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .background(Color.White)
-                        .clickable {
-                            state.onSaveNoteWithDialog(selectedColorHex)
-                        }
-                        .padding(vertical = 10.dp, horizontal = 4.dp)
-                        .testTag("selection_save_note_button"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.NoteAlt,
-                        contentDescription = "Add Note",
-                        tint = Color.Black,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Add Note",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black,
-                        maxLines = 1
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(48.dp)
-                        .background(Color.Black)
-                )
-
-                // Action 3: Copy Quote
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .background(Color.White)
-                        .clickable {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clip = ClipData.newPlainText("Quote", state.quote)
-                            clipboard.setPrimaryClip(clip)
-                            Toast.makeText(context, "Copied quote to clipboard", Toast.LENGTH_SHORT).show()
-                            state.onClearSelection()
-                        }
-                        .padding(vertical = 10.dp, horizontal = 4.dp)
-                        .testTag("selection_copy_quote_button"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Copy Quote",
-                        tint = Color.Black,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Copy",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black,
-                        maxLines = 1
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(48.dp)
-                        .background(Color.Black)
-                )
-
-                // Action 4: Speak Selection (TTS / DAISY)
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .background(Color.White)
-                        .clickable {
-                            state.onSpeakSelection()
-                        }
-                        .padding(vertical = 10.dp, horizontal = 4.dp)
-                        .testTag("selection_speak_button"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.VolumeUp,
-                        contentDescription = "Speak Selection",
-                        tint = Color.Black,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Speak",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black,
-                        maxLines = 1
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(48.dp)
-                        .background(Color.Black)
-                )
-
-                // Action: Dictionary (tablet dictionary, Ordbøkene / Wiktionary, or AI in context)
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .background(Color.White)
-                        .clickable { showDictionary = true }
-                        .padding(vertical = 10.dp, horizontal = 4.dp)
-                        .testTag("selection_dictionary_button"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MenuBook,
-                        contentDescription = "Look up in dictionary",
-                        tint = Color.Black,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Define",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black,
-                        maxLines = 1
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(48.dp)
-                        .background(Color.Black)
-                )
-
-                // Action: Ask AI — send the passage to ChatGPT, Claude, Gemini … to ask questions about it
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .background(Color.White)
-                        .clickable { showAskAi = true }
-                        .padding(vertical = 10.dp, horizontal = 4.dp)
-                        .testTag("selection_ask_ai_button"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = "Ask AI about this passage",
-                        tint = Color.Black,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Ask AI",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black,
-                        maxLines = 1
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(48.dp)
-                        .background(Color.Black)
-                )
-
-                // Action 5: Share Selection
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .background(Color.White)
-                        .clickable {
-                            val shareText = if (resolvedLocus.isNotBlank()) {
-                                "“${state.quote}”\n— $resolvedLocus"
-                            } else {
-                                "“${state.quote}”"
-                            }
-                            val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(android.content.Intent.EXTRA_TEXT, shareText)
-                            }
-                            context.startActivity(android.content.Intent.createChooser(sendIntent, "Share Quote"))
-                        }
-                        .padding(vertical = 10.dp, horizontal = 4.dp)
-                        .testTag("selection_share_quote_button"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Share,
-                        contentDescription = "Share Quote",
-                        tint = Color.Black,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Share",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black,
-                        maxLines = 1
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(48.dp)
-                        .background(Color.Black)
-                )
-
-                // Action 6: More (reveals Add as Author & Set as Abstract/Summary)
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .background(if (isMoreMenuExpanded) Color(0xFFE4E4E7) else Color.White)
-                        .clickable {
-                            isMoreMenuExpanded = !isMoreMenuExpanded
-                        }
-                        .padding(vertical = 10.dp, horizontal = 4.dp)
-                        .testTag("selection_more_button"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isMoreMenuExpanded) Icons.Default.ExpandLess else Icons.Default.MoreHoriz,
-                        contentDescription = "More",
-                        tint = Color.Black,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "More",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black,
-                        maxLines = 1
-                    )
-                }
-            }
-
-            val readerDocument = LocalReaderDocument.current
-            var showSetAs by remember { mutableStateOf(false) }
-            var showCite by remember { mutableStateOf(false) }
-            if (showSetAs && readerDocument != null) {
-                SetAsDialog(selection = state.quote, document = readerDocument, onDismiss = { showSetAs = false },
-                    pageNumber = state.pageNumber, chapterTitle = state.chapterTitle)
-            }
-            if (showAskAi) {
-                AskAiDialog(quote = state.quote, locus = resolvedLocus, document = readerDocument, onDismiss = { showAskAi = false })
-            }
-            if (showCite && readerDocument != null) {
-                CiteDialog(
-                    document = readerDocument,
-                    quote = state.quote,
-                    page = com.example.reader.Citations.pageFor(
-                        state.printedPageLabel, state.pageEquivalent, state.paragraphCitation,
-                        state.pageNumber, state.isPdfDocument
-                    ),
-                    pageNumber = state.pageNumber,
-                    chapterTitle = state.chapterTitle,
-                    onDismiss = { showCite = false }
-                )
-            }
-
-            if (isMoreMenuExpanded) {
-                HorizontalDivider(thickness = 1.dp, color = Color.Black)
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFFF7F7F5))
-                        .testTag("selection_more_actions_row"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // More Action 1: Add as Author
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable {
-                                val cleaned = DocumentMetadataHelper.cleanSelectedAuthorText(state.quote)
-                                if (cleaned.isBlank()) {
-                                    Toast.makeText(context, "Select text containing an author's name first", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    isMoreMenuExpanded = false
-                                    onAddAsAuthor(state.quote)
-                                    state.onClearSelection()
-                                }
-                            }
-                            .padding(vertical = 10.dp, horizontal = 10.dp)
-                            .testTag("selection_add_as_author_button"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PersonAdd,
-                            contentDescription = "Add as Author",
-                            tint = Color.Black,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Add as Author",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.Black,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // Swatches: a tap highlights in that colour straight away.
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                koreaderColors.forEach { (label, c, hex) ->
+                    val last = selectedColorHex.equals(hex, ignoreCase = true)
                     Box(
                         modifier = Modifier
-                            .width(1.dp)
-                            .height(40.dp)
-                            .background(Color.Black)
-                    )
-
-                    // More Action 2: Set as Abstract/Summary
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
+                            .size(swatchSize)
+                            .background(c)
+                            .border(if (last) 2.5.dp else 1.dp, Color.Black)
                             .clickable {
-                                val cleaned = DocumentMetadataHelper.cleanSelectedAbstractText(state.quote)
-                                if (cleaned.isBlank()) {
-                                    Toast.makeText(context, "Select a passage of text first", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    isMoreMenuExpanded = false
-                                    onSetAsAbstract(state.quote)
-                                    state.onClearSelection()
-                                }
+                                selectedColorHex = hex
+                                LastHighlightColour.hex = hex
+                                state.onQuickSaveHighlight(hex)
                             }
-                            .padding(vertical = 10.dp, horizontal = 10.dp)
-                            .testTag("selection_set_as_abstract_button"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Description,
-                            contentDescription = "Set as Abstract/Summary",
-                            tint = Color.Black,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Set as Abstract/Summary",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.Black,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                if (readerDocument != null) {
-                    HorizontalDivider(thickness = 1.dp, color = Color.Black)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color(0xFFF7F7F5)),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // More Action 3: Set as DOI / ISBN / year / publisher / journal …
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable { isMoreMenuExpanded = false; showSetAs = true }
-                                .padding(vertical = 10.dp, horizontal = 10.dp)
-                                .testTag("selection_set_as_field_button"),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Icon(Icons.Default.Description, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Set as… (DOI, ISBN, year…)",
-                                fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                                color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Box(modifier = Modifier.width(1.dp).height(40.dp).background(Color.Black))
-                        // More Action 4: Copy as citation
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable { isMoreMenuExpanded = false; showCite = true }
-                                .padding(vertical = 10.dp, horizontal = 10.dp)
-                                .testTag("selection_copy_citation_button"),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Copy as citation",
-                                fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                                color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                            .semantics { contentDescription = "Highlight $label" }
+                            .testTag("highlight_swatch_${label.lowercase()}")
+                    )
                 }
             }
 
-            HorizontalDivider(thickness = 1.dp, color = Color.Black)
-
-            // 3. Quote Preview & Citation / Reference Bar (matching HighlightsListScreen & App E-Paper Style)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.White)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            // Actions, as on the web: Note… · Copy · Listen · Define · Ask AI · More · ×
+            Row(
+                modifier = Modifier.height(cellHeight).inkFrame(com.example.ui.theme.Ink.InnerRule),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Tinted Quote Box with crisp 1dp black border
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, Color.Black)
-                        .background(selectedColor.copy(alpha = 0.30f))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "“${state.quote}”",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Serif,
-                            fontStyle = FontStyle.Italic
-                        ),
-                        color = Color.Black,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                if (state.hasUnusualPdfTextWarning && state.onCompareOrOcrSelection != null) {
-                    Surface(
-                        color = Color(0xFFD1B35C).copy(alpha = 0.35f),
-                        shape = RoundedCornerShape(0.dp),
-                        border = BorderStroke(1.dp, Color.Black),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { state.onCompareOrOcrSelection.invoke() }
-                            .testTag("selection_unusual_chars_warning_banner")
-                    ) {
-                        Text(
-                            text = "⚠️ The selected text contains unusual characters. Compare it with OCR?",
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                            color = Color.Black,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                        )
-                    }
-                }
-
-                // Citation Locus + Reference / CFI / Wikilink Chips
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (headerPageSubtitle.isNotBlank()) "Save selection ($headerPageSubtitle)" else "Save selection",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp
-                            ),
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF18181B),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.testTag("selection_toolbar_page_info")
-                        )
-                        if (!state.isPdfDocument && resolvedLocus.isNotBlank()) {
-                            Text(
-                                text = resolvedLocus,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 10.sp
-                                ),
-                                color = Color(0xFF3F3F46),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.testTag("epub_selection_locus_chip")
-                            )
-                        }
-                    }
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .padding(start = 8.dp)
-                            .horizontalScroll(rememberScrollState())
-                    ) {
-                        if (!state.isPdfDocument) {
-                            OutlinedButton(
-                                onClick = {
-                                    val locusText = resolvedLocus.ifBlank { state.chapterTitle }
-                                    clipboardManager.setText(AnnotatedString(locusText))
-                                    Toast.makeText(context, "Copied: $locusText", Toast.LENGTH_SHORT).show()
-                                },
-                                shape = RoundedCornerShape(0.dp),
-                                border = BorderStroke(1.dp, Color.Black),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                modifier = Modifier
-                                    .height(26.dp)
-                                    .testTag("copy_reference_toolbar_button")
-                            ) {
-                                Text(
-                                    text = "Copy reference",
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.Black
-                                )
-                            }
-
-                            OutlinedButton(
-                                onClick = {
-                                    val cfiText = state.epubCfi.ifBlank { "epubcfi(/6/2!/4/2/1:0)" }
-                                    clipboardManager.setText(AnnotatedString(cfiText))
-                                    Toast.makeText(context, "Copied: $cfiText", Toast.LENGTH_SHORT).show()
-                                },
-                                shape = RoundedCornerShape(0.dp),
-                                border = BorderStroke(1.dp, Color.Black),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                modifier = Modifier
-                                    .height(26.dp)
-                                    .testTag("copy_cfi_toolbar_button")
-                            ) {
-                                Text(
-                                    text = "Copy CFI",
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.Black
-                                )
-                            }
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val wikilink = "[[${state.quote}]]"
-                                val clip = ClipData.newPlainText("Obsidian Wikilink", wikilink)
-                                clipboard.setPrimaryClip(clip)
-                                Toast.makeText(context, "Copied Obsidian Wikilink: $wikilink", Toast.LENGTH_SHORT).show()
-                                state.onClearSelection()
-                            },
-                            shape = RoundedCornerShape(0.dp),
-                            border = BorderStroke(1.dp, Color.Black),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(26.dp)
-                        ) {
-                            Text(
-                                text = "[[Wikilink]]",
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black
-                            )
-                        }
-                    }
-                }
-
-                // 4. Selection Range Adjustment Strip (for Classic EPUB & PDF custom word selection)
-                if (state.showWordAdjustmentControls) {
-                    HorizontalDivider(thickness = 1.dp, color = Color(0xFFD4D4D8))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (state.onCompareOrOcrSelection != null) {
-                            OutlinedButton(
-                                onClick = { state.onCompareOrOcrSelection.invoke() },
-                                modifier = Modifier
-                                    .height(28.dp)
-                                    .testTag("selection_compare_ocr_button"),
-                                shape = RoundedCornerShape(0.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp),
-                                border = BorderStroke(1.dp, Color.Black),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = Color(0xFFD1B35C).copy(alpha = 0.25f),
-                                    contentColor = Color.Black
-                                )
-                            ) {
-                                Text("Compare / OCR", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        OutlinedButton(
-                            onClick = state.onRemoveWord,
-                            modifier = Modifier.height(28.dp),
-                            shape = RoundedCornerShape(0.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp),
-                            border = BorderStroke(1.dp, Color.Black),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Black)
-                        ) {
-                            Text("- Word", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                        }
-
-                        OutlinedButton(
-                            onClick = state.onAddWord,
-                            modifier = Modifier.height(28.dp),
-                            shape = RoundedCornerShape(0.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp),
-                            border = BorderStroke(1.dp, Color.Black),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Black)
-                        ) {
-                            Text("+ Word", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                        }
-
-                        if (state.canAddNextParagraph) {
-                            OutlinedButton(
-                                onClick = state.onAddNextParagraph,
-                                modifier = Modifier.height(28.dp),
-                                shape = RoundedCornerShape(0.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp),
-                                border = BorderStroke(1.dp, Color.Black),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Black)
-                            ) {
-                                Text("+ Next Para", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        OutlinedButton(
-                            onClick = state.onSelectAll,
-                            modifier = Modifier.height(28.dp),
-                            shape = RoundedCornerShape(0.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp),
-                            border = BorderStroke(1.dp, Color.Black),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Black)
-                        ) {
-                            Text("Select All", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-
-                // 5. Selections across a page break: keep this part, finish on the next page (one note for both).
-                if (state.continuedFrom.isNotBlank() || state.onContinueOnNextPage != null) {
-                    HorizontalDivider(thickness = 1.dp, color = Color(0xFFD4D4D8))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (state.continuedFrom.isNotBlank()) {
-                            Text(
-                                text = "Continues the selection from ${state.continuedFrom} — saved as one note",
-                                fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
-                                color = Color.Black, modifier = Modifier.weight(1f), maxLines = 2
-                            )
-                            state.onCancelContinuation?.let { cancel ->
-                                OutlinedButton(
-                                    onClick = cancel,
-                                    modifier = Modifier.height(30.dp),
-                                    shape = RoundedCornerShape(0.dp),
-                                    contentPadding = PaddingValues(horizontal = 8.dp),
-                                    border = BorderStroke(1.dp, Color.Black),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Black)
-                                ) { Text("Drop first part", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
-                            }
-                        } else {
-                            Spacer(Modifier.weight(1f))
-                        }
-                        state.onContinueOnNextPage?.let { cont ->
-                            Button(
-                                onClick = cont,
-                                modifier = Modifier.height(30.dp).testTag("selection_continue_next_page"),
-                                shape = RoundedCornerShape(0.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color.Black, contentColor = Color.White)
-                            ) { Text("Continue on next page →", fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
-                        }
-                    }
+                val cells = listOf(
+                    BarCellSpec("Note…", "selection_save_note_button", filled = true) {
+                        LastHighlightColour.hex = selectedColorHex
+                        state.onSaveNoteWithDialog(selectedColorHex)
+                    },
+                    BarCellSpec("Copy", "selection_copy_quote_button") {
+                        copyToClipboard(state.quote, "Copied")
+                        state.onClearSelection()
+                    },
+                    BarCellSpec("Listen", "selection_speak_button") { state.onSpeakSelection() },
+                    BarCellSpec("Define", "selection_dictionary_button") { showDictionary = true },
+                    BarCellSpec("Ask AI", "selection_ask_ai_button") { showAskAi = true },
+                    BarCellSpec(if (isMoreMenuExpanded) "More ▴" else "More ▾", "selection_more_button", active = isMoreMenuExpanded) {
+                        isMoreMenuExpanded = !isMoreMenuExpanded
+                    },
+                    BarCellSpec("×", "selection_clear_button", description = "Clear the selection") { state.onClearSelection() }
+                )
+                cells.forEachIndexed { i, cell ->
+                    if (i > 0) Box(Modifier.width(1.dp).height(cellHeight).background(Color.Black))
+                    BarCell(cell, cellHeight, cellFont)
                 }
             }
         }
+
+        // More: set the selection as a detail of the book, or copy and share it.
+        if (isMoreMenuExpanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(com.example.ui.theme.Ink.InnerRule, Color.Black)
+                    .padding(8.dp)
+                    .testTag("selection_more_actions_row"),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text("SET AS", style = com.example.ui.theme.InkType.Label)
+                        androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    InkButton(label = "Author", minHeight = cellHeight, modifier = Modifier.testTag("selection_add_as_author_button"), onClick = {
+                        val cleaned = DocumentMetadataHelper.cleanSelectedAuthorText(state.quote)
+                        if (cleaned.isBlank()) {
+                            Toast.makeText(context, "Select text containing an author's name first", Toast.LENGTH_SHORT).show()
+                        } else {
+                            isMoreMenuExpanded = false
+                            onAddAsAuthor(state.quote)
+                            state.onClearSelection()
+                        }
+                    })
+                    InkButton(label = "Abstract", minHeight = cellHeight, modifier = Modifier.testTag("selection_set_as_abstract_button"), onClick = {
+                        val cleaned = DocumentMetadataHelper.cleanSelectedAbstractText(state.quote)
+                        if (cleaned.isBlank()) {
+                            Toast.makeText(context, "Select a passage of text first", Toast.LENGTH_SHORT).show()
+                        } else {
+                            isMoreMenuExpanded = false
+                            onSetAsAbstract(state.quote)
+                            state.onClearSelection()
+                        }
+                    })
+                    if (readerDocument != null) {
+                        InkButton(label = "DOI, ISBN, year…", minHeight = cellHeight, modifier = Modifier.testTag("selection_set_as_field_button"),
+                            onClick = { isMoreMenuExpanded = false; showSetAs = true })
+                    }
+                }
+                Text("COPY & SHARE", style = com.example.ui.theme.InkType.Label)
+                        androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (readerDocument != null) {
+                        InkButton(label = "As citation…", minHeight = cellHeight, modifier = Modifier.testTag("selection_copy_citation_button"),
+                            onClick = { isMoreMenuExpanded = false; showCite = true })
+                    }
+                    if (!state.isPdfDocument) {
+                        InkButton(label = "Reference", minHeight = cellHeight, modifier = Modifier.testTag("copy_reference_toolbar_button"), onClick = {
+                            val locusText = resolvedLocus.ifBlank { state.chapterTitle }
+                            clipboardManager.setText(AnnotatedString(locusText))
+                            Toast.makeText(context, "Copied: $locusText", Toast.LENGTH_SHORT).show()
+                        })
+                        InkButton(label = "CFI", minHeight = cellHeight, modifier = Modifier.testTag("copy_cfi_toolbar_button"), onClick = {
+                            val cfiText = state.epubCfi.ifBlank { "epubcfi(/6/2!/4/2/1:0)" }
+                            clipboardManager.setText(AnnotatedString(cfiText))
+                            Toast.makeText(context, "Copied: $cfiText", Toast.LENGTH_SHORT).show()
+                        })
+                    }
+                    InkButton(label = "[[Wikilink]]", minHeight = cellHeight, onClick = {
+                        copyToClipboard("[[${state.quote}]]", "Copied the Obsidian link")
+                        state.onClearSelection()
+                    })
+                    InkButton(label = "Share…", minHeight = cellHeight, modifier = Modifier.testTag("selection_share_quote_button"), onClick = {
+                        val shareText = if (resolvedLocus.isNotBlank()) "“${state.quote}”\n— $resolvedLocus" else "“${state.quote}”"
+                        val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(android.content.Intent.EXTRA_TEXT, shareText)
+                        }
+                        context.startActivity(android.content.Intent.createChooser(sendIntent, "Share quote"))
+                    })
+                }
+                if (resolvedLocus.isNotBlank()) {
+                    Text(
+                        resolvedLocus,
+                        style = com.example.ui.theme.InkType.Meta,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("selection_toolbar_page_info")
+                    )
+                }
+            }
+        }
+
+        if (state.hasUnusualPdfTextWarning && state.onCompareOrOcrSelection != null) {
+            Text(
+                text = "Unusual characters in the selection: compare with OCR ›",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.Black,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color.Black)
+                    .clickable { state.onCompareOrOcrSelection.invoke() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("selection_unusual_chars_warning_banner")
+            )
+        }
+
+        // Adjust the selection (classic EPUB and PDF word selection).
+        if (state.showWordAdjustmentControls) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (state.onCompareOrOcrSelection != null) {
+                    InkButton(label = "Compare / OCR", onClick = { state.onCompareOrOcrSelection.invoke() },
+                        modifier = Modifier.testTag("selection_compare_ocr_button"))
+                }
+                InkButton(label = "− Word", onClick = state.onRemoveWord)
+                InkButton(label = "+ Word", onClick = state.onAddWord)
+                if (state.canAddNextParagraph) InkButton(label = "+ Next paragraph", onClick = state.onAddNextParagraph)
+                InkButton(label = "Select all", onClick = state.onSelectAll)
+            }
+        }
+
+        // Selections across a page break: keep this part, finish on the next page (one note for both).
+        if (state.continuedFrom.isNotBlank() || state.onContinueOnNextPage != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (state.continuedFrom.isNotBlank()) {
+                    Text(
+                        text = "Continues the selection from ${state.continuedFrom} — saved as one note",
+                        fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
+                        color = Color.Black, modifier = Modifier.weight(1f), maxLines = 2
+                    )
+                    state.onCancelContinuation?.let { cancel -> InkButton(label = "Drop first part", onClick = cancel) }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                state.onContinueOnNextPage?.let { cont ->
+                    InkButton(label = "Continue on next page ›", filled = true, onClick = cont,
+                        modifier = Modifier.testTag("selection_continue_next_page"))
+                }
+            }
+        }
+    }
+}
+
+private class BarCellSpec(
+    val label: String,
+    val tag: String,
+    val filled: Boolean = false,
+    val active: Boolean = false,
+    val description: String = label,
+    val onClick: () -> Unit
+)
+
+/** One cell of the selection bar: square, inverted when it is the main action or open. */
+@Composable
+private fun BarCell(cell: BarCellSpec, height: androidx.compose.ui.unit.Dp, fontSize: androidx.compose.ui.unit.TextUnit) {
+    val inverted = cell.filled || cell.active
+    Box(
+        modifier = Modifier
+            .height(height)
+            .widthIn(min = height)
+            .background(if (inverted) Color.Black else Color.White)
+            .clickable(onClick = cell.onClick)
+            .semantics { contentDescription = cell.description }
+            .padding(horizontal = 10.dp)
+            .testTag(cell.tag),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            cell.label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = fontSize,
+            fontWeight = FontWeight.Bold,
+            color = if (inverted) Color.White else Color.Black,
+            maxLines = 1
+        )
     }
 }
 
