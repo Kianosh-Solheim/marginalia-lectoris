@@ -16,15 +16,24 @@ object SyncTriggers {
 
     val names: List<String> = tables.flatMap { (t, _) -> listOf("${t}_sync_insert", "${t}_sync_update", "${t}_sync_delete") }
 
+    /**
+     * Creates the triggers, replacing any older version of them (so a fix to them reaches databases made
+     * before it: this runs each time the database is opened).
+     */
     fun create(exec: (String) -> Unit) {
+        drop(exec)
         tables.forEach { (t, kind) ->
             // New rows (and rows rewritten by INSERT OR REPLACE): give them an ID if missing, and mark them as changed now.
             exec("""CREATE TRIGGER IF NOT EXISTS ${t}_sync_insert AFTER INSERT ON $t BEGIN
                 UPDATE $t SET uuid = CASE WHEN NEW.uuid = '' THEN $NEW_UUID ELSE NEW.uuid END, updatedAt = $NOW WHERE rowid = NEW.rowid;
                 END""")
-            // Edits: a change that doesn't move updatedAt forward itself gets the current time.
+            // Edits: a change that doesn't move updatedAt forward itself gets the current time, and always a
+            // later time than before (MAX(now, old + 1)). Plain "now" was not enough: two edits in the same
+            // millisecond (turning pages saves the place twice), or a change time ahead of this clock, left
+            // updatedAt where it was, so the trigger's own UPDATE set it off again, until SQLite stopped it
+            // with "too many levels of trigger recursion" and the app crashed.
             exec("""CREATE TRIGGER IF NOT EXISTS ${t}_sync_update AFTER UPDATE ON $t WHEN NEW.updatedAt <= OLD.updatedAt BEGIN
-                UPDATE $t SET updatedAt = $NOW WHERE rowid = NEW.rowid;
+                UPDATE $t SET updatedAt = MAX($NOW, OLD.updatedAt + 1) WHERE rowid = NEW.rowid;
                 END""")
             exec("""CREATE TRIGGER IF NOT EXISTS ${t}_sync_delete AFTER DELETE ON $t WHEN OLD.uuid <> '' BEGIN
                 INSERT OR REPLACE INTO tombstones (kind, uuid, deletedAt) VALUES ('$kind', OLD.uuid, $NOW);
