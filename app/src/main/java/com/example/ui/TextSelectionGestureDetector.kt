@@ -186,6 +186,7 @@ suspend fun PointerInputScope.detectCustomTextSelectionGestures(
         val downTimeMs = System.currentTimeMillis()
         val downPos = down.position
         val isStylus = down.type == PointerType.Stylus || down.type == PointerType.Eraser
+        LastInputTool.isStylus = isStylus
         val initialLayout = getTextLayoutResult()
         // If touch is below the Text composable (e.g. inside the footnote's 'Tilbake til tekst' button row),
         // yield immediately so the child clickable handles the tap cleanly without interference!
@@ -572,6 +573,7 @@ suspend fun PointerInputScope.detectCustomPdfSelectionGestures(
         val rawDownPos = down.position
         val downPos = toUnzoomedPoint(rawDownPos)
         val isStylus = down.type == PointerType.Stylus || down.type == PointerType.Eraser
+        LastInputTool.isStylus = isStylus
 
         if (isStylus && onPenStroke != null) {
             down.consume()

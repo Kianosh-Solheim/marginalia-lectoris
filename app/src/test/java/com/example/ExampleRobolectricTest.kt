@@ -1985,6 +1985,7 @@ class ExampleRobolectricTest {
 
   @Test
   fun selectionToolbarMoreMenu_revealsAuthorAndAbstractActions() {
+    // "More ▾" on the selection bar opens the Set as / Copy & share row (same test tags as before).
     var addedAuthorSelection: String? = null
     var setAbstractSelection: String? = null
 
