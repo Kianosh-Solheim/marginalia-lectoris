@@ -238,6 +238,8 @@ fun ReaderScreen(
     }
     val coroutineScope = rememberCoroutineScope()
     val chapterDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    // Which panel the right-hand drawer shows: Contents (false) or Notes (true).
+    var sidePanelNotes by remember { mutableStateOf(false) }
 
     var currentDocAuthor by remember(document.id, document.author) { mutableStateOf(document.author) }
     var currentDocSummary by remember(document.id, document.summary) { mutableStateOf(document.summary) }
@@ -686,7 +688,7 @@ fun ReaderScreen(
 
     BackHandler {
         if (chapterDrawerState.isOpen) {
-            coroutineScope.launch { chapterDrawerState.close() }
+            coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
         } else {
             onTtsPlayingChanged(false)
             ttsManager.stop()
@@ -852,11 +854,33 @@ fun ReaderScreen(
         }
     }
 
+    // Contents and Notes open from the right, as in the web view (the drawer is mirrored; its contents are not).
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl) {
     ModalNavigationDrawer(
         drawerState = chapterDrawerState,
         gesturesEnabled = false,
         scrimColor = Color.Transparent,
         drawerContent = {
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+            if (sidePanelNotes) {
+                ReaderNotesPanel(
+                    highlights = highlights,
+                    currentChapterTitle = activeChapter?.title.orEmpty(),
+                    onGoTo = { h ->
+                        targetHighlightRequest = h
+                        targetPageRequest = (h.pageNumber - 1).coerceAtLeast(0)
+                        jumpRequestToken++
+                        coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
+                    },
+                    onEdit = { h -> highlightToEdit = h },
+                    onShowContents = { sidePanelNotes = false },
+                    onOpenExport = {
+                        coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
+                        showObsidianHubDialog = true
+                    },
+                    onClose = { coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) } }
+                )
+            } else {
             val tocVolumeTick = com.example.reader.EditedVolumes.changes.intValue
             val tocVolume = remember(document.id, tocVolumeTick) {
                 com.example.reader.EditedVolumes.get(context, document.id)?.takeIf { it.enabled && it.chapters.any { c -> c.isArticle } }
@@ -885,7 +909,7 @@ fun ReaderScreen(
                             daisyAudioManager.seekToNavItem(navItem, autoPlay = daisyAudioState.isPlaying)
                         }
                     }
-                    coroutineScope.launch { chapterDrawerState.close() }
+                    coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
                 },
                 onDaisyNavItemSelected = { navItem ->
                     daisyAudioManager.seekToNavItem(navItem, autoPlay = daisyAudioState.isPlaying)
@@ -911,7 +935,7 @@ fun ReaderScreen(
                         )
                         jumpRequestToken++
                     }
-                    coroutineScope.launch { chapterDrawerState.close() }
+                    coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
                 },
                 onDaisySmilClipSelected = { clip ->
                     showDaisyAudioBar = true
@@ -930,12 +954,9 @@ fun ReaderScreen(
                         )
                         jumpRequestToken++
                     }
-                    coroutineScope.launch { chapterDrawerState.close() }
+                    coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
                 },
-                onViewNotesClick = {
-                    coroutineScope.launch { chapterDrawerState.close() }
-                    showHighlightsSheet = true
-                },
+                onViewNotesClick = { sidePanelNotes = true },
                 landmarksSection = if (!isPdfDocument && landmarksList.isNotEmpty()) {
                     {
                         EpubLandmarksDrawerSection(
@@ -945,14 +966,17 @@ fun ReaderScreen(
                                 targetHighlightRequest = null
                                 targetPageRequest = (lm.resolvedPage - 1).coerceAtLeast(0)
                                 jumpRequestToken++
-                                coroutineScope.launch { chapterDrawerState.close() }
+                                coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
                             }
                         )
                     }
                 } else null
             )
+                    }
+            }
         }
     ) {
+        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
         Scaffold(
             contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
             topBar = {
@@ -1003,7 +1027,7 @@ fun ReaderScreen(
                         onNavigateBack()
                     },
                     onOpenFileMenu = { showBookInfoDialog = true },
-                    onOpenTocMenu = { coroutineScope.launch { chapterDrawerState.open() } },
+                    onOpenTocMenu = { sidePanelNotes = false; coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Open) } },
                     onOpenSearch = { findState.open = true },
                     onOpenTypesettingMenu = { showAaPanel = true },
                     onHeightChanged = { topBarHeightPx = it },
@@ -1032,7 +1056,7 @@ fun ReaderScreen(
                             if (showReadAloudBar) showAudiobookBar = false
                         }
                     },
-                    onOpenAnnotationsMenu = { showObsidianHubDialog = true },
+                    onOpenAnnotationsMenu = { sidePanelNotes = true; coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Open) } },
                     onOpenSettingsMenu = { showToolsDialog = true },
                     glossaeEnabled = glossaeEnabled,
                     onToggleGlossae = {
@@ -1674,6 +1698,8 @@ fun ReaderScreen(
                 EinkRefreshOverlay(pageKey = currentActivePage, forceKey = glossaeEnabled)
             }
         }
+            }
+    }
     }
 
     // The printed page numbers of this PDF, laid down by hand.
