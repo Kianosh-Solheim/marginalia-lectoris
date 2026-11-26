@@ -1,0 +1,2 @@
+9edc8dcd3ae9f3fa4793c03ff3caeaec1add42c5
+Concentus (pure Java Opus), https://github.com/lostromb/concentus, BSD 3-clause licence: see LICENSE.txt
