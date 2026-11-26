@@ -1173,7 +1173,7 @@ internal fun ReaderFormattingBottomSheet(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            ReaderTheme.entries.forEach { themeOption ->
+                            ReaderTheme.entries.filter { it != ReaderTheme.CREAM }.forEach { themeOption ->
                                 val isSelected = readerThemeSetting.equals(themeOption.id, ignoreCase = true)
                                 Surface(
                                     onClick = { onReaderThemeChange(themeOption.id) },

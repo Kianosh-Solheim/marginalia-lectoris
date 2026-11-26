@@ -52,7 +52,7 @@ class SettingsApi(private val context: Context) {
     private val TTS = "Read aloud"
     private val LIB = "Library & screen"
 
-    private val themes = listOf("WHITE" to "White", "CREAM" to "Cream", "DARK" to "Dark")
+    private val themes = listOf("WHITE" to "White", "DARK" to "Black")
     private val fonts = listOf("SERIF" to "Serif", "SANS" to "Sans", "MONO" to "Mono")
     private val aligns = listOf("JUSTIFY" to "Justified", "LEFT" to "Left")
     private val paragraphs = listOf("BOTH" to "Indent + space", "INDENT" to "Indent", "SPACED" to "Space between", "NONE" to "None")
@@ -116,7 +116,7 @@ class SettingsApi(private val context: Context) {
             set = { v -> s = s.copy(paginateByEpubPageEquivalents = v.bool() && s.showEpubPageEquivalents) }),
 
         // Text & layout
-        Field("readerTheme", TEXT, "Colours", "choice", themes, get = { s.readerTheme.uppercase().let { t -> if (t == "CREAM" || t == "DARK") t else "WHITE" } },
+        Field("readerTheme", TEXT, "Colours", "choice", themes, get = { s.readerTheme.uppercase().let { t -> if (t == "DARK") t else "WHITE" } },
             set = { v -> s = s.copy(readerTheme = choice(themes, v, s.readerTheme)) }),
         Field("readerFontFamily", TEXT, "Font", "choice", fonts, get = { s.readerFontFamily.ifBlank { "SERIF" } }, set = { v -> s = s.copy(readerFontFamily = choice(fonts, v, s.readerFontFamily)) }),
         Field("readerFontSizeSp", TEXT, "Font size (sp)", "number", min = 10.0, max = 40.0, step = 1.0, get = { s.readerFontSizeSp.toDouble() },

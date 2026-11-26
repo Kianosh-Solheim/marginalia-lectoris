@@ -107,7 +107,7 @@ fun SettingsScreen(
     var volumeKeyAnim by remember(currentSettings) { mutableStateOf(currentSettings.volumeKeyAnimation) }
     var readerViewMode by remember(currentSettings) { mutableStateOf(currentSettings.readerViewMode.ifBlank { "PAGINATED" }) }
     var pageTurnAnimation by remember(currentSettings) { mutableStateOf(currentSettings.pageTurnAnimation.ifBlank { "PAGE_CURL" }) }
-    var readerTheme by remember(currentSettings) { mutableStateOf(currentSettings.readerTheme.ifBlank { "WHITE" }) }
+    var readerTheme by remember(currentSettings) { mutableStateOf(if (currentSettings.readerTheme.equals("DARK", true)) "DARK" else "WHITE") }
     var readerMarginDp by remember(currentSettings) { mutableIntStateOf(currentSettings.readerMarginDp) }
     var readerFontSizeSp by remember(currentSettings) { mutableFloatStateOf(currentSettings.readerFontSizeSp) }
     var showEpubPageEquivalents by remember(currentSettings) { mutableStateOf(currentSettings.showEpubPageEquivalents) }
@@ -642,7 +642,6 @@ fun SettingsScreen(
                         ) {
                             listOf(
                                 Triple("WHITE", "White", Color(0xFFFFFFFF) to Color(0xFF18181B)),
-                                Triple("CREAM", "Cream White", Color(0xFFFBF0D9) to Color(0xFF26211C)),
                                 Triple("DARK", "Black & White", Color(0xFF000000) to Color(0xFFFFFFFF))
                             ).forEach { (id, label, colors) ->
                                 val (bg, fg) = colors

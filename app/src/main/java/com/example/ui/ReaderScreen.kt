@@ -628,9 +628,8 @@ fun ReaderScreen(
         targetPrintPageRequest = null
     }
     var readerThemeSetting by remember(settings) {
-        val initialT = if (settings.readerTheme.equals("DARK", ignoreCase = true)) "DARK"
-        else if (settings.readerTheme.equals("CREAM", ignoreCase = true)) "CREAM"
-        else "WHITE"
+        // The tablet offers White and Black only (cream does not show on e-ink); an old Cream reads as White.
+        val initialT = if (settings.readerTheme.equals("DARK", ignoreCase = true)) "DARK" else "WHITE"
         mutableStateOf(initialT)
     }
 
