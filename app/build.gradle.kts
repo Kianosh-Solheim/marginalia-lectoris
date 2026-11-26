@@ -158,6 +158,7 @@ dependencies {
   implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
   // Audiobooks: playback with the screen off, media buttons and Bluetooth controls
   implementation("androidx.media3:media3-exoplayer:1.5.1")
+  implementation("androidx.media3:media3-decoder:1.5.1")   // SimpleDecoder, for the app's own Opus decoder
   implementation("androidx.media3:media3-session:1.5.1")
   // Read aloud: Piper voices run on the tablet through sherpa-onnx (its own onnxruntime removed from the AAR;
   // it uses the app's onnxruntime above, the same version), and the voices' .tar.bz2 packages

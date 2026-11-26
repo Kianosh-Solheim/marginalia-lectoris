@@ -255,7 +255,8 @@ object AudiobookPlayer {
 
     fun player(ctx: Context): ExoPlayer {
         player?.let { return it }
-        val p = ExoPlayer.Builder(ctx.applicationContext)
+        // with an Opus decoder of its own, for tablets whose Android has none
+        val p = ExoPlayer.Builder(ctx.applicationContext, AudiobookRenderersFactory(ctx.applicationContext))
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_SPEECH).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .setSeekBackIncrementMs(30_000).setSeekForwardIncrementMs(30_000)
@@ -460,19 +461,24 @@ object AudiobookSync {
                 ex.setDataSource(file.absolutePath)
                 (0 until ex.trackCount).firstNotNullOfOrNull { ex.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)?.takeIf { m -> m.startsWith("audio/") } }
             } finally { ex.release() }
-        }.getOrElse { throw IllegalStateException("Android cannot open “${file.name}” as audio (${it.message ?: it.javaClass.simpleName}).") }
-            ?: throw IllegalStateException("“${file.name}” has no audio track Android can read.")
+        }.getOrElse { if (file.extension.equals("opus", ignoreCase = true)) null else throw IllegalStateException("Android cannot open “${file.name}” as audio (${it.message ?: it.javaClass.simpleName}).") }
+            ?: if (file.extension.equals("opus", ignoreCase = true)) "audio/opus" else throw IllegalStateException("“${file.name}” has no audio track Android can read.")
         val names = runCatching {
             android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).codecInfos
                 .filter { !it.isEncoder && it.supportedTypes.any { t -> t.equals(mime, ignoreCase = true) } }
                 .sortedBy { if (it.name.startsWith("c2.android.") || it.name.startsWith("OMX.google.")) 0 else 1 }
                 .map { it.name }
         }.getOrDefault(emptyList())
+        val opus = mime.equals("audio/opus", ignoreCase = true) || file.extension.equals("opus", ignoreCase = true)
+        // Opus on a tablet without an Opus decoder (the Onyx has none): the app's own decoder
+        if (opus && names.isEmpty()) return runCatching { OggOpusPcm.window(file, fromMs, lenMs) }
+            .getOrElse { throw IllegalStateException("Could not decode “${file.name}” (Opus, in the app): ${it.message ?: it.javaClass.simpleName}") }
         val errors = mutableListOf<String>()
         for (name in listOf<String?>(null) + names) {
             try { return pcmWindowWith(file, fromMs, lenMs, name) }
             catch (t: Throwable) { errors += "${name ?: "default decoder"}: ${t.message ?: t.javaClass.simpleName}" }
         }
+        if (opus) try { return OggOpusPcm.window(file, fromMs, lenMs) } catch (t: Throwable) { errors += "in the app: ${t.message ?: t.javaClass.simpleName}" }
         throw IllegalStateException("Android could not decode “${file.name}” ($mime). " + errors.distinct().joinToString("; "))
     }
 
