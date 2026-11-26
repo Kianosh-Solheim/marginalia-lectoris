@@ -1589,7 +1589,7 @@ html[data-theme="dark"] .wtexarea .cm-atom, html[data-theme="dark"] .wtexarea .c
 .abline > b { position: absolute; top: 4px; width: 1px; height: 10px; background: var(--soft); }
 .absync { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 13.5px; }
 .absync > span { flex: 1; min-width: 200px; }
-.rabook { padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
+.rabook { padding: 6px 12px; border-top: 2px solid var(--ink); background: var(--paper); }
 .rabook .abplayer { border: none; padding: 0; background: transparent; gap: 4px; }
 mark.audio-hit { background: transparent; color: transparent; border-bottom: 2.5px solid #111; padding: 0; }
 html[data-theme="dark"] mark.audio-hit { border-bottom-color: #eee; }
@@ -1719,3 +1719,8 @@ main.trash { max-width: 980px; margin: 0 auto; padding: 24px 20px 60px; }
 .trash-acts a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 @media (max-width: 640px) { .trash-item { grid-template-columns: 44px minmax(0, 1fr); } .trash-acts { grid-column: 1 / -1; justify-content: flex-start; } }
 .trash-head .row { flex-wrap: nowrap; align-items: center; }
+
+/* Notes panel: jump to a note, a page or a tag (same as the tablet) */
+.rside .njump { width: 100%; box-sizing: border-box; border: 1px solid var(--ink); padding: 8px 10px; font: inherit; font-size: 13px; margin: 0 0 6px; background: var(--paper); color: var(--ink); }
+/* Settings: Find a setting */
+.set-find { width: 100%; max-width: 420px; box-sizing: border-box; border: 1px solid var(--ink); padding: 8px 10px; font: inherit; font-size: 14px; margin: 0 0 16px; background: var(--paper); color: var(--ink); }
