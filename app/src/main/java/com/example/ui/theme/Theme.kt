@@ -98,7 +98,9 @@ fun ReadMarkTheme(
 ) {
     MaterialTheme(
         colorScheme = ColorEInkColorScheme,
-        typography = Typography
+        typography = Typography,
+        // Square corners everywhere, as in the web view (stock dialogs, menus, cards, chips, buttons).
+        shapes = Ink.MaterialShapes
     ) {
         CompositionLocalProvider(
             LocalIndication provides NoEInkRippleIndication,
