@@ -12,7 +12,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -31,7 +30,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.ui.theme.Ink
 import androidx.compose.ui.unit.sp
 import com.example.reader.*
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +43,7 @@ import java.io.File
 val LocalBookPath = staticCompositionLocalOf { "" }
 
 private val InkGrey = Color(0xFF3F3F46)
-private val PaperShape = RoundedCornerShape(2.dp)
+private val PaperShape = Ink.Shape
 
 @Composable
 fun rememberBookLanguage(path: String = LocalBookPath.current, sample: String = ""): String {
@@ -56,28 +57,50 @@ fun rememberBookLanguage(path: String = LocalBookPath.current, sample: String = 
 
 // ----------------------------------------------------------------- editorial controls
 
-/** Square, black-ruled toggle matching the app's newspaper style (selected = inverted). */
+/**
+ * Square, black-ruled toggle matching the web view's .chip (selected = inverted).
+ * [minHeight]: leave unset for the compact size; pass [Ink.TouchTarget] where a finger is expected.
+ */
 @Composable
-fun InkChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun InkChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    minHeight: Dp = Dp.Unspecified
+) {
+    val fg = when {
+        !enabled -> Ink.Soft
+        selected -> Ink.Paper
+        else -> Ink.Ink
+    }
     Box(
         modifier = modifier
-            .border(1.dp, Color.Black, PaperShape)
-            .background(if (selected) Color.Black else Color.White, PaperShape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 5.dp)
+            .heightIn(min = minHeight)
+            .border(Ink.InnerRule, if (enabled) Ink.Ink else Ink.Soft, PaperShape)
+            .background(if (selected && enabled) Ink.Ink else Ink.Paper, PaperShape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center
     ) {
         Text(
             label,
             fontFamily = FontFamily.Monospace,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
-            color = if (selected) Color.White else Color.Black,
+            color = fg,
             maxLines = 1
         )
     }
 }
 
-/** Outlined action button in the editorial style. */
+/**
+ * Action button in the web view's .btn style: square, 1 dp ink rule.
+ * [filled] = the main action (black), [quiet] = no rule until pressed (web: .btn.quiet),
+ * [danger] = red text for Delete and the like.
+ * [minHeight]: leave unset for the compact size; pass [Ink.TouchTarget] where a finger is expected.
+ */
 @Composable
 fun InkButton(
     label: String,
@@ -85,17 +108,27 @@ fun InkButton(
     enabled: Boolean = true,
     filled: Boolean = false,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    quiet: Boolean = false,
+    danger: Boolean = false,
+    minHeight: Dp = Dp.Unspecified
 ) {
     val fg = when {
         !enabled -> Color(0xFF9CA3AF)
-        filled -> Color.White
-        else -> Color.Black
+        filled -> Ink.Paper
+        danger -> Ink.Danger
+        else -> Ink.Ink
+    }
+    val rule = when {
+        quiet && !filled -> Color.Transparent
+        !enabled -> Color(0xFF9CA3AF)
+        else -> Ink.Ink
     }
     Row(
         modifier = modifier
-            .border(1.dp, if (enabled) Color.Black else Color(0xFF9CA3AF), PaperShape)
-            .background(if (filled && enabled) Color.Black else Color.White, PaperShape)
+            .heightIn(min = minHeight)
+            .border(Ink.InnerRule, rule, PaperShape)
+            .background(if (filled && enabled) Ink.Ink else Ink.Paper, PaperShape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -142,7 +175,7 @@ fun DictionaryLookupDialog(passage: String, language: String, contextPassage: St
     AlertDialog(
         onDismissRequest = dismiss,
         containerColor = Color.White,
-        shape = RoundedCornerShape(4.dp),
+        shape = Ink.Shape,
         title = {
             Text("Dictionary", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, color = Color.Black)
         },
@@ -156,7 +189,7 @@ fun DictionaryLookupDialog(passage: String, language: String, contextPassage: St
                     onValueChange = { word = it; result = ""; resultOk = false; lexState = "" },
                     label = { Text("Word") },
                     singleLine = true,
-                    shape = RoundedCornerShape(4.dp),
+                    shape = Ink.Shape,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.Black, unfocusedBorderColor = Color.Black,
                         focusedLabelColor = Color.Black, cursorColor = Color.Black,
