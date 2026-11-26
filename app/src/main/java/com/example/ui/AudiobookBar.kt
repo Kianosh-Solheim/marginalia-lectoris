@@ -77,11 +77,11 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
         if (has == false || busy.isNotBlank()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(if (busy.isNotBlank()) busy else "No audiobook for this book yet.", modifier = Modifier.weight(1f), fontSize = 14.sp)
-                if (busy.isBlank()) InkButton("Add audio files…", filled = true, onClick = { pick.launch(arrayOf("audio/*")) })
+                if (busy.isBlank()) InkButton("Add audio files…", filled = true, onClick = { pick.launch(AUDIO_PICK_TYPES) })
                 if (onUseTts != null && busy.isBlank()) InkButton("Read aloud (TTS)", onClick = onUseTts)
                 InkButton("×", onClick = onClose)
             }
-            if (busy.isBlank()) Text("One .m4b with chapters, or all the .mp3 files at once (they are put in name order). They are kept in the book’s folder: “Audiobook – title”. You can also add them in the web view, on the book’s page.", fontSize = 12.sp, color = Color(0xFF52525B))
+            if (busy.isBlank()) Text("One .m4b or .opus with chapters, or all the .mp3 or .opus files at once (they are put in name order). They are kept in the book’s folder: “Audiobook – title”. You can also add them in the web view, on the book’s page.", fontSize = 12.sp, color = Color(0xFF52525B))
             return@Column
         }
         if (has == null || st.docId != document.id) { Text("Loading the audiobook…", fontSize = 13.sp); return@Column }
@@ -136,7 +136,7 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                InkButton("Add more files…", onClick = { showFiles = false; pick.launch(arrayOf("audio/*")) })
+                InkButton("Add more files…", onClick = { showFiles = false; pick.launch(AUDIO_PICK_TYPES) })
                 InkButton("Remove the audiobook", onClick = {
                     showFiles = false
                     scope.launch { withContext(Dispatchers.IO) { Audiobooks.remove(context, document, null) }; Toast.makeText(context, "Audiobook removed from the tablet", Toast.LENGTH_SHORT).show() }
@@ -146,3 +146,9 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
         }
     }
 }
+
+/**
+ * What the file picker offers: audio, and Ogg/Opus files that the file manager does not know as audio
+ * (".opus" is often typed as an unknown file). A file that is not audio is turned away by its name.
+ */
+private val AUDIO_PICK_TYPES = arrayOf("audio/*", "application/ogg", "application/x-ogg", "application/octet-stream")
