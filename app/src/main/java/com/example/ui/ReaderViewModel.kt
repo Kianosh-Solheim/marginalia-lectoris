@@ -673,9 +673,14 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
 
     private var savePositionJob: Job? = null
 
+    /** Saving where you are reading must never take the app down: a failed save is logged, and the next one tries again. */
+    private val placeSaveErrors = kotlinx.coroutines.CoroutineExceptionHandler { _, t ->
+        android.util.Log.w("ReaderViewModel", "Could not save the reading place", t)
+    }
+
     fun saveReadingPosition(documentId: Long, position: ReadingPosition) {
         savePositionJob?.cancel()
-        savePositionJob = viewModelScope.launch(Dispatchers.IO) {
+        savePositionJob = viewModelScope.launch(Dispatchers.IO + placeSaveErrors) {
             delay(800L)
             repository.updateReadingPosition(documentId, position)
             if (_activeDocument.value?.id == documentId) {
@@ -694,7 +699,7 @@ class ReaderViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateReadingProgress(documentId: Long, page: Int, totalPages: Int) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.IO + placeSaveErrors) {
             val safeTotal = totalPages.coerceAtLeast(1)
             val safePage = page.coerceIn(1, safeTotal)
             val progress = if (safeTotal > 1) {
