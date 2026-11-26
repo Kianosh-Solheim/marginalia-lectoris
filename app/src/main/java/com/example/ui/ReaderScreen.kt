@@ -743,6 +743,7 @@ fun ReaderScreen(
     var showToolsDialog by remember { mutableStateOf(false) }
     // The Aa panel (web view style) and the height of the bar it opens under.
     var showAaPanel by remember { mutableStateOf(false) }
+    var runningHeadOn by remember { mutableStateOf(RunningHead.isOn(context)) }
     var topBarHeightPx by remember { mutableIntStateOf(0) }
     var showPdfCropDialog by remember { mutableStateOf(false) }
 
@@ -1069,6 +1070,14 @@ fun ReaderScreen(
                         ).show()
                     }
                 )
+                // Full screen: the running head (title and chapter), unless turned off in Aa.
+                if (!isUiVisible && runningHeadOn) {
+                    ReaderRunningHead(
+                        title = effectiveDocument.title,
+                        chapter = volumeChapterLine.ifBlank { activeChapter?.title.orEmpty() },
+                        theme = activeReaderTheme
+                    )
+                }
             },
             bottomBar = {
                 KOReaderBottomStatusBar(
@@ -2089,6 +2098,8 @@ fun ReaderScreen(
             onLineSpacingChange = { lineSpacingMultiplier = it; persistFormatting() },
             textAlignSetting = textAlignSetting,
             onTextAlignChange = { textAlignSetting = it; persistFormatting() },
+            runningHead = runningHeadOn,
+            onRunningHeadChange = { runningHeadOn = it; RunningHead.set(context, it) },
             onMoreFormatting = { persistFormatting(); showAaPanel = false; showFormattingSheet = true },
             onDismiss = { persistFormatting(); showAaPanel = false }
         )

@@ -85,6 +85,8 @@ internal fun ReaderAaPanel(
     onLineSpacingChange: (Float) -> Unit,
     textAlignSetting: String,
     onTextAlignChange: (String) -> Unit,
+    runningHead: Boolean,
+    onRunningHeadChange: (Boolean) -> Unit,
     onMoreFormatting: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -194,6 +196,12 @@ internal fun ReaderAaPanel(
                     InkChip("Left", !own && textAlignSetting == "LEFT", { onTextAlignChange("LEFT") }, enabled = !own, minHeight = chip)
                 }
             }
+
+            AaLine("Running head") {
+                InkChip("On", runningHead, { onRunningHeadChange(true) }, minHeight = chip)
+                InkChip("Off", !runningHead, { onRunningHeadChange(false) }, minHeight = chip)
+            }
+            AaNote("In full screen: the title and chapter in small capitals at the top.")
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
