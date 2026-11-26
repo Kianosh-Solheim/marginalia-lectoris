@@ -1686,3 +1686,15 @@ html[data-theme="dark"] mark.audio-hit { border-bottom-color: #eee; }
 .pg-hit { display: flex; flex-direction: column; padding: 5px 9px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--rule); }
 .pg-hit:hover { background: var(--card); }
 .pg-hit span { font-size: 11px; }
+
+/* the reading settings' switches (page numbers) */
+.rsswitches { display: flex; flex-direction: column; gap: 2px; }
+.rsswitches .sub { padding-left: 24px; }
+.rsswitch { display: flex; align-items: center; gap: 10px; min-height: 36px; cursor: pointer; font-size: 14px; position: relative; }
+.rsswitch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.rsswitch .knob { width: 34px; height: 20px; border: 1.5px solid var(--ink); border-radius: 10px; position: relative; flex: none; transition: background .15s; }
+.rsswitch .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--ink); transition: transform .15s; }
+.rsswitch input:checked + .knob { background: var(--ink); }
+.rsswitch input:checked + .knob::after { background: var(--paper, #fff); transform: translateX(14px); }
+.rsswitch input:focus-visible + .knob { outline: 2px solid #2563eb; outline-offset: 2px; }
+.rsswitch.off { opacity: .4; pointer-events: none; }

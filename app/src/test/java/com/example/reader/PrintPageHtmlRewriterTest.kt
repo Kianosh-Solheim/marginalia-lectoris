@@ -106,8 +106,43 @@ class PrintPageHtmlRewriterTest {
     fun resolveMode() {
         assertEquals(PrintPageLayoutMode.PAGINATED_STRICT, PrintPageLayoutMode.resolve(true, true, "PAGINATED"))
         assertEquals(PrintPageLayoutMode.SCROLL_DIVIDERS, PrintPageLayoutMode.resolve(true, true, "VERTICAL_SCROLL"))
-        assertEquals(PrintPageLayoutMode.SCROLL_DIVIDERS, PrintPageLayoutMode.resolve(false, true, "VERTICAL_SCROLL"))
-        assertEquals(PrintPageLayoutMode.OFF, PrintPageLayoutMode.resolve(false, true, "PAGINATED"))
+        assertEquals(PrintPageLayoutMode.INLINE_LABELS, PrintPageLayoutMode.resolve(false, true, "VERTICAL_SCROLL"))
+        assertEquals(PrintPageLayoutMode.INLINE_LABELS, PrintPageLayoutMode.resolve(false, true, "PAGINATED"))
         assertEquals(PrintPageLayoutMode.OFF, PrintPageLayoutMode.resolve(true, false, "PAGINATED"))
+        assertEquals(PrintPageLayoutMode.OFF, PrintPageLayoutMode.resolve(false, false, "VERTICAL_SCROLL"))
+    }
+
+    private val blankTargets = listOf(PrintPageTarget("page-14", "14"), PrintPageTarget("page-15", "15"), PrintPageTarget("page-16", "16"))
+    private val chapterStart = """<div><span epub:type="pagebreak" id="page-14"/><span epub:type="pagebreak" id="page-15"/><h1>Chapter Two</h1><p>Text <span epub:type="pagebreak" id="page-16"/>more</p></div>"""
+
+    @Test
+    fun strict_blankPageGetsItsOwnSection_andTheOpeningIsMarked() {
+        val doc = parse(PrintPageHtmlRewriter.rewrite(xhtml(chapterStart), true, blankTargets, PrintPageLayoutMode.PAGINATED_STRICT))
+        val sections = doc.select("section.ml-printpage")
+        assertEquals(listOf("14", "15", "16"), sections.map { it.attr("data-page") })
+        assertTrue(sections[0].hasClass("ml-blank"))
+        assertEquals("page-14", sections[0].selectFirst("span")!!.id())
+        assertEquals("", sections[0].text())
+        assertTrue(sections[1].hasClass("ml-opening"))
+        assertTrue(sections[1].text().startsWith("Chapter Two"))
+        assertFalse(sections[2].hasClass("ml-opening"))
+        assertEquals(1, doc.select("#page-14").size)
+    }
+
+    @Test
+    fun dividers_blankPageIsSaidToBeBlank() {
+        val doc = parse(PrintPageHtmlRewriter.rewrite(xhtml(chapterStart), true, blankTargets, PrintPageLayoutMode.SCROLL_DIVIDERS))
+        assertEquals(listOf("Page 14 · blank page", "Page 15", "Page 16"), doc.select("div.ml-printpage-divider").map { it.attr("data-caption") })
+    }
+
+    @Test
+    fun labels_markEachEmptyMarker() {
+        val doc = parse(PrintPageHtmlRewriter.rewrite(
+            xhtml("""<p>Before <span epub:type="pagebreak" id="p12"/>after <span epub:type="pagebreak" id="p13">13</span></p>"""),
+            true, targets, PrintPageLayoutMode.INLINE_LABELS))
+        assertEquals("12", doc.selectFirst("#p12")!!.attr("data-ml-page"))
+        assertTrue(doc.selectFirst("#p12")!!.hasClass("ml-pagelabel"))
+        assertFalse(doc.selectFirst("#p13")!!.hasClass("ml-pagelabel"))   // shows its own number already
+        assertTrue(doc.select("section.ml-printpage, div.ml-printpage-divider").isEmpty())
     }
 }

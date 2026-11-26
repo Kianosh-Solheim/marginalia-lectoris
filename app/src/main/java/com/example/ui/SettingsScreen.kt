@@ -582,8 +582,8 @@ fun SettingsScreen(
                     }
 
                     MetadataToggleRow(
-                        title = "Show Printed Page Numbers (EPUB Page Equivalent)",
-                        subtitle = "For EPUBs with Page List metadata, display the printed book's page numbers in the reader header, status bar, and inline page markers so the e-book matches the printed edition",
+                        title = "Show page numbers",
+                        subtitle = "For EPUBs with page numbers: the printed book's page numbers as small labels in the text, where each printed page begins",
                         checked = showEpubPageEquivalents
                     ) {
                         showEpubPageEquivalents = it
@@ -592,8 +592,8 @@ fun SettingsScreen(
 
                     if (showEpubPageEquivalents) {
                         MetadataToggleRow(
-                            title = "Paginate EPUB by Printed Page Boundaries (1:1 Print Edition)",
-                            subtitle = "Each screen shows exactly one printed page; text on long pages is shrunk (to at most 70%) so the page fits. Paginated mode only, single column. In Vertical Scroll, a ruled line with the page number marks each printed page instead",
+                            title = "Like the printed book",
+                            subtitle = "Pages: each printed page starts on a new screen, with the chapter and author at the top and the page number at the foot. Scroll: a line across the text where each printed page begins, labelled with its number",
                             checked = paginateByEpubPageEquivalents
                         ) { paginateByEpubPageEquivalents = it }
                     }
