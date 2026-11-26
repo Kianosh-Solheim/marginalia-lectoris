@@ -176,6 +176,14 @@ async function pgReadPdf(data, opts, progress) {
     source = `as you gave it: PDF page ${opts.pdfPage} is page ${opts.printedPage}`;
   } else if (labels && labels.some((l, i) => l && l !== String(i + 1))) {
     pages.forEach(p => { p.label = p.pdfLabel; });
+    // a chapter's first page often has no label of its own (no number was printed on it): the number between
+    // neighbours that agree, or the one before the first numbered page
+    const num = l => /^\d+$/.test(l || '') ? parseInt(l, 10) : null;
+    for (let i = pages.length - 2; i >= 0; i--) {
+      if (pages[i].label) continue;
+      const next = num(pages[i + 1].label), before = i ? num(pages[i - 1].label) : null;
+      if (next != null && next > 1 && (before == null ? !pages.slice(0, i).some(p => num(p.label) != null) : before === next - 2)) pages[i].label = String(next - 1);
+    }
     source = 'from the PDF\'s page labels';
   } else {
     // the number in the margins: each page's own number, kept where the numbers run in order
@@ -267,56 +275,133 @@ async function pgReadEpub(data) {
 
 // ------------------------------------------------------------------ lining the two up
 
-/** Where each printed page begins in the EPUB's words. → [{ label, pdfPage, e, conf, pdfStart, epubStart }] */
+/** Runs of n words found exactly once in both A (from a to a2) and B (from b to b2), the longest chain of them in
+ *  the same order in both (longest increasing subsequence). → [[i in A, j in B]] */
+function pgAnchors(A, a, a2, B, b, b2, n) {
+  const key = (X, i) => X.slice(i, i + n).join(' ');
+  const cB = new Map(), cA = new Map();
+  for (let j = b; j + n <= b2; j++) { const k = key(B, j); cB.set(k, cB.has(k) ? -1 : j); }
+  for (let i = a; i + n <= a2; i++) { const k = key(A, i); cA.set(k, cA.has(k) ? -1 : i); }
+  const pairs = [];
+  for (const [k, i] of cA) { if (i < 0) continue; const j = cB.get(k); if (j !== undefined && j >= 0) pairs.push([i, j]); }
+  pairs.sort((x, y) => x[0] - y[0]);
+  const tails = [], prev = new Array(pairs.length), tailIdx = [];
+  pairs.forEach(([, j], i) => {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (tails[mid] < j) lo = mid + 1; else hi = mid; }
+    tails[lo] = j; tailIdx[lo] = i; prev[i] = lo ? tailIdx[lo - 1] : -1;
+  });
+  const chain = []; for (let i = tailIdx[tails.length - 1]; i !== undefined && i >= 0; i = prev[i]) chain.unshift(pairs[i]);
+  return chain;
+}
+
+/** Every PDF word to its EPUB word: M[i] = j, or -1 where the PDF word is not in the EPUB (a running head the
+ *  text recognition misread, specks on a blank page, a footnote); Q[i] how well the two words agree (0–1). */
+function pgWordMap(P, E) {
+  const M = new Int32Array(P.length).fill(-1), Q = new Float32Array(P.length);
+  // between two pairs of words already lined up: the best alignment, word by word (Needleman–Wunsch)
+  const fill = (a, a2, b, b2, depth) => {   // P[a..a2) against E[b..b2)
+    const n = a2 - a, m = b2 - b;
+    if (n <= 0 || m <= 0) return;
+    if (n * m > 400000) {
+      // too long to compare word by word: find shorter runs that agree, and fill between them
+      const N = depth === 0 ? 4 : 3;
+      const chain = depth < 2 ? pgAnchors(P, a, a2, E, b, b2, N) : [];
+      if (chain.length) {
+        let pa = a, pb = b;
+        for (const [i, j] of chain) {
+          if (i < pa || j < pb) continue;
+          fill(pa, i, pb, j, depth + 1);
+          for (let k = 0; k < N && i + k < a2 && j + k < b2; k++) if (M[i + k] < 0 && (k === 0 || i + k >= pa)) { M[i + k] = j + k; Q[i + k] = 1; }
+          pa = i + N; pb = j + N;
+        }
+        fill(pa, a2, pb, b2, depth + 1);
+        return;
+      }
+      // nothing agrees at all: spread the one over the other, as a guess
+      for (let i = a; i < a2; i++) { M[i] = b + Math.min(m - 1, Math.floor((i - a) * m / n)); Q[i] = 0.1; }
+      return;
+    }
+    const G = 0.7, W = m + 1;
+    const D = new Float32Array((n + 1) * W), T = new Uint8Array((n + 1) * W);   // T: 1 = pair, 2 = PDF word left over, 3 = EPUB word left over
+    for (let i = 1; i <= n; i++) { D[i * W] = i * G; T[i * W] = 2; }
+    for (let j = 1; j <= m; j++) { D[j] = j * G; T[j] = 3; }
+    for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++) {
+      const d = D[(i - 1) * W + j - 1] + 1 - pgSim(P[a + i - 1], E[b + j - 1]);
+      const u = D[(i - 1) * W + j] + G, l = D[i * W + j - 1] + G;
+      if (d <= u && d <= l) { D[i * W + j] = d; T[i * W + j] = 1; }
+      else if (u <= l) { D[i * W + j] = u; T[i * W + j] = 2; }
+      else { D[i * W + j] = l; T[i * W + j] = 3; }
+    }
+    for (let i = n, j = m; i > 0 || j > 0;) {
+      const t = T[i * W + j];
+      if (t === 1) { M[a + i - 1] = b + j - 1; Q[a + i - 1] = Math.max(0.3, pgSim(P[a + i - 1], E[b + j - 1])); i--; j--; }
+      else if (t === 2) i--; else j--;
+    }
+  };
+  const chain = pgAnchors(P, 0, P.length, E, 0, E.length, 6);
+  let pa = 0, pb = 0;
+  for (const [i, j] of chain) {
+    if (i < pa || j < pb) {   // overlaps the run before: only the words past it
+      if (i + 6 <= pa || j + 6 <= pb || i - pa !== j - pb) continue;
+    } else fill(pa, i, pb, j, 0);
+    for (let k = Math.max(0, pa - i); k < 6; k++) { M[i + k] = j + k; Q[i + k] = 1; }
+    pa = i + 6; pb = j + 6;
+  }
+  fill(pa, P.length, pb, E.length, 0);
+  return { M, Q, anchors: chain.length, cover: chain.length ? Math.min(1, [...M].filter(x => x >= 0).length / Math.min(P.length, E.length)) : 0 };
+}
+
+/** Where each printed page begins in the EPUB's words. → [{ label, pdfPage, e, conf, blank, pdfStart, epubStart }]
+ *  A page begins right after the EPUB word that the last PDF word before it was lined up with. A page with no
+ *  words of the EPUB on it (a blank page, or one with only specks or a picture) begins where the next one does. */
 function pgAlign(pdf, epub) {
   const P = [], starts = [];
-  pdf.pages.forEach(p => { if (p.label && p.words.length) starts.push({ label: p.label, pdfPage: p.n, pi: P.length }); P.push(...p.words); });
+  pdf.pages.forEach(p => { if (p.label) starts.push({ label: p.label, pdfPage: p.n, pi: P.length, n: p.words.length }); P.push(...p.words); });
   const E = epub.words.map(x => x.w);
   if (!P.length) throw new Error('No text could be read from the PDF, not even by text recognition.');
   if (!E.length) throw new Error('The EPUB has no text.');
-  // anchors: runs of six words found exactly once in both texts
-  const N = 6, key = (A, i) => A.slice(i, i + N).join(' ');
-  const cE = new Map(), cP = new Map();
-  for (let i = 0; i + N <= E.length; i++) { const k = key(E, i); const v = cE.get(k); cE.set(k, v === undefined ? i : -1); }
-  for (let i = 0; i + N <= P.length; i++) { const k = key(P, i); const v = cP.get(k); cP.set(k, v === undefined ? i : -1); }
-  const pairs = [];
-  for (const [k, pi] of cP) { if (pi < 0) continue; const ei = cE.get(k); if (ei !== undefined && ei >= 0) pairs.push([pi, ei]); }
-  pairs.sort((a, b) => a[0] - b[0]);
-  // the longest chain of anchors in the same order in both (longest increasing subsequence)
-  const tails = [], prev = new Array(pairs.length), tailIdx = [];
-  pairs.forEach(([, e], i) => {
-    let lo = 0, hi = tails.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (tails[mid] < e) lo = mid + 1; else hi = mid; }
-    tails[lo] = e; tailIdx[lo] = i; prev[i] = lo ? tailIdx[lo - 1] : -1;
-  });
-  const chain = []; for (let i = tailIdx[tails.length - 1]; i !== undefined && i >= 0; i = prev[i]) chain.unshift(pairs[i]);
-  const cover = chain.length * N / Math.min(P.length, E.length);
-  if (chain.length < 3 || cover < 0.05) throw new Error('The PDF and the EPUB do not seem to hold the same text (too little of it matches). Are they the same edition?');
+  const { M, Q, anchors, cover } = pgWordMap(P, E);
+  if (anchors < 3 || cover < 0.05) throw new Error('The PDF and the EPUB do not seem to hold the same text (too little of it matches). Are they the same edition?');
 
-  const out = []; let last = -1;
-  for (const s of starts) {
-    // the anchors around the page's first word, and where it should be between them
-    let lo = 0, hi = chain.length - 1, a = -1;
-    while (lo <= hi) { const mid = (lo + hi) >> 1; if (chain[mid][0] <= s.pi) { a = mid; lo = mid + 1; } else hi = mid - 1; }
-    const A = a >= 0 ? chain[a] : null, B = a + 1 < chain.length ? chain[a + 1] : null;
-    let est = A ? A[1] + (s.pi - A[0]) : B ? B[1] - (B[0] - s.pi) : 0;
-    const min = Math.max(last + 1, A ? A[1] : 0), max = Math.min(E.length - 1, B ? B[1] : E.length - 1);
-    est = Math.max(min, Math.min(max, est));
-    // the best match of the page's first eight words, near the estimate
-    const L = Math.min(8, P.length - s.pi);
-    let best = est, bestScore = -1;
-    for (let e = Math.max(min, est - 60); e <= Math.min(max, est + 60); e++) {
-      let sc = 0; for (let j = 0; j < L; j++) sc += pgSim(P[s.pi + j], E[e + j]) * (j < 3 ? 1.5 : 1);
-      sc -= Math.abs(e - est) * 0.004;
-      if (sc > bestScore) { bestScore = sc; best = e; }
+  // the EPUB word after the last one lined up before each PDF word
+  const after = new Int32Array(P.length + 1);
+  let cur = 0;
+  for (let i = 0; i <= P.length; i++) { after[i] = cur; if (i < P.length && M[i] >= 0) cur = M[i] + 1; }
+  // the last page with words of the EPUB on it: blank pages after it (endpapers) are left out
+  let lastText = -1;
+  starts.forEach((s, k) => { for (let i = s.pi; i < s.pi + s.n; i++) if (M[i] >= 0) { lastText = k; break; } });
+
+  const out = [];
+  starts.forEach((s, k) => {
+    if (k > lastText) return;
+    const lined = []; for (let i = s.pi; i < s.pi + s.n && lined.length < 8; i++) if (M[i] >= 0) lined.push(i);
+    let e = Math.min(after[s.pi], E.length - 1), conf, blank = false;
+    if (!lined.length) {
+      // blank, or only specks or a picture: sure when the text runs on unbroken in the EPUB from the page before
+      // to the page after; when EPUB words are left over in between, this page may hold them, unread
+      blank = true;
+      let nx = s.pi + s.n; while (nx < P.length && M[nx] < 0) nx++;
+      conf = nx >= P.length || M[nx] === after[s.pi] ? 1 : 0.5;
+    } else {
+      conf = lined.reduce((t, i) => t + Q[i], 0) / lined.length;
+      // EPUB words between the page before and this page's first word that no PDF word matched: a note number
+      // or the end of a paragraph the PDF lost go with the page before, a heading with this page; unsure, ask
+      const first = M[lined[0]];
+      if (first > e) {
+        const blk = i => { const n = epub.words[i] && epub.words[i].node.parentNode; return n && n.closest ? n.closest('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, dd, figcaption, div') : null; };
+        const left = E.slice(e, first);
+        const sameBefore = e > 0 && blk(e) === blk(e - 1), sameAfter = blk(first - 1) === blk(first);
+        if (left.every(w => /^\d{1,3}$/.test(w)) && e > 0) { e = first; conf = Math.min(conf, 0.9); }
+        else if (sameBefore && !sameAfter) { e = first; conf = Math.min(conf, 0.7); }
+        else if (!(!sameBefore && sameAfter)) conf = Math.min(conf, 0.6);
+      }
     }
-    const full = L ? (Math.min(3, L) * 1.5 + Math.max(0, L - 3)) : 1;
-    const conf = Math.max(0, Math.min(1, bestScore / full));
-    out.push({ label: s.label, pdfPage: s.pdfPage, e: best, conf,
-      pdfStart: P.slice(s.pi, s.pi + 10).join(' '), epubStart: E.slice(best, best + 10).join(' ') });
-    last = best;
-  }
-  return { placements: out, anchors: chain.length, cover };
+    out.push({ label: s.label, pdfPage: s.pdfPage, e, conf, blank,
+      pdfStart: blank ? (s.n ? '(no text of the book: blank, specks or a picture)' : '(blank page)') : lined.map(i => P[i]).slice(0, 10).join(' '),
+      epubStart: E.slice(e, e + 10).join(' ') });
+  });
+  return { placements: out, anchors, cover };
 }
 
 // ------------------------------------------------------------------ writing the EPUB
@@ -331,9 +416,13 @@ async function pgWrite(epub, placements, opts) {
   }
   const used = new Set();
   const marks = [];   // [{ label, fi, id }] in reading order
+  placements.forEach((pl, k) => { pl._k = k; });
   for (const [node, list] of byNode) {
-    list.sort((a, b) => b.w.off - a.w.off);   // from the end of the text node, so earlier offsets stay right
+    // from the end of the text node, so earlier offsets stay right; pages that begin at the same word (a blank
+    // page and the one after it) go in as a row, the last first, each before the one put in before it
+    list.sort((a, b) => (b.w.off - a.w.off) || (b.pl._k - a.pl._k));
     const f = epub.files[list[0].w.fi], doc = f.doc;
+    let prevMk = null, prevOff = -1;
     for (const { pl, w } of list) {
       let id = 'page-' + String(pl.label).replace(/[^\w.-]/g, '_'); let k = 1;
       while (used.has(f.path + '#' + id) || doc.querySelector(`[id="${id}"]`)) id = 'page-' + String(pl.label).replace(/[^\w.-]/g, '_') + '-' + (++k);
@@ -351,18 +440,27 @@ async function pgWrite(epub, placements, opts) {
       }
       // a page that begins with a heading: the marker goes before the heading, not inside it
       const head = node.parentNode && node.parentNode.closest && node.parentNode.closest('h1, h2, h3, h4, h5, h6');
-      if (head && w.off === 0) head.parentNode.insertBefore(mk, head);
+      if (prevMk && prevOff === w.off) prevMk.parentNode.insertBefore(mk, prevMk);
+      else if (head && w.off === 0) head.parentNode.insertBefore(mk, head);
       else if (w.off === 0) node.parentNode.insertBefore(mk, node);
       else node.parentNode.insertBefore(mk, node.splitText(w.off));
+      prevMk = mk; prevOff = w.off;
       f.changed = true;
-      marks.push({ label: pl.label, fi: w.fi, id, e: pl.e });
+      marks.push({ label: pl.label, fi: w.fi, id, e: pl.e, k: pl._k });
     }
   }
-  marks.sort((a, b) => a.e - b.e);
+  marks.sort((a, b) => (a.e - b.e) || (a.k - b.k));
   epub.marks = marks;   // for the page map
 
   const zip = epub.zip, outFiles = new Map();
   const ser = new XMLSerializer();
+  if (!epub.navPath) {
+    // an EPUB 2 becomes an EPUB 3: table-cell alignment from old XHTML is no longer allowed, so it becomes a style
+    for (const f of epub.files) for (const el of [...f.doc.querySelectorAll('[valign]')]) {
+      el.setAttribute('style', ((el.getAttribute('style') || '').replace(/;?\s*$/, '') + (el.getAttribute('style') ? '; ' : '') + 'vertical-align: ' + el.getAttribute('valign')).trim());
+      el.removeAttribute('valign'); f.changed = true;
+    }
+  }
   for (const f of epub.files) {
     if (!f.changed) continue;
     let s = ser.serializeToString(f.doc);
@@ -600,8 +698,8 @@ function paginateDialog() {
     };
     // ---- check and correct: every page, or the uncertain ones; a page opens beside its PDF page
     let filter = 'unsure', openAt = null;
-    const stateOf = p => p.skip ? 'out' : p.hand ? 'hand' : p.conf >= 0.75 ? 'sure' : p.conf >= 0.4 ? 'unsure' : 'lost';
-    const MARK = { sure: ['✓', 'Placed with confidence'], unsure: ['?', 'Uncertain'], lost: ['!', 'Not found: put where it most likely begins'], hand: ['✎', 'Checked by hand'], out: ['–', 'Left out'] };
+    const stateOf = p => p.skip ? 'out' : p.hand ? 'hand' : p.blank && p.conf >= 0.75 ? 'blank' : p.conf >= 0.75 ? 'sure' : p.conf >= 0.4 ? 'unsure' : 'lost';
+    const MARK = { sure: ['✓', 'Placed with confidence'], unsure: ['?', 'Uncertain'], lost: ['!', 'Not found: put where it most likely begins'], hand: ['✎', 'Checked by hand'], out: ['–', 'Left out'], blank: ['○', 'Blank page: its marker goes just before the next page'] };
     const shown = () => result.align.placements.filter(p => filter === 'all' || ['unsure', 'lost'].includes(stateOf(p)) || p.touched);
     const wordText = w => w.node.nodeValue.substr(w.off, w.len);
     const pdfStartLines = p => { const pg = result.pdf.pages[p.pdfPage - 1]; return pg ? pg.body.slice(0, 2).map(l => l.text).join(' ') : p.pdfStart; };
@@ -623,7 +721,8 @@ function paginateDialog() {
     const review = idx => {
       const list = shown(), p = list[idx]; if (!p) { openAt = null; return drawResult(); }
       const all = result.align.placements, at = all.indexOf(p), W = result.epub.words;
-      const others = new Map(all.filter(q => q !== p && !q.skip).map(q => [q.e, q.label]));
+      const others = new Map();   // the other pages' markers, by word, in page order (a blank page shares its word)
+      all.forEach(q => { if (q !== p && !q.skip) others.set(q.e, (others.get(q.e) || []).concat(q)); });
       const prev = all.slice(0, at).reverse().find(q => !q.skip), next = all.slice(at + 1).find(q => !q.skip);
       const canvas = h('canvas', { class: 'pg-pdf' });
       renderPdf(p.pdfPage, canvas, 330).catch(e => console.warn(e));
@@ -637,15 +736,19 @@ function paginateDialog() {
         if (i > from && W[i - 1].fi !== w.fi) text.append(h('div', { class: 'pg-sect' }, 'next section'));
         else if (i > from && blk !== lastBlock) text.append(h('br'), h('span', { class: 'pg-para' }));
         lastBlock = blk;
-        if (i === p.e && !p.skip) { here = h('span', { class: 'pg-pin' }, 'p. ' + p.label); text.append(here); }
-        else if (others.has(i)) text.append(h('span', { class: 'pg-pin other' }, 'p. ' + others.get(i)));
+        const pins = (others.get(i) || []).slice();
+        if (i === p.e && !p.skip) pins.push(p);
+        pins.sort((a, b) => all.indexOf(a) - all.indexOf(b)).forEach(q => {
+          if (q === p) { here = h('span', { class: 'pg-pin' }, 'p. ' + p.label); text.append(here); }
+          else text.append(h('span', { class: 'pg-pin other' }, 'p. ' + q.label));
+        });
         text.append(h('span', { class: 'pg-w', title: 'Page ' + p.label + ' begins here', onclick: () => move(p, i) }, wordText(w)));
         // what stands between this word and the next, as written (punctuation, spaces)
         const nx = W[i + 1];
         const gap = nx && nx.node === w.node ? w.node.nodeValue.slice(w.off + w.len, nx.off) : (w.node.nodeValue.slice(w.off + w.len).replace(/\s+$/, '') + ' ');
         text.append(gap.replace(/\s+/g, ' ') || (nx && nx.node !== w.node ? ' ' : ''));
       }
-      const warn = !p.skip && ((prev && p.e <= prev.e) ? `This puts p. ${p.label} before the marker of p. ${prev.label}.` : (next && p.e >= next.e) ? `This puts p. ${p.label} after the marker of p. ${next.label}.` : '');
+      const warn = !p.skip && ((prev && p.e < prev.e) ? `This puts p. ${p.label} before the marker of p. ${prev.label}.` : (next && p.e > next.e) ? `This puts p. ${p.label} after the marker of p. ${next.label}.` : '');
       const [icon, what] = MARK[stateOf(p)];
       out.append(h('div', { class: 'pg-review' },
         h('div', { class: 'pg-rhead' },
@@ -680,7 +783,7 @@ function paginateDialog() {
         h('div', { class: 'pg-sum' },
           h('b', null, `${pl.length} printed pages${pl.length ? ` (pp. ${pl[0].label}–${pl[pl.length - 1].label})` : ''}`),
           h('span', null, ` · numbers ${result.pdf.source}`),
-          h('div', null, [`${count('sure')} placed with confidence`, `${count('unsure')} uncertain`, `${count('lost')} not found`, count('hand') ? `${count('hand')} checked by hand` : '', count('out') ? `${count('out')} left out` : ''].filter(Boolean).join(' · ')),
+          h('div', null, [`${count('sure')} placed with confidence`, count('blank') ? `${count('blank')} blank` : '', `${count('unsure')} uncertain`, `${count('lost')} not found`, count('hand') ? `${count('hand')} checked by hand` : '', count('out') ? `${count('out')} left out` : ''].filter(Boolean).join(' · ')),
           result.epub.existing ? h('div', { class: 'muted' }, `The EPUB had ${result.epub.existing} page markers already; they are replaced.`) : null,
           result.pdf.ocrPages ? h('div', { class: 'muted' }, `${result.pdf.ocrPages} scanned ${result.pdf.ocrPages === 1 ? 'page was' : 'pages were'} read with text recognition (OCR).`) : null));
       if (openAt != null) return review(openAt);
