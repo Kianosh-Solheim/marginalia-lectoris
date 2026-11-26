@@ -3069,6 +3069,20 @@ function refreshAfterUpload() {
 // ------------------------------------------------------------------ reader (shared)
 
 let readerOpen = null;   // { kind, destroy(), ... }
+/** Ctrl/⌘ + scroll wheel (and a trackpad's pinch, which comes as one) in the reader: bigger or smaller text (EPUB), zoom (PDF). */
+let readerWheelSum = 0, readerWheelAt = 0;
+function readerWheel(e) {
+  if (!readerOpen || !(e.ctrlKey || e.metaKey) || !readerOpen.bigger) return;
+  e.preventDefault();
+  const now = performance.now();   // not e.timeStamp: a book page (iframe) keeps its own clock
+  if (now - readerWheelAt > 400) readerWheelSum = 0;
+  readerWheelAt = now;
+  readerWheelSum += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;   // lines → pixels
+  if (Math.abs(readerWheelSum) < 60) return;   // one step per wheel notch, not one per tiny trackpad event
+  (readerWheelSum < 0 ? readerOpen.bigger : readerOpen.smaller)();
+  readerWheelSum = 0;
+}
+window.addEventListener('wheel', readerWheel, { passive: false });
 
 let rsPoll = 0;
 function closeReader() {
@@ -3079,7 +3093,12 @@ function closeReader() {
 }
 
 function readerKeys(e) {
-  if (!readerOpen || e.target.closest('input, textarea, .modal')) return;
+  if (!readerOpen || e.target.closest('input, textarea, .modal, [contenteditable="true"]')) return;
+  // + and − (with or without Ctrl/⌘): bigger or smaller text (EPUB), or zoom (PDF), not the browser's zoom
+  if (!e.altKey && (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '−') && (!e.shiftKey || e.key === '+')) {
+    const fn = e.key === '-' || e.key === '−' ? readerOpen.smaller : readerOpen.bigger;
+    if (fn) { e.preventDefault(); fn(); return; }
+  }
   if (e.key === 'ArrowRight' || e.key === 'PageDown') { readerOpen.next && readerOpen.next(); e.preventDefault(); }
   if (e.key === 'ArrowLeft' || e.key === 'PageUp') { readerOpen.prev && readerOpen.prev(); e.preventDefault(); }
   if (e.key === 'Escape' && !document.querySelector('.scrim')) history.back();
@@ -4021,6 +4040,8 @@ async function openPdf(ctx, params) {
 
   return {
     kind: 'pdf',
+    bigger: () => setZoom(Math.min(3, +(scale() + 0.15).toFixed(2))),
+    smaller: () => setZoom(Math.max(0.4, +(scale() - 0.15).toFixed(2))),
     next: () => goPage(current + 1, true),
     prev: () => goPage(current - 1, true),
     goToNote: note => {
@@ -4390,6 +4411,7 @@ async function openEpub(ctx, params) {
     });
   };
   rendition.hooks.content.register(markBreaks);
+  rendition.hooks.content.register(contents => { try { contents.document.addEventListener('wheel', readerWheel, { passive: false }); } catch (_) {} });
   const runHead = h('div', { class: 'ep-head', hidden: true }, h('span', { class: 'ep-ch' }), h('span', { class: 'ep-au' }));
   const folioBox = h('div', { class: 'ep-folios', hidden: true });
   view.append(runHead, folioBox);
@@ -4555,6 +4577,8 @@ async function openEpub(ctx, params) {
 
   return {
     kind: 'epub',
+    bigger: () => setFont(RS.fontSizeSp + 1),
+    smaller: () => setFont(RS.fontSizeSp - 1),
     next: () => rendition.next(),
     prev: () => rendition.prev(),
     goToHit: async (hit, q, whole) => {
