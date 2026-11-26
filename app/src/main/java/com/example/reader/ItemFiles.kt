@@ -122,11 +122,7 @@ object ItemFiles {
         val tmp = File(f.parentFile, ".${f.name}.part")
         tmp.outputStream().use { input.copyTo(it, 1 shl 16) }
         check(tmp.length() > 0) { "The file was empty" }
-        val s = AppDatabase.getInstance(ctx).settingsDao().getSettingsSnapshot()
-        val root = StorageManager.getRootDirectory(ctx, s?.customStoragePath.orEmpty(), s?.storageLocationType ?: "DOCUMENTS")
-        val bin = File(File(root, "_to_delete"), folderOf(ctx, d).name).apply { mkdirs() }
-        val old = unique(bin, f.name)
-        if (!f.renameTo(old)) { f.copyTo(old); f.delete() }
+        TrashBin.put(ctx, f, folderOf(ctx, d).name)   // the old file, kept in the bin (it can be put back)
         if (!tmp.renameTo(f)) { tmp.copyTo(f); tmp.delete() }
         return f
     }
@@ -172,11 +168,7 @@ object ItemFiles {
         val f = resolve(ctx, d, rel)
         require(rel != "@cover") { "The cover kept by the app cannot be deleted here" }
         require(runCatching { File(d.filePath).canonicalFile != f }.getOrDefault(true)) { "This is the main file. Make another file the main file first." }
-        val s = AppDatabase.getInstance(ctx).settingsDao().getSettingsSnapshot()
-        val root = StorageManager.getRootDirectory(ctx, s?.customStoragePath.orEmpty(), s?.storageLocationType ?: "DOCUMENTS")
-        val bin = File(File(root, "_to_delete"), folderOf(ctx, d).name).apply { mkdirs() }
-        val target = unique(bin, f.name)
-        if (!f.renameTo(target)) { if (f.isDirectory) { f.copyRecursively(target); f.deleteRecursively() } else { f.copyTo(target); f.delete() } }
+        TrashBin.put(ctx, f, folderOf(ctx, d).name)   // into the bin, from where it can be put back
         if (runCatching { d.coverUri != null && File(d.coverUri).canonicalFile == f }.getOrDefault(false))
             AppDatabase.getInstance(ctx).documentDao().updateDocument(d.copy(coverUri = null))
     }

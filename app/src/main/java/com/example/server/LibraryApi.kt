@@ -221,6 +221,24 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             s.firstOrNull() == "presentations" -> return presentationsRoute(req, s.drop(1))
             s.firstOrNull() == "live" -> return liveRoute(req, s.drop(1))
             s.firstOrNull() == "backup" -> return backupApi.route(req, s.drop(1))
+            // The bin (Readmark/_to_delete): deleted and replaced files, to open, put back or delete for good
+            s == listOf("trash") && m == "GET" -> return HttpResponse.json(withContext(Dispatchers.IO) { com.example.reader.TrashBin.list(context) }.toString()).header("Cache-Control", "no-store")
+            s == listOf("trash", "file") && m == "GET" -> {
+                val f = withContext(Dispatchers.IO) { com.example.reader.TrashBin.resolve(context, req.query["rel"].orEmpty()) }
+                require(f.isFile) { "A folder cannot be opened here: put it back to see what is in it." }
+                val type = when (f.extension.lowercase(Locale.ROOT)) { "mp3" -> "audio/mpeg"; "m4a", "m4b", "aac" -> "audio/mp4"; "ogg", "oga", "opus" -> "audio/ogg"; "flac" -> "audio/flac"; "wav" -> "audio/wav"; "mp4" -> "video/mp4"; "webm" -> "video/webm"; else -> MiniHttpServer.mimeFor(f.name) }
+                return HttpResponse.FileBody(f, type, if (req.query["download"] == "1") f.name else null)
+            }
+            s == listOf("trash", "restore") && m == "POST" -> {
+                val rel = JSONObject(req.bodyText()).optString("rel")
+                val to = withContext(Dispatchers.IO) { com.example.reader.TrashBin.restore(context, rel) }
+                return HttpResponse.json(JSONObject().put("to", to.absolutePath).put("name", to.name).toString())
+            }
+            s == listOf("trash") && m == "DELETE" -> {
+                val rel = req.query["rel"].orEmpty()
+                return if (rel.isNotEmpty()) { withContext(Dispatchers.IO) { com.example.reader.TrashBin.erase(context, rel) }; HttpResponse.json("{}") }
+                else { require(req.query["all"] == "1") { "Say which file, or all=1 to empty the bin" }; HttpResponse.json(JSONObject().put("deleted", withContext(Dispatchers.IO) { com.example.reader.TrashBin.empty(context) }).toString()) }
+            }
             s == listOf("diagnostics", "exits") && m == "GET" -> return HttpResponse.json(com.example.CrashLog.exitsJson(context).toString()).header("Cache-Control", "no-store")
             s == listOf("settings") && m == "GET" -> return HttpResponse.json(settingsApi.get().toString()).header("Cache-Control", "no-store")
             s == listOf("settings") && (m == "PUT" || m == "PATCH") -> return HttpResponse.json(settingsApi.put(JSONObject(req.bodyText())).toString())
