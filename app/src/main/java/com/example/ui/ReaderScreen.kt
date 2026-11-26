@@ -739,6 +739,9 @@ fun ReaderScreen(
     var showQuickScrubberDialog by remember { mutableStateOf(false) }
     var showObsidianHubDialog by remember { mutableStateOf(false) }
     var showToolsDialog by remember { mutableStateOf(false) }
+    // The Aa panel (web view style) and the height of the bar it opens under.
+    var showAaPanel by remember { mutableStateOf(false) }
+    var topBarHeightPx by remember { mutableIntStateOf(0) }
     var showPdfCropDialog by remember { mutableStateOf(false) }
 
     var highlightQuoteText by remember { mutableStateOf("") }
@@ -1002,7 +1005,8 @@ fun ReaderScreen(
                     onOpenFileMenu = { showBookInfoDialog = true },
                     onOpenTocMenu = { coroutineScope.launch { chapterDrawerState.open() } },
                     onOpenSearch = { findState.open = true },
-                    onOpenTypesettingMenu = { showFormattingSheet = true },
+                    onOpenTypesettingMenu = { showAaPanel = true },
+                    onHeightChanged = { topBarHeightPx = it },
                     onOpenPdfCropMenu = { showPdfCropDialog = true },
                     onOpenPdfTextToolsMenu = if (isPdfDocument) {
                         {
@@ -2022,6 +2026,45 @@ fun ReaderScreen(
                 activeFootnote = null
                 activeFootnoteEntry = null
             }
+        )
+    }
+
+    // The Aa panel: the settings changed while reading, as in the web view. The full sheet stays under "More formatting".
+    if (showAaPanel) {
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        ReaderAaPanel(
+            topOffset = with(density) { topBarHeightPx.toDp() } + 6.dp,
+            isPdfDocument = isPdfDocument && !isPdfEbookMode,
+            isFixedLayoutBook = isReadiumFixedLayout,
+            hasPrintedPageList = activeEpubHasPageListMetadata,
+            readerThemeSetting = readerThemeSetting,
+            onReaderThemeChange = { readerThemeSetting = it; persistFormatting() },
+            fontSizeSp = fontSizeSp,
+            onFontSizeChange = { fontSizeSp = it },
+            readerViewModeSetting = readerViewModeSetting,
+            onReaderViewModeChange = { readerViewModeSetting = it; persistFormatting() },
+            columnCount = readerColumnCount,
+            onColumnCountChange = { readerColumnCount = it.coerceIn(1, 2); persistFormatting() },
+            showPageNumbers = showEpubPageEquivalentsSetting,
+            onShowPageNumbersChange = {
+                showEpubPageEquivalentsSetting = it
+                if (!it) paginateByEpubPageEquivalentsSetting = false
+                persistFormatting()
+            },
+            likePrintedBook = paginateByEpubPageEquivalentsSetting,
+            onLikePrintedBookChange = { paginateByEpubPageEquivalentsSetting = it; persistFormatting() },
+            marginDp = marginDp,
+            onMarginDpChange = { marginDp = it },
+            publisherStylesEnabled = publisherStylesEnabled,
+            onPublisherStylesEnabledChange = { publisherStylesEnabled = it; persistFormatting() },
+            fontFamilySetting = fontFamilySetting,
+            onFontFamilyChange = { fontFamilySetting = it; persistFormatting() },
+            lineSpacingMultiplier = lineSpacingMultiplier,
+            onLineSpacingChange = { lineSpacingMultiplier = it; persistFormatting() },
+            textAlignSetting = textAlignSetting,
+            onTextAlignChange = { textAlignSetting = it; persistFormatting() },
+            onMoreFormatting = { persistFormatting(); showAaPanel = false; showFormattingSheet = true },
+            onDismiss = { persistFormatting(); showAaPanel = false }
         )
     }
 
