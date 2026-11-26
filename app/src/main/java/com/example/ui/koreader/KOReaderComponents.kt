@@ -27,6 +27,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -215,42 +221,85 @@ fun KOReaderTopBar(
     onOpenSettingsMenu: () -> Unit,
     glossaeEnabled: Boolean = false,
     onToggleGlossae: (() -> Unit)? = null,
-    volumeChapterLine: String = ""
+    volumeChapterLine: String = "",
+    /** Reports the bar's height in px, so pop-ups (the Aa panel) can open right under it. */
+    onHeightChanged: (Int) -> Unit = {}
 ) {
     val ink = activeTheme.textColor
+    val paper = activeTheme.barColor
     val isPdf = document.fileType.equals("PDF", ignoreCase = true)
+    // Portrait (or a narrow window): two rows, as in the mockups; landscape: one bar in the web view's order.
+    val twoRows = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 900
+
+    // No fade: on e-ink a fading bar leaves ghosts. The bar simply appears and disappears.
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn(),
-        exit = fadeOut()
+        enter = androidx.compose.animation.EnterTransition.None,
+        exit = androidx.compose.animation.ExitTransition.None
     ) {
+        // The tools under ⋯: everything that is not used on every page.
+        val more = mutableListOf<ReaderMenuEntry>()
+        more += ReaderMenuEntry(Icons.Default.Info, "Info", "Details of this book: authors, year, citation, files", false, "koreader_tab_file", onOpenFileMenu)
+        if (onOpenAudiobook != null && !hasAudiobook) {
+            more += ReaderMenuEntry(Icons.Default.Headphones, "Audiobook", "Add the audiobook’s files", false, "koreader_tab_audiobook", onOpenAudiobook)
+        }
+        if (onTogglePdfEbookMode != null && isPdf) {
+            more += ReaderMenuEntry(Icons.Default.AutoStories, "Reflow", "Read the PDF as flowing text", isPdfEbookMode, "koreader_tab_pdf_ebook_mode", onTogglePdfEbookMode)
+        }
+        if (onOpenPdfCropMenu != null && isPdf && !isPdfEbookMode) {
+            val isCropped = document.pdfCropLeft > 0.005f || document.pdfCropTop > 0.005f ||
+                document.pdfCropRight < 0.995f || document.pdfCropBottom < 0.995f
+            more += ReaderMenuEntry(Icons.Default.Crop, "Crop", "Cut away the margins", isCropped, "koreader_tab_pdf_crop", onOpenPdfCropMenu)
+        }
+        if (onOpenPdfTextToolsMenu != null && isPdf) {
+            val custom = !document.pdfTextExtractionMode.equals("AUTO", ignoreCase = true) && document.pdfTextExtractionMode.isNotBlank() ||
+                document.pdfPageExtractionOverridesJson.isNotBlank()
+            more += ReaderMenuEntry(Icons.Default.Search, "Text & OCR", "How the text of the PDF is read", custom, "koreader_tab_pdf_text_tools", onOpenPdfTextToolsMenu)
+        }
+        if (onToggleGlossae != null) {
+            more += ReaderMenuEntry(Icons.Default.Layers, "Glossae", "Your notes laid over the text", glossaeEnabled, "koreader_tab_glossae", onToggleGlossae)
+        }
+        if (onToggleRecording != null && !isRecording) {
+            more += ReaderMenuEntry(Icons.Default.Mic, "Record", "Talk while you read; link it to notes", false, "koreader_tab_record", onToggleRecording)
+        }
+        more += ReaderMenuEntry(Icons.Default.Settings, "Tools", "Reader settings and tools", false, "koreader_tab_settings", onOpenSettingsMenu)
+
+        // The tools used all the time: Search · Contents · Notes · Listen (and Stop rec. while recording).
+        val strip = mutableListOf<Triple<String, Pair<Boolean, String>, () -> Unit>>()
+        if (onOpenSearch != null) strip += Triple("Search", false to "koreader_tab_search", onOpenSearch)
+        strip += Triple("Contents", false to "koreader_tab_toc", onOpenTocMenu)
+        strip += Triple(if (highlightsCount > 0) "Notes ${if (highlightsCount > 99) "99+" else highlightsCount}" else "Notes", false to "koreader_tab_annotations", onOpenAnnotationsMenu)
+        if (onOpenAudiobook != null && hasAudiobook) {
+            strip += Triple("Listen", isAudiobookActive to "koreader_tab_audiobook", onOpenAudiobook)
+        } else if (onToggleTtsBar != null) {
+            strip += Triple("Listen", (isTtsPlaying || isTtsBarVisible) to "koreader_tab_tts", onToggleTtsBar)
+        }
+        if (onToggleRecording != null && isRecording) {
+            strip += Triple("Stop rec.", true to "koreader_tab_record", onToggleRecording)
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(activeTheme.barColor)
+                .background(paper)
+                .onSizeChanged { onHeightChanged(it.height) }
                 .statusBarsPadding()
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                IconButton(
-                    onClick = onNavigateBack,
-                    modifier = Modifier
-                        .size(46.dp)
-                        .testTag("koreader_back_btn")
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Library", tint = ink, modifier = Modifier.size(24.dp))
-                }
+                BarSquareButton("←", activeTheme, onNavigateBack, tag = "koreader_back_btn", description = "Back to the library")
 
                 // Title, place in the book, and (edited volumes) the chapter being read
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .clickable { onOpenFileMenu() }
-                        .padding(horizontal = 6.dp)
+                        .padding(horizontal = 4.dp)
                 ) {
                     Text(
                         text = document.title,
@@ -262,8 +311,13 @@ fun KOReaderTopBar(
                         overflow = TextOverflow.Ellipsis
                     )
                     val percent = if (totalPages > 0) ((currentPage.toFloat() / totalPages) * 100).toInt() else 0
-                    val place = (if (pageInfoSubtitle.isNotBlank()) pageInfoSubtitle else "p. $currentPage / $totalPages") + " · $percent%" +
-                        if (isPdfEbookMode && isPdf) " · reflowed" else ""
+                    val third = volumeChapterLine.ifBlank { chapterTitle }
+                    val place = listOfNotNull(
+                        third.takeIf { it.isNotBlank() },
+                        pageInfoSubtitle.ifBlank { "p. $currentPage / $totalPages" },
+                        "$percent%",
+                        if (isPdfEbookMode && isPdf) "reflowed" else null
+                    ).joinToString(" · ")
                     Text(
                         text = place,
                         fontFamily = FontFamily.Monospace,
@@ -273,104 +327,103 @@ fun KOReaderTopBar(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.testTag("top_bar_page_info_subtitle")
                     )
-                    val third = volumeChapterLine.ifBlank { chapterTitle }
-                    if (third.isNotBlank()) {
-                        Text(
-                            text = third,
-                            fontFamily = FontFamily.Serif,
-                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                            fontSize = 12.sp,
-                            color = ink,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.testTag("top_bar_volume_chapter")
-                        )
+                }
+
+                BarSquareButton("Aa", activeTheme, onOpenTypesettingMenu, tag = "koreader_tab_typesetting", description = "Reading settings")
+
+                if (!twoRows) {
+                    // Landscape: the strip sits in the bar, as in the web view.
+                    Row(Modifier.height(44.dp).border(1.dp, ink), verticalAlignment = Alignment.CenterVertically) {
+                        strip.forEachIndexed { i, (label, st, onClick) ->
+                            if (i > 0) Box(Modifier.width(1.dp).height(44.dp).background(ink))
+                            StripCell(label, activeTheme, onClick, active = st.first, tag = st.second, modifier = Modifier.padding(horizontal = 0.dp))
+                        }
                     }
                 }
 
-                // Tools: square cells with labels; a tool that is switched on is shown inverted.
-                Row(
-                    modifier = Modifier.border(1.dp, ink),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // The tools used all the time sit in the bar; the rest are gathered under "More".
-                    val cells = mutableListOf<@Composable () -> Unit>()
-                    val more = mutableListOf<ReaderMenuEntry>()
-                    var moreOpen by remember { mutableStateOf(false) }
-                    cells += { ReaderToolCell(Icons.AutoMirrored.Filled.List, "Contents", activeTheme, onOpenTocMenu, tag = "koreader_tab_toc") }
-                    if (onOpenSearch != null) cells += { ReaderToolCell(Icons.Default.FindInPage, "Search", activeTheme, onOpenSearch, tag = "koreader_tab_search") }
-                    cells += {
-                        ReaderToolCell(Icons.Default.DriveFileRenameOutline, "Notes", activeTheme, onOpenAnnotationsMenu,
-                            badge = if (highlightsCount > 0) (if (highlightsCount > 99) "99+" else highlightsCount.toString()) else null,
-                            tag = "koreader_tab_annotations")
-                    }
-                    cells += { ReaderToolCell(Icons.Default.FormatSize, "Type", activeTheme, onOpenTypesettingMenu, tag = "koreader_tab_typesetting") }
-                    // With an audiobook, Listen plays it; without, Listen reads aloud and the audiobook is added under More.
-                    if (onOpenAudiobook != null && hasAudiobook) {
-                        cells += { ReaderToolCell(Icons.Default.Headphones, "Audiobook", activeTheme, onOpenAudiobook, active = isAudiobookActive, tag = "koreader_tab_audiobook") }
-                    } else if (onToggleTtsBar != null) {
-                        cells += { ReaderToolCell(Icons.Default.RecordVoiceOver, "Listen", activeTheme, onToggleTtsBar, active = isTtsPlaying || isTtsBarVisible, tag = "koreader_tab_tts") }
-                    }
-                    if (onOpenAudiobook != null && !hasAudiobook) {
-                        more += ReaderMenuEntry(Icons.Default.Headphones, "Audiobook", "Add the audiobook’s files", false, "koreader_tab_audiobook", onOpenAudiobook)
-                    }
-                    // A recording in progress stays in sight, so it can be stopped with one tap.
-                    if (onToggleRecording != null && isRecording) {
-                        cells += { ReaderToolCell(Icons.Default.Mic, "Stop rec.", activeTheme, onToggleRecording, active = true, tag = "koreader_tab_record") }
-                    }
-                    more += ReaderMenuEntry(Icons.Default.Folder, "Book", "Details, citation, files", false, "koreader_tab_file", onOpenFileMenu)
-                    if (onTogglePdfEbookMode != null && isPdf) {
-                        more += ReaderMenuEntry(Icons.Default.AutoStories, "Reflow", "Read the PDF as flowing text", isPdfEbookMode, "koreader_tab_pdf_ebook_mode", onTogglePdfEbookMode)
-                    }
-                    if (onOpenPdfCropMenu != null && isPdf && !isPdfEbookMode) {
-                        val isCropped = document.pdfCropLeft > 0.005f || document.pdfCropTop > 0.005f ||
-                            document.pdfCropRight < 0.995f || document.pdfCropBottom < 0.995f
-                        more += ReaderMenuEntry(Icons.Default.Crop, "Crop", "Cut away the margins", isCropped, "koreader_tab_pdf_crop", onOpenPdfCropMenu)
-                    }
-                    if (onOpenPdfTextToolsMenu != null && isPdf) {
-                        val custom = !document.pdfTextExtractionMode.equals("AUTO", ignoreCase = true) && document.pdfTextExtractionMode.isNotBlank() ||
-                            document.pdfPageExtractionOverridesJson.isNotBlank()
-                        more += ReaderMenuEntry(Icons.Default.Search, "Text", "How the text of the PDF is read", custom, "koreader_tab_pdf_text_tools", onOpenPdfTextToolsMenu)
-                    }
-                    if (onToggleRecording != null && !isRecording) {
-                        more += ReaderMenuEntry(Icons.Default.Mic, "Record", "Talk while you read", false, "koreader_tab_record", onToggleRecording)
-                    }
-                    if (onToggleGlossae != null) {
-                        more += ReaderMenuEntry(Icons.Default.Layers, "Glossae", "Your notes laid over the text", glossaeEnabled, "koreader_tab_glossae", onToggleGlossae)
-                    }
-                    more += ReaderMenuEntry(Icons.Default.Settings, "Tools", "Reader settings and tools", false, "koreader_tab_settings", onOpenSettingsMenu)
-                    cells += {
-                        Box {
-                            ReaderToolCell(Icons.Default.Menu, "More", activeTheme, { moreOpen = true }, active = more.any { it.on }, tag = "koreader_tab_more")
-                            androidx.compose.material3.DropdownMenu(
-                                expanded = moreOpen,
-                                onDismissRequest = { moreOpen = false },
-                                modifier = Modifier.background(activeTheme.barColor).border(1.5.dp, ink)
-                            ) {
-                                more.forEach { e ->
-                                    androidx.compose.material3.DropdownMenuItem(
-                                        text = {
-                                            Column {
-                                                Text(e.label, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ink)
-                                                Text(e.sub, fontSize = 11.sp, color = activeTheme.secondaryTextColor)
-                                            }
-                                        },
-                                        leadingIcon = { Icon(e.icon, contentDescription = null, tint = ink, modifier = Modifier.size(22.dp)) },
-                                        trailingIcon = if (e.on) { { Text("ON", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = activeTheme.barColor, modifier = Modifier.background(ink).padding(horizontal = 4.dp)) } } else null,
-                                        onClick = { moreOpen = false; e.onClick() },
-                                        modifier = Modifier.testTag(e.tag)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    cells.forEachIndexed { i, cell ->
-                        if (i > 0) Box(Modifier.width(1.dp).height(52.dp).background(activeTheme.dividerColor))
-                        cell()
+                MoreButton(more, activeTheme)
+            }
+
+            if (twoRows) {
+                // Portrait: one full-width strip under the title.
+                Box(Modifier.fillMaxWidth().height(1.dp).background(ink))
+                Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+                    strip.forEachIndexed { i, (label, st, onClick) ->
+                        if (i > 0) Box(Modifier.width(1.dp).height(44.dp).background(ink))
+                        StripCell(label, activeTheme, onClick, active = st.first, tag = st.second, modifier = Modifier.weight(1f))
                     }
                 }
             }
             Box(Modifier.fillMaxWidth().height(1.5.dp).background(ink))
+        }
+    }
+}
+
+/** A 44 dp square button in the bar (←, Aa, ⋯): ruled, inverted when [active]. */
+@Composable
+private fun BarSquareButton(label: String, theme: ReaderTheme, onClick: () -> Unit, tag: String, description: String, active: Boolean = false) {
+    val ink = theme.textColor
+    val paper = theme.barColor
+    Box(
+        modifier = Modifier
+            .height(44.dp)
+            .widthIn(min = 44.dp)
+            .border(1.dp, ink)
+            .background(if (active) ink else paper)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = description }
+            .padding(horizontal = 12.dp)
+            .testTag(tag),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = if (active) paper else ink)
+    }
+}
+
+/** One cell of the tool strip: text only, mono, inverted when the tool is on. */
+@Composable
+private fun StripCell(label: String, theme: ReaderTheme, onClick: () -> Unit, active: Boolean, tag: String, modifier: Modifier = Modifier) {
+    val ink = theme.textColor
+    val paper = theme.barColor
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .background(if (active) ink else paper)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp)
+            .testTag(tag),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = if (active) paper else ink, maxLines = 1)
+    }
+}
+
+/** ⋯: the tools that are not needed on every page, each with a line on what it does. */
+@Composable
+private fun MoreButton(more: List<ReaderMenuEntry>, theme: ReaderTheme) {
+    val ink = theme.textColor
+    var open by remember { mutableStateOf(false) }
+    Box {
+        BarSquareButton("⋯", theme, { open = true }, tag = "koreader_tab_more", description = "More tools", active = open || more.any { it.on })
+        androidx.compose.material3.DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            modifier = Modifier.background(theme.barColor).border(1.5.dp, ink)
+        ) {
+            more.forEach { e ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = {
+                        Column(Modifier.padding(vertical = 6.dp)) {
+                            Text(e.label, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = ink)
+                            Text(e.sub, fontSize = 13.sp, color = theme.secondaryTextColor)
+                        }
+                    },
+                    leadingIcon = { Icon(e.icon, contentDescription = null, tint = ink, modifier = Modifier.size(24.dp)) },
+                    trailingIcon = if (e.on) { { Text("ON", fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = theme.barColor, modifier = Modifier.background(ink).padding(horizontal = 4.dp)) } } else null,
+                    onClick = { open = false; e.onClick() },
+                    modifier = Modifier.heightIn(min = 64.dp).testTag(e.tag)
+                )
+            }
         }
     }
 }
