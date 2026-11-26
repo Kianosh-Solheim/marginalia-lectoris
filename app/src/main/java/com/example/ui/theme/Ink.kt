@@ -1,6 +1,7 @@
 package com.example.ui.theme
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -46,14 +47,16 @@ object Ink {
 
     // Shapes: everything is square
     val Shape: Shape = RectangleShape
+    /** Square corners as a CornerBasedShape, which Material's Shapes requires. */
+    private val Square = RoundedCornerShape(0.dp)
 
     /** Material shapes with every corner square, so stock dialogs, menus, cards and chips match. */
     val MaterialShapes = Shapes(
-        extraSmall = RectangleShape,
-        small = RectangleShape,
-        medium = RectangleShape,
-        large = RectangleShape,
-        extraLarge = RectangleShape
+        extraSmall = Square,
+        small = Square,
+        medium = Square,
+        large = Square,
+        extraLarge = Square
     )
 
     // Touch targets
