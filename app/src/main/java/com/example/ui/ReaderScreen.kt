@@ -1216,6 +1216,7 @@ fun ReaderScreen(
                                     targetHighlightRequest = targetHighlightRequest,
                                     targetPrintPageRequest = targetPrintPageRequest,
                                     jumpRequestToken = jumpRequestToken,
+                                    onFontSizeChange = { fontSizeSp = it; persistFormatting() },
                                     initialHref = startHref,
                                     highlightHref = { h -> book.fileHrefFor(h.pageNumber) },
                                     onPrintPageAnchorChanged = { id ->
@@ -1348,6 +1349,7 @@ fun ReaderScreen(
                             targetHighlightRequest = targetHighlightRequest,
                             targetPrintPageRequest = targetPrintPageRequest,
                             jumpRequestToken = jumpRequestToken,
+                            onFontSizeChange = { fontSizeSp = it; persistFormatting() },
                             onToggleUi = { isUiVisible = !isUiVisible },
                             onPageChanged = { page, total, chapterTitle ->
                                 currentActivePage = page

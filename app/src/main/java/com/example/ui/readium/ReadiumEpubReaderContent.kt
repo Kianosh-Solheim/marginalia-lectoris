@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import com.example.data.local.DocumentEntity
@@ -187,6 +188,8 @@ fun ReadiumEpubReaderContent(
     followAudio: Boolean = false,
     /** Where the reader is: the resource's file name and how far into it (0–1), for starting the audiobook here. */
     onReadingLocation: (href: String, progression: Double) -> Unit = { _, _ -> },
+    /** Pinching the page: the new text size (sp), in steps of 2 as on the A− / A+ buttons. */
+    onFontSizeChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -253,6 +256,8 @@ fun ReadiumEpubReaderContent(
     val currentGlossaeEnabled by rememberUpdatedState(glossaeEnabled)
     val currentGlossFlipped by rememberUpdatedState(glossFlipped)
     val currentFontSizeSp by rememberUpdatedState(fontSizeSp)
+    val currentOnFontSizeChange by rememberUpdatedState(onFontSizeChange)
+    val currentIsFixedLayout by rememberUpdatedState(isFixedLayoutBook)
     LaunchedEffect(glossaeEnabled) {
         glossFlipped = emptySet()
         glossLastFlipped = null
@@ -831,10 +836,25 @@ fun ReadiumEpubReaderContent(
                 val effectiveBottomMargin = if (!isVerticalScroll && !isFixedLayoutBook) bottomMarginDp.coerceIn(minBookMargin, 160).dp else 0.dp
                 AndroidView(
                     factory = { ctx ->
-                        TouchObservingFrameLayout(ctx) { down ->
-                            isTouchDown = down
-                            if (!down) touchUpTick++
-                        }.apply {
+                        TouchObservingFrameLayout(
+                            ctx,
+                            onTouchState = { down ->
+                                isTouchDown = down
+                                if (!down) touchUpTick++
+                            },
+                            pinchEnabled = { !currentIsFixedLayout },
+                            onPinch = { scale ->
+                                // spread the fingers: bigger text; pinch them: smaller (12–76 sp, steps of 2)
+                                val now = currentFontSizeSp
+                                val next = ((now * scale) / 2f).roundToInt().times(2).toFloat().coerceIn(12f, 76f)
+                                val stepped = when {
+                                    next == now && scale > 1f -> (now + 2f).coerceAtMost(76f)
+                                    next == now && scale < 1f -> (now - 2f).coerceAtLeast(12f)
+                                    else -> next
+                                }
+                                if (stepped != now) currentOnFontSizeChange(stepped)
+                            }
+                        ).apply {
                             id = containerId
                             layoutParams = FrameLayout.LayoutParams(
                                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -1345,15 +1365,39 @@ internal fun parseJsStartEndResult(raw: String?): Pair<Int, Int>? {
  */
 private class TouchObservingFrameLayout(
     context: android.content.Context,
-    private val onTouchState: (down: Boolean) -> Unit
+    private val onTouchState: (down: Boolean) -> Unit,
+    /** Whether two fingers make the text bigger or smaller (not in fixed-layout books, which zoom themselves). */
+    private val pinchEnabled: () -> Boolean = { false },
+    /** A finished pinch: how much the fingers spread (above 1) or closed (below 1). */
+    private val onPinch: (scale: Float) -> Unit = {}
 ) : FrameLayout(context) {
+    private var pinching = false
+    private var pinchScale = 1f
+    private val scaleDetector = android.view.ScaleGestureDetector(context, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(detector: android.view.ScaleGestureDetector): Boolean { pinchScale = 1f; return true }
+        override fun onScale(detector: android.view.ScaleGestureDetector): Boolean { pinchScale *= detector.scaleFactor; return true }
+    }).apply { isQuickScaleEnabled = false }
+
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         when (ev.actionMasked) {
-            android.view.MotionEvent.ACTION_DOWN -> onTouchState(true)
-            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> onTouchState(false)
+            android.view.MotionEvent.ACTION_DOWN -> { onTouchState(true); pinching = false; pinchScale = 1f }
+            android.view.MotionEvent.ACTION_POINTER_DOWN -> if (ev.pointerCount >= 2 && pinchEnabled()) pinching = true
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                onTouchState(false)
+                if (pinching) {
+                    pinching = false
+                    if (kotlin.math.abs(pinchScale - 1f) > 0.08f) onPinch(pinchScale)
+                }
+            }
         }
+        if (pinchEnabled()) scaleDetector.onTouchEvent(ev)
         return super.dispatchTouchEvent(ev)
     }
+
+    // Two fingers on the page: the pinch is ours, not the book page's (it gets a cancel, so no selection starts).
+    override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean = pinching || super.onInterceptTouchEvent(ev)
+
+    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean = pinching || super.onTouchEvent(ev)
 }
 
 
