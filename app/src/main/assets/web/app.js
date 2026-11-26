@@ -3279,7 +3279,9 @@ function endOfChapterCard(ctx) {
 
 // ------------------------------------------------------------------ reading settings (shared with the tablet)
 
-const RS_DEFAULTS = { theme: 'WHITE', fontSizeSp: 18, fontFamily: 'SERIF', textAlign: 'JUSTIFY', lineSpacing: 1.6, marginDp: 24, topMarginDp: 16, bottomMarginDp: 16, paragraphStyle: 'BOTH', viewMode: 'PAGINATED', columns: 1, publisherStyles: true };
+const RS_DEFAULTS = { theme: 'WHITE', fontSizeSp: 18, fontFamily: 'SERIF', textAlign: 'JUSTIFY', lineSpacing: 1.6, marginDp: 24, topMarginDp: 16, bottomMarginDp: 16, paragraphStyle: 'BOTH', viewMode: 'PAGINATED', columns: 1, publisherStyles: true, pageNumbers: true, pageNumbersBook: false };
+/** EPUB page numbers: 'off', 'inline' (labels in the text) or 'book' (like the printed book). */
+function rsPageNumbers() { return !RS.pageNumbers ? 'off' : RS.pageNumbersBook ? 'book' : 'inline'; }
 const RS_THEMES = {
   WHITE: { bg: '#ffffff', fg: '#18181b', hl: 'multiply' },
   CREAM: { bg: '#fbf0d9', fg: '#26211c', hl: 'multiply' },
@@ -3380,6 +3382,19 @@ function readerSettingsButton(kind) {
     pop.append(line('View', h('div', { class: 'row', style: { gap: '4px' } }, RS_VIEWS.map(([id, label, icon, patch]) =>
       h('button', { class: 'chip vchip' + (rsView() === id ? ' on' : ''), onclick: () => { setReaderSettings(patch); draw(); } }, h('span', { class: 'vi', html: icon }), label))),
       rsView() === 'TWO' ? 'Two pages side by side, like an open book. A narrow window shows one page.' : rsView() === 'SCROLL' ? 'Scroll down through each chapter.' : ''));
+    // page numbers: off, in the text, or like the printed book (the same two switches as on the tablet)
+    const sw = (label, on, fn, off) => {
+      const input = h('input', { type: 'checkbox', checked: on, disabled: !!off, onchange: e => { fn(e.target.checked); draw(); } });
+      return h('label', { class: 'rsswitch' + (off ? ' off' : '') }, input, h('span', { class: 'knob' }), h('span', null, label));
+    };
+    const pn = rsPageNumbers();
+    pop.append(line('Page numbers', h('div', { class: 'rsswitches' },
+      sw('Show page numbers', !!RS.pageNumbers, v => setReaderSettings({ pageNumbers: v, pageNumbersBook: v && RS.pageNumbersBook })),
+      h('div', { class: 'sub' }, sw('Like the printed book', !!(RS.pageNumbers && RS.pageNumbersBook), v => setReaderSettings({ pageNumbersBook: v }), !RS.pageNumbers))),
+      pn === 'off' ? 'No page numbers in the text. The status line still says which printed page you are on.'
+        : pn === 'inline' ? 'The printed page numbers are small labels in the text, where each printed page begins.'
+        : scroll ? 'A line across the text where each printed page begins, labelled with its number.'
+        : 'Each printed page starts on a new screen, with the chapter and author at the top and the page number at the foot. A long page runs on to the next screen.'));
     pop.append(line('Margins', chips('marginDp', [[12, 'Narrow'], [24, 'Normal'], [36, 'Wide'], [48, 'Widest']])));
     pop.append(line('Book’s own styles', chips('publisherStyles', [[true, 'On'], [false, 'Off']]),
       own ? 'The book’s fonts and spacing are kept. Turn off to use your font, alignment, line spacing and paragraphs.' : ''));
@@ -4070,7 +4085,10 @@ async function openEpub(ctx, params) {
   const SPREAD_MIN = 640;
   const frame = () => {
     const two = !isScroll() && +RS.columns === 2;
-    view.style.padding = isScroll() ? `0 ${RS.marginDp}px` : `${RS.topMarginDp}px ${RS.marginDp}px ${RS.bottomMarginDp}px`;
+    // like the printed book, the top and bottom margins hold the running head and the page number
+    const bookMin = rsPageNumbers() === 'book' ? 44 : 0;
+    view.style.padding = isScroll() ? `0 ${RS.marginDp}px` : `${Math.max(RS.topMarginDp, bookMin)}px ${RS.marginDp}px ${Math.max(RS.bottomMarginDp, bookMin)}px`;
+    view.style.setProperty('--ep-pad-x', RS.marginDp + 'px');
     view.style.maxWidth = (two ? 1440 : 820) + RS.marginDp * 2 + 'px';
     wrap.classList.toggle('book', !isScroll());
     wrap.classList.toggle('scrollv', isScroll());
@@ -4330,6 +4348,125 @@ async function openEpub(ctx, params) {
     flatToc.forEach(x => { x.current = x === t; });
     try { localSet('ml.epubLoc.' + d.id, st.cfi || ''); } catch (_) {}
   });
+
+  // Page numbers (Aa → Page numbers, the same two switches as on the tablet):
+  // - off: none in the text;
+  // - in the text: a small label where each printed page begins;
+  // - like the printed book, pages: each printed page begins a new screen page (a column break at its marker),
+  //   with the chapter at the top left, the author at the top right and the page number at the foot;
+  // - like the printed book, scroll: a line across the text where each printed page begins, with its number.
+  const isFolio = v => /^(\d{1,4}|[ivxlcdm]{1,7})$/i.test(v);
+  const MONO = 'ui-monospace, "Roboto Mono", Menlo, Consolas, monospace';
+  const markStyles = {
+    off: `.ml-pm { font-size: 0 !important; }`,
+    inline: `.ml-pm { font-size: 0 !important; }
+      .ml-pm::before { content: attr(data-ml-p); display: inline-block; font: 600 max(10px, .62rem)/1.3 ${MONO}; text-indent: 0; font-style: normal;
+        padding: 0 .3em; margin: 0 .45em; border: 1px solid currentColor; border-radius: .3em; opacity: .55; vertical-align: .15em; white-space: nowrap; }`,
+    book: `.ml-pm { font-size: 0 !important; line-height: 0 !important; padding: 0 !important; margin: 0 !important; border: 0 !important; }
+      .ml-pb { display: block !important; height: 0 !important; overflow: hidden !important; break-before: column !important; -webkit-column-break-before: always !important; }
+      .ml-pm.ml-blank { display: block !important; height: 1px !important; }`,
+    scroll: `.ml-pm { display: flex !important; align-items: center; margin: 1.3rem 0 1rem !important; text-indent: 0 !important; font-size: 0 !important; line-height: 1 !important; }
+      .ml-pm::before { content: attr(data-ml-cap); flex: none; font: 600 max(10px, .7rem)/1 ${MONO}; opacity: .6; margin-right: .7rem; }
+      .ml-pm::after { content: ""; flex: 1; border-top: 1px solid currentColor; opacity: .25; }`,
+  };
+  const markBreaks = contents => {
+    const doc = contents && contents.document; if (!doc || !doc.body || !doc.head) return;
+    let st = doc.getElementById('ml-pagebreak-style');
+    if (!st) { st = doc.createElement('style'); st.id = 'ml-pagebreak-style'; doc.head.appendChild(st); }
+    const pn = rsPageNumbers();
+    st.textContent = markStyles[pn === 'book' && isScroll() ? 'scroll' : pn];
+    // a marker with nothing before it in the file (the chapter's first page) begins the first screen page as it is
+    // a blank page (the next marker follows with nothing between) is given a pixel of height, or its page is skipped
+    let before = false;
+    const r = doc.createRange();
+    const hasContent = () => !!r.toString().trim() || !!r.cloneContents().querySelector('img, svg, image, table, hr');
+    const ms = [...doc.querySelectorAll(PAGE_MARKS)].filter(m => isFolio(markLabel(m)));
+    ms.forEach((m, k) => {
+      if (!before) { r.setStart(doc.body, 0); try { r.setEndBefore(m); before = k > 0 || hasContent(); } catch (_) {} }
+      let blank = false;
+      if (ms[k + 1]) { try { r.setStartAfter(m); r.setEndBefore(ms[k + 1]); blank = !hasContent(); } catch (_) {} }
+      m.classList.add('ml-pm'); m.classList.toggle('ml-pb', before); m.classList.toggle('ml-blank', blank);
+      const label = markLabel(m); m.setAttribute('data-ml-p', label); m.setAttribute('data-ml-cap', 'Page ' + label + (blank ? ' · blank page' : ''));
+    });
+  };
+  rendition.hooks.content.register(markBreaks);
+  const runHead = h('div', { class: 'ep-head', hidden: true }, h('span', { class: 'ep-ch' }), h('span', { class: 'ep-au' }));
+  const folioBox = h('div', { class: 'ep-folios', hidden: true });
+  view.append(runHead, folioBox);
+  const author = (d.displayAuthor || d.author || '').split(/\s*;\s*/)[0];
+  // the last printed page before each file of the book (for a file whose first screen page has no marker at its top)
+  const spineIdx = href => { try { const s = book.spine.get(href); return s ? s.index : -1; } catch (_) { return -1; } };
+  const bookPages = ((book.navigation && book.navigation.pageList) || []).map(p => ({ label: String(p.label || p.pageLabel || p.page || '').trim(), si: spineIdx(String(p.href || '').split('#')[0]) })).filter(p => p.si >= 0);
+  const carryInto = si => { let l = ''; for (const p of bookPages) if (p.si < si && isFolio(p.label)) l = p.label; return l; };
+  const printedEl = h('span', { class: 'muted' });
+  where.after(printedEl);
+  const updateFolio = () => {
+    // the printed page in the status line, whichever way the page numbers are shown
+    try {
+      const st0 = (lastLoc && lastLoc.start) || {}, c0 = (rendition.getContents() || [])[0];
+      const rg = st0.cfi ? rendition.getRange(st0.cfi) : null;
+      let pp = rg ? pageLabelAt(rg.startContainer.ownerDocument, rg) : '';
+      if (!pp && c0) pp = carryInto(c0.sectionIndex);
+      printedEl.textContent = pp && isFolio(pp) ? ' · printed page ' + pp : '';
+    } catch (_) { printedEl.textContent = ''; }
+    const on = !isScroll() && rsPageNumbers() === 'book';
+    runHead.hidden = folioBox.hidden = !on;
+    if (!on) return;
+    const m = rendition.manager, lay = m && m.layout, c = m && m.container;
+    const contents = (rendition.getContents() || [])[0];
+    const doc = contents && contents.document;
+    if (!lay || !c || !doc || !doc.body || !lay.delta) return;
+    const div = lay.divisor > 1 ? lay.divisor : 1, period = lay.delta / div;
+    const first = Math.round(c.scrollLeft / period);
+    const st = (lastLoc && lastLoc.start) || {};
+    // markers by screen page, and whether each stands at the top of its page
+    const cs = contents.window.getComputedStyle(doc.body);
+    const topRef = doc.body.getBoundingClientRect().top + (parseFloat(cs.paddingTop) || 0);
+    const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.4 || 24;
+    const marks = [...doc.querySelectorAll(PAGE_MARKS)].map(el => ({ el, label: markLabel(el) })).filter(x => isFolio(x.label))
+      .map(x => { const b = x.el.getBoundingClientRect(); return { label: x.label, col: Math.floor((b.left + 1) / period), top: b.top - topRef < lh * 0.8, blank: x.el.classList.contains('ml-blank') }; });
+    // the chapter's first page: the file's first screen page, or the one after blank pages at its start
+    let lead = 0; while (marks[lead] && marks[lead].blank && marks[lead].col === lead) lead++;
+    const opening = lead && marks[lead] ? marks[lead].col : 0;
+    const si = contents.sectionIndex != null ? contents.sectionIndex : spineIdx(st.href);
+    const any = marks.length || bookPages.length;
+    // the last screen page with something on it (a two-page view may end on an empty page)
+    let lastCol = Infinity;
+    try {
+      const tw = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT); let n, lastText = null;
+      while ((n = tw.nextNode())) if (n.nodeValue.trim()) lastText = n;
+      const els = [...doc.body.querySelectorAll('img, svg, table, hr')], lastEl = els[els.length - 1];
+      const rr = doc.createRange(); let x = -Infinity;
+      if (lastText) { rr.selectNodeContents(lastText); const rs = rr.getClientRects(); if (rs.length) x = Math.max(x, rs[rs.length - 1].left); }
+      if (lastEl) x = Math.max(x, lastEl.getBoundingClientRect().left);
+      marks.forEach(m => { if (m.blank) x = Math.max(x, m.col * period); });
+      if (x > -Infinity) lastCol = Math.floor((x + 1) / period);
+    } catch (_) {}
+    const folioOf = col => {
+      if (!any || col > lastCol) return '';
+      let carry = carryInto(si); marks.forEach(x => { if (x.col < col) carry = x.label; });
+      const here = marks.filter(x => x.col === col);
+      const start = here.length && here[0].top ? here[0].label : carry;
+      const end = here.length ? here[here.length - 1].label : start;
+      return start && end && start !== end ? `${start}–${end}` : (start || end);
+    };
+    clear(folioBox);
+    for (let k = 0; k < div; k++) folioBox.append(h('span', { style: { left: ((k + 0.5) / div * 100) + '%' } }, folioOf(first + k)));
+    const t = tocFor(st.href);
+    // the chapter's name, as a printed head has it: "One :Putting It Mildly" → "Putting It Mildly"
+    const NUM = /^(?:(?:chapter|kapittel|part|del)\s+)?(?:\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\w+teen|twenty(?:[\s-]\w+)?|thirty(?:[\s-]\w+)?)\s*[:.–—-]\s*(.+)$/i;
+    const title = t ? t.title.replace(/\s+:\s*/g, ': ').trim() : (d.title || '');
+    runHead.firstChild.textContent = (NUM.exec(title) || [null, title])[1];
+    runHead.lastChild.textContent = author;
+    // no running head on a chapter's first page or a blank page, as in print
+    runHead.classList.toggle('opening', first <= opening || (div === 1 && marks.some(x => x.col === first && x.blank)));
+  };
+  let folioT = 0;
+  const folioSoon = () => { clearTimeout(folioT); folioT = setTimeout(updateFolio, 220); };
+  rendition.on('relocated', folioSoon);
+  rendition.on('rendered', folioSoon);
+  rsListeners.add(() => { (rendition.getContents() || []).forEach(markBreaks); folioSoon(); });
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(folioSoon).observe(view);
 
   // Selection → bar
   rendition.on('selected', (cfiRange, contents) => {

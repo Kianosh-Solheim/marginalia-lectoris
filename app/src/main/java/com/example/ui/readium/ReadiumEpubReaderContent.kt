@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -201,6 +202,8 @@ fun ReadiumEpubReaderContent(
     var latestLocator by remember(document.id) { mutableStateOf<Locator?>(null) }
     var currentTrackedPosition by remember(document.id) { mutableIntStateOf(initialPage.coerceAtLeast(1)) }
     var currentPrintPageLabel by remember(document.id) { mutableStateOf("") }
+    // Like the printed book (strict pages): the page shown, for the running head and the page number
+    var bookPages by remember(document.id) { mutableStateOf<List<BookPageInfo>>(emptyList()) }
     var resourcePageLists by remember(document.id) { mutableStateOf<List<ReadiumResourcePageList>>(emptyList()) }
 
     // Readium WebView text selection state for custom Highlighting Menu
@@ -254,8 +257,8 @@ fun ReadiumEpubReaderContent(
         glossFlipped = emptySet()
         glossLastFlipped = null
     }
-    // Strict 1:1 print pagination needs exactly one printed page per screen, so two-column spreads are disabled.
-    val forceSingleColumn = printLayoutMode == PrintPageLayoutMode.PAGINATED_STRICT
+    // Like the printed book works in one or two pages (each printed page starts a new page), as in the web view.
+    val forceSingleColumn = false
 
     // Unique view container and fragment tag for this document instance
     val containerId = remember(document.id) { View.generateViewId() }
@@ -639,14 +642,13 @@ fun ReadiumEpubReaderContent(
 
                                 var computedLabel: String? = null
                                 if (printLayoutMode == PrintPageLayoutMode.PAGINATED_STRICT) {
-                                    // In strict 1:1 mode each screen is one <section data-page>; read it directly.
+                                    // In strict 1:1 mode each screen is one <section data-page> (a long one may run on to
+                                    // the next screen); read it directly, with where the text column lies on the screen.
                                     try {
-                                        val raw = frag.evaluateJavascript(
-                                            "(function(){var w=window.innerWidth,s=document.querySelectorAll('section.ml-printpage[data-page]');" +
-                                                "for(var i=0;i<s.length;i++){var r=s[i].getClientRects()[0];if(r&&r.left>=-1&&r.left<w-1)return s[i].getAttribute('data-page');}return '';})();"
-                                        )
-                                        val label = raw?.trim()?.removeSurrounding("\"")?.trim().orEmpty()
-                                        if (label.isNotEmpty() && label != "null") computedLabel = label
+                                        val raw = frag.evaluateJavascript(BOOK_PAGE_SCRIPT)
+                                        val pages = parseBookPages(raw)
+                                        bookPages = pages
+                                        if (pages.isNotEmpty()) computedLabel = pages.first().label
                                     } catch (_: Throwable) {}
                                 }
                                 if (computedLabel == null) try {
@@ -701,6 +703,7 @@ fun ReadiumEpubReaderContent(
                                 }
                             }
                         } else {
+                            bookPages = emptyList()   // a part of the book without printed pages (front matter): no page number on it
                             // Nearest previous resource fallback when spine item has no page markers of its own
                             val spineIdx = pub.readingOrder.indexOfFirst { areResourceUrlsMatching(it.url(), locator.href) }
                             var prevLabel: String? = null
@@ -821,8 +824,11 @@ fun ReadiumEpubReaderContent(
                 }
             }
             publication != null && activity != null -> {
-                val effectiveTopMargin = if (!isVerticalScroll && !isFixedLayoutBook) topMarginDp.coerceIn(0, 160).dp else 0.dp
-                val effectiveBottomMargin = if (!isVerticalScroll && !isFixedLayoutBook) bottomMarginDp.coerceIn(0, 160).dp else 0.dp
+                // Like the printed book: the top and bottom margins hold the running head and the page number.
+                val bookLook = printLayoutMode == PrintPageLayoutMode.PAGINATED_STRICT && !isVerticalScroll && !isFixedLayoutBook
+                val minBookMargin = if (bookLook) 44 else 0
+                val effectiveTopMargin = if (!isVerticalScroll && !isFixedLayoutBook) topMarginDp.coerceIn(minBookMargin, 160).dp else 0.dp
+                val effectiveBottomMargin = if (!isVerticalScroll && !isFixedLayoutBook) bottomMarginDp.coerceIn(minBookMargin, 160).dp else 0.dp
                 AndroidView(
                     factory = { ctx ->
                         TouchObservingFrameLayout(ctx) { down ->
@@ -944,6 +950,18 @@ fun ReadiumEpubReaderContent(
                         .padding(top = effectiveTopMargin, bottom = effectiveBottomMargin)
                         .onSizeChanged { readerHeightPx = it.height }
                 )
+
+                val shownPages = bookPages
+                if (bookLook && shownPages.isNotEmpty()) {
+                    BookPageFurniture(
+                        pages = shownPages,
+                        chapter = runningHeadTitle(latestLocator?.title.orEmpty()),
+                        author = document.author.split(';').first().trim().takeUnless { it.equals("Unknown Author", ignoreCase = true) }.orEmpty(),
+                        topMargin = effectiveTopMargin,
+                        bottomMargin = effectiveBottomMargin,
+                        color = activeTheme.secondaryTextColor
+                    )
+                }
 
                 // Waiting for the rest of a selection begun on the previous page.
                 val waitingEpub = carriedEpub
@@ -1335,5 +1353,104 @@ private class TouchObservingFrameLayout(
             android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> onTouchState(false)
         }
         return super.dispatchTouchEvent(ev)
+    }
+}
+
+
+// ------------------------------------------------------------------ like the printed book
+
+/** A printed page on screen in strict mode: its number, whether it opens a chapter or is blank, and its text column (CSS px = dp). */
+internal data class BookPageInfo(val label: String, val opening: Boolean, val blank: Boolean, val left: Float, val width: Float)
+
+/**
+ * The pages on screen (one, or two side by side): for each column the body shows, the section (printed page)
+ * that begins in it or runs on into it, and the column's text box (the body's box there, less its padding).
+ * A column with nothing in it (the empty last page of a two-page view) is left out.
+ */
+private val BOOK_PAGE_SCRIPT = """
+    (function(){
+      var w = window.innerWidth, cs = getComputedStyle(document.body);
+      var pl = parseFloat(cs.paddingLeft) || 0, pr = parseFloat(cs.paddingRight) || 0;
+      var br = document.body.getClientRects(), cols = [];
+      for (var j = 0; j < br.length; j++) if (br[j].width > 0 && br[j].left >= -1 && br[j].left < w - 1) cols.push(br[j]);
+      var s = document.querySelectorAll('section.ml-printpage[data-page]'), out = [];
+      for (var c = 0; c < cols.length; c++) {
+        var col = cols[c], found = null;
+        for (var i = 0; i < s.length && !found; i++) {
+          var rs = s[i].getClientRects();
+          for (var k = 0; k < rs.length; k++) {
+            var r = rs[k];
+            if (r.width > 0 && r.left >= col.left - 1 && r.left < col.right - 1) {
+              found = { p: s[i].getAttribute('data-page'), o: k === 0 && s[i].classList.contains('ml-opening'),
+                b: s[i].classList.contains('ml-blank'), l: col.left + pl, w: col.width - pl - pr };
+              break;
+            }
+          }
+        }
+        if (found) out.push(found);
+      }
+      return out.length ? JSON.stringify(out) : '';
+    })();
+""".trimIndent()
+
+internal fun parseBookPages(raw: String?): List<BookPageInfo> {
+    if (raw.isNullOrBlank() || raw == "null") return emptyList()
+    return try {
+        // evaluateJavascript gives the result as JSON: here a JSON string holding the JSON array
+        val inner = org.json.JSONTokener(raw).nextValue().let { if (it is String) it else raw }
+        if (inner.isBlank()) return emptyList()
+        val a = org.json.JSONArray(inner)
+        (0 until a.length()).mapNotNull { i ->
+            val o = a.optJSONObject(i) ?: return@mapNotNull null
+            val label = o.optString("p").trim()
+            if (label.isEmpty()) null
+            else BookPageInfo(label, o.optBoolean("o"), o.optBoolean("b"), o.optDouble("l", 0.0).toFloat(), o.optDouble("w", 0.0).toFloat())
+        }
+    } catch (_: Throwable) { emptyList() }
+}
+
+/** A printed book's running head shows the chapter's name: "One: Putting It Mildly" → "Putting It Mildly". */
+internal fun runningHeadTitle(raw: String): String {
+    val t = raw.replace(Regex("""\s+:\s*"""), ": ").trim()
+    val m = Regex("""^(?:(?:chapter|kapittel|part|del)\s+)?(?:\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\w+teen|twenty(?:[\s-]\w+)?|thirty(?:[\s-]\w+)?)\s*[:.–—-]\s*(.+)$""", RegexOption.IGNORE_CASE).find(t)
+    return m?.groupValues?.get(1)?.trim() ?: t
+}
+
+/**
+ * As in the web view: the running head in the top margin, the chapter over the first page's left and the
+ * author over the last page's right (none on a chapter's first page or a blank page, as in print), and each
+ * page's number in the bottom margin, under its column.
+ */
+@Composable
+private fun BookPageFurniture(pages: List<BookPageInfo>, chapter: String, author: String, topMargin: androidx.compose.ui.unit.Dp, bottomMargin: androidx.compose.ui.unit.Dp, color: Color) {
+    val style = androidx.compose.ui.text.TextStyle(
+        fontFamily = androidx.compose.ui.text.font.FontFamily.Serif, fontSize = 12.sp, letterSpacing = 0.4.sp,
+        fontFeatureSettings = "smcp", color = color
+    )
+    val first = pages.first(); val last = pages.last()
+    val headWidth = if (pages.size == 1) 0.48f else 1f
+    Box(modifier = Modifier.fillMaxSize()) {
+        @Composable
+        fun androidx.compose.foundation.layout.BoxScope.Slot(page: BookPageInfo, top: Boolean, content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit) = Box(
+            modifier = Modifier
+                .align(if (top) Alignment.TopStart else Alignment.BottomStart)
+                .padding(start = page.left.coerceAtLeast(0f).dp)
+                .then(if (page.width > 40f) Modifier.width(page.width.dp) else Modifier.fillMaxWidth())
+                .height(if (top) topMargin else bottomMargin),
+            content = content
+        )
+        if (!first.opening && !first.blank && chapter.isNotBlank()) Slot(first, true) {
+            Text(chapter, style = style, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.CenterStart).fillMaxWidth(headWidth))
+        }
+        if (!last.opening && !last.blank && author.isNotBlank()) Slot(last, true) {
+            Text(author, style = style.copy(textAlign = TextAlign.End), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxWidth(headWidth))
+        }
+        pages.forEach { page ->
+            Slot(page, false) {
+                Text(page.label, style = style.copy(fontFeatureSettings = "onum", letterSpacing = 0.sp, fontSize = 13.sp), modifier = Modifier.align(Alignment.Center))
+            }
+        }
     }
 }

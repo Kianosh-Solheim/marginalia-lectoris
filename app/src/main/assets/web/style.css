@@ -378,6 +378,14 @@ input.tagtype { flex: 1 1 140px; min-width: 120px; border: 0 !important; padding
 .epubwrap.book .side:hover { background: transparent; }
 .epubwrap.book .epubview { background: var(--paper); position: relative; box-shadow: 0 0 0 1px rgba(0, 0, 0, .12), 0 8px 26px rgba(0, 0, 0, .18); }
 .reader.rt-dark .epubwrap.book .epubview { box-shadow: 0 0 0 1px #27272a; }
+/* the printed book's page: running head (chapter · author) and page number, in the page's margins */
+.ep-head, .ep-folios { position: absolute; left: var(--ep-pad-x, 0); right: var(--ep-pad-x, 0); pointer-events: none; font-family: var(--serif, Georgia, serif); font-size: 12px; letter-spacing: .04em; color: var(--grey); }
+.ep-head { top: 0; height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 24px; font-variant: small-caps; }
+.ep-head span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 48%; }
+.ep-head.opening { visibility: hidden; }
+.ep-folios { bottom: 0; height: 44px; }
+.ep-folios span { position: absolute; top: 50%; transform: translate(-50%, -50%); font-variant-numeric: oldstyle-nums; }
+.ep-head[hidden], .ep-folios[hidden] { display: none; }
 .epubwrap.book .epubview.spread::after { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 44px; transform: translateX(-50%); pointer-events: none; z-index: 2;
   background: linear-gradient(to right, transparent, var(--spine) 47%, var(--spine) 53%, transparent); opacity: .9; }
 .epubwrap.book .epubview.spread::before { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--spine); pointer-events: none; z-index: 2; }
@@ -1678,3 +1686,15 @@ html[data-theme="dark"] mark.audio-hit { border-bottom-color: #eee; }
 .pg-hit { display: flex; flex-direction: column; padding: 5px 9px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--rule); }
 .pg-hit:hover { background: var(--card); }
 .pg-hit span { font-size: 11px; }
+
+/* the reading settings' switches (page numbers) */
+.rsswitches { display: flex; flex-direction: column; gap: 2px; }
+.rsswitches .sub { padding-left: 24px; }
+.rsswitch { display: flex; align-items: center; gap: 10px; min-height: 36px; cursor: pointer; font-size: 14px; position: relative; }
+.rsswitch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.rsswitch .knob { width: 34px; height: 20px; border: 1.5px solid var(--ink); border-radius: 10px; position: relative; flex: none; transition: background .15s; }
+.rsswitch .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--ink); transition: transform .15s; }
+.rsswitch input:checked + .knob { background: var(--ink); }
+.rsswitch input:checked + .knob::after { background: var(--paper, #fff); transform: translateX(14px); }
+.rsswitch input:focus-visible + .knob { outline: 2px solid #2563eb; outline-offset: 2px; }
+.rsswitch.off { opacity: .4; pointer-events: none; }

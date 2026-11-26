@@ -786,6 +786,9 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             .put("viewMode", st.readerViewMode.ifBlank { "PAGINATED" })
             .put("columns", st.readerColumnCount.coerceIn(1, 2))
             .put("publisherStyles", st.publisherStylesEnabled)
+            // EPUB page numbers: off, in the text, or (with pageNumbersBook) like the printed book
+            .put("pageNumbers", st.showEpubPageEquivalents)
+            .put("pageNumbersBook", st.showEpubPageEquivalents && st.paginateByEpubPageEquivalents)
     }
 
     private suspend fun saveReaderSettings(b: JSONObject) {
@@ -803,7 +806,9 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             readerParagraphStyle = pick("paragraphStyle", setOf("INDENT", "SPACED", "BOTH", "NONE"), st.readerParagraphStyle),
             readerViewMode = pick("viewMode", setOf("PAGINATED", "VERTICAL_SCROLL"), st.readerViewMode),
             readerColumnCount = if (b.has("columns")) b.optInt("columns", st.readerColumnCount).coerceIn(1, 2) else st.readerColumnCount,
-            publisherStylesEnabled = if (b.has("publisherStyles")) b.optBoolean("publisherStyles", st.publisherStylesEnabled) else st.publisherStylesEnabled
+            publisherStylesEnabled = if (b.has("publisherStyles")) b.optBoolean("publisherStyles", st.publisherStylesEnabled) else st.publisherStylesEnabled,
+            showEpubPageEquivalents = if (b.has("pageNumbers")) b.optBoolean("pageNumbers", st.showEpubPageEquivalents) else st.showEpubPageEquivalents,
+            paginateByEpubPageEquivalents = if (b.has("pageNumbersBook")) b.optBoolean("pageNumbersBook", st.paginateByEpubPageEquivalents) else st.paginateByEpubPageEquivalents
         )
         if (next != st) db.settingsDao().saveSettings(next)
     }

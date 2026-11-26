@@ -1870,7 +1870,7 @@ internal fun ReaderFormattingBottomSheet(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "4. Printed Page Numbers",
+                                        text = "4. Show page numbers",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = Color.Black
@@ -1891,7 +1891,7 @@ internal fun ReaderFormattingBottomSheet(
                                     }
                                 }
                                 Text(
-                                    text = "Show printed edition page numbers in the book header, status bar, and inline text when the EPUB has Page List metadata",
+                                    text = "The printed book's page numbers as small labels in the text, where each printed page begins (EPUBs with page numbers)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Color(0xFF71717A)
                                 )
@@ -1917,13 +1917,13 @@ internal fun ReaderFormattingBottomSheet(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "1:1 Print Edition Pagination",
+                                        text = "Like the printed book",
                                         style = MaterialTheme.typography.bodySmall,
                                         fontWeight = FontWeight.SemiBold,
                                         color = Color.Black
                                     )
                                     Text(
-                                        text = "Each screen shows exactly one printed page; text on long pages is shrunk (to at most 70%) so the page fits. Paginated mode only, single column. In Vertical Scroll, a ruled line with the page number marks each printed page instead",
+                                        text = "Pages: each printed page starts on a new screen, with the chapter and author at the top and the page number at the foot; a long page runs on to the next screen. Scroll: a line across the text where each printed page begins, labelled with its number",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = Color(0xFF71717A)
                                     )
