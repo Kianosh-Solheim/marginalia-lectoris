@@ -83,8 +83,8 @@ fun CreateHighlightDialog(
     documentTitle: String,
     documentPath: String = LocalBookPath.current,
     isPdfDocument: Boolean = false,
-    dialogTitle: String = "New Literature Note",
-    saveButtonLabel: String = "Save Note",
+    dialogTitle: String = "New note",
+    saveButtonLabel: String = "Save note",
     /** PDF only: put the note aside, turn to the next page and select the rest of the quotation there. */
     onContinueNextPage: ((title: String, quote: String, notes: String, page: Int, printedPageLabel: String, chapter: String, colorHex: String, tags: String) -> Unit)? = null,
     /** When editing an existing note: deletes it (asked twice). */
@@ -225,6 +225,24 @@ fun CreateHighlightDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                OutlinedTextField(
+                    value = quote,
+                    onValueChange = { quote = it },
+                    label = { Text("Quotation") },
+                    placeholder = { Text("The passage you marked") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("highlight_quote_input"),
+                    minLines = 3,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.Black,
+                        unfocusedBorderColor = Color.Black,
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        focusedLabelColor = Color.Black
+                    )
+                )
+
                 // Note Title (Filename) Row with AI Spark Button beside it
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -234,11 +252,11 @@ fun CreateHighlightDialog(
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
-                        label = { Text("Note Title (Filename: [title].md)") },
+                        label = { Text("Title") },
                         supportingText = {
                             val langBadge = aiTitleLanguage?.let { " • AI ($it)" } ?: ""
                             Text(
-                                text = "Becomes the filename in your PKM vault$langBadge",
+                                text = "Saved to Obsidian as “Title.md”$langBadge",
                                 color = Color(0xFF18181B)
                             )
                         },
@@ -378,54 +396,19 @@ fun CreateHighlightDialog(
                     }
                 }
 
-                OutlinedTextField(
-                    value = quote,
-                    onValueChange = { quote = it },
-                    label = { Text("Highlighted Quote") },
-                    placeholder = { Text("Quote excerpt...") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("highlight_quote_input"),
-                    minLines = 3,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.Black,
-                        unfocusedBorderColor = Color.Black,
-                        focusedContainerColor = Color.White,
-                        unfocusedContainerColor = Color.White,
-                        focusedLabelColor = Color.Black
-                    )
+                // Offline title ideas, folded away until asked for.
+                InkButton(
+                    label = if (showExtras) "Title ideas ▴" else "Title ideas ▾",
+                    quiet = true,
+                    onClick = { showExtras = !showExtras },
+                    modifier = Modifier.testTag("title_ideas_toggle")
                 )
-
-                DictionaryButton(quote, bookLanguage)
-                NoteAssistance(quote, bookLanguage) { addition ->
-                    notes = if (notes.isBlank()) addition else notes.trimEnd() + "\n\n" + addition
-                }
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    label = { Text("Personal PKM Reflections") },
-                    placeholder = { Text("Your synthesis, critique, or reflections...") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("highlight_notes_input"),
-                    minLines = 2,
-                    trailingIcon = { DictationMic(onText = { said -> notes = if (notes.isBlank()) said.trim() else notes.trimEnd() + " " + said.trim() }) },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.Black,
-                        unfocusedBorderColor = Color.Black,
-                        focusedContainerColor = Color.White,
-                        unfocusedContainerColor = Color.White,
-                        focusedLabelColor = Color.Black
-                    )
-                )
-
-                MenuFold("Tags, colour and title suggestions", if (activeTags.isEmpty()) "No tags yet" else "${activeTags.size} tags", showExtras) { showExtras = !showExtras }
                 if (showExtras) {
                 // Suggested Titles based on Highlighted Text
                 if (suggestedTitles.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "Suggested Titles (from highlighted text):",
+                            text = "Title ideas from the passage:",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF3F3F46)
@@ -459,6 +442,31 @@ fun CreateHighlightDialog(
                             }
                         }
                     }
+                }
+                }
+
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Note") },
+                    placeholder = { Text("Your thoughts…") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("highlight_notes_input"),
+                    minLines = 2,
+                    trailingIcon = { DictationMic(onText = { said -> notes = if (notes.isBlank()) said.trim() else notes.trimEnd() + " " + said.trim() }) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.Black,
+                        unfocusedBorderColor = Color.Black,
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        focusedLabelColor = Color.Black
+                    )
+                )
+
+                DictionaryButton(quote, bookLanguage)
+                NoteAssistance(quote, bookLanguage) { addition ->
+                    notes = if (notes.isBlank()) addition else notes.trimEnd() + "\n\n" + addition
                 }
 
                 // Individual Note Tags & Suggested Tags Section
@@ -797,7 +805,7 @@ fun CreateHighlightDialog(
                 }
 
                 Text(
-                    text = "E-Ink Shading Style",
+                    text = "Colour",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = Color.Black
@@ -812,21 +820,18 @@ fun CreateHighlightDialog(
                         val isSelected = selectedColor.hex.equals(colorOption.hex, ignoreCase = true)
                         Box(
                             modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
+                                .size(36.dp)
                                 .background(Color(colorOption.colorValue))
                                 .border(
                                     width = if (isSelected) 2.5.dp else 1.dp,
-                                    color = if (isSelected) Color.Black else Color(0xFFD4D4D8),
-                                    shape = CircleShape
+                                    color = Color.Black
                                 )
                                 .clickable { selectedColor = colorOption }
                         )
                     }
                 }
 
-                }
-                MenuFold("Page and place", listOf(if (printedPageLabel.isNotBlank()) "p. $printedPageLabel" else "", chapter.trim()).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "Where in the text this note belongs" }, showPlace) { showPlace = !showPlace }
+                MenuFold("Location", listOf(if (printedPageLabel.isNotBlank()) "p. $printedPageLabel" else "", chapter.trim()).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "Where in the text this note belongs" }, showPlace) { showPlace = !showPlace }
                 if (showPlace) {
                 if (isPdfDocument || printedPageLabel.isNotBlank()) {
                     Row(
