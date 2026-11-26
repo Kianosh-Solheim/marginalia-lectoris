@@ -1189,6 +1189,49 @@ async function showSettings() {
   renderSettings(main, data);
 }
 
+/** Why the app closed on the tablet: Android's record of its last exits, and the error of each crash. */
+function exitsSection() {
+  const box = h('div');
+  let report = '';
+  const load = async () => {
+    clear(box).append(h('div', { class: 'muted' }, 'Reading…'));
+    let d; try { d = await api('diagnostics/exits'); } catch (e) { clear(box).append(h('div', { class: 'muted' }, e.message || String(e))); return; }
+    const lines = [`Marginalia Lectoris ${d.app || ''}`];
+    clear(box);
+    if (d.exitsError) box.append(h('div', { class: 'muted' }, d.exitsError));
+    const list = h('div', { class: 'exits' });
+    (d.exits || []).forEach(x => {
+      lines.push(`${x.time} · ${x.reason}${x.description ? ' · ' + x.description : ''} · ${x.memoryMB} MB${x.trace ? '\n' + x.trace : ''}`);
+      list.append(h('div', { class: 'exit' }, h('b', null, x.time), ' ', h('span', null, x.reason),
+        x.description ? h('div', { class: 'muted' }, x.description) : null, h('div', { class: 'muted' }, `${x.memoryMB} MB in use`),
+        x.trace ? h('pre', { class: 'exit-trace' }, x.trace) : null));
+    });
+    if (!(d.exits || []).length) list.append(h('div', { class: 'muted' }, 'No exits recorded.'));
+    box.append(h('h3', null, 'The last times the app closed'), list);
+    if ((d.crashes || []).length) {
+      box.append(h('h3', null, 'Errors saved at a crash'));
+      d.crashes.forEach(c => { lines.push('\n--- ' + c.file + '\n' + c.text); box.append(h('pre', { class: 'exit-trace' }, c.text)); });
+    } else box.append(h('div', { class: 'muted', style: { marginTop: '8px' } }, 'No crash errors saved yet (they are kept from this version on).'));
+    report = lines.join('\n');
+  };
+  const copy = async () => {
+    if (!report) await load();
+    try { await navigator.clipboard.writeText(report); toast('Copied'); }
+    catch (_) {
+      // no clipboard (a page not served over https): show the text to copy by hand
+      modal((mbox, close) => {
+        const ta = h('textarea', { readonly: true, style: { width: '100%', height: '50vh', fontFamily: 'var(--mono)', fontSize: '11px' } }); ta.value = report;
+        mbox.append(h('h2', null, 'Why the app closed'), h('p', { class: 'muted' }, 'Select all (Ctrl/⌘-A) and copy.'), ta, h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: close }, 'Close')));
+        setTimeout(() => ta.select(), 50);
+      });
+    }
+  };
+  return h('section', { class: 'set-group', id: 'set-exits' }, h('h2', null, 'Why the app closed'),
+    h('p', { class: 'muted' }, 'If the app quits on the tablet, this shows why: a crash, low memory, or freezing. Copy it and send it on, and the cause can be found.'),
+    h('div', { class: 'row', style: { gap: '6px' } }, h('button', { class: 'btn', onclick: load }, 'Show'), h('button', { class: 'btn', onclick: copy }, 'Copy all')),
+    box);
+}
+
 function settingsSlug(name) { return 'set-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-'); }
 
 function renderSettings(main, data) {
@@ -1204,7 +1247,8 @@ function renderSettings(main, data) {
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-search').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Search'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-zotero').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Zotero'),
     h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-gcal').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Google Calendar'),
-    h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-storage').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Storage & backup'));
+    h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-storage').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Storage & backup'),
+    h('a', { href: '#', onclick: e => { e.preventDefault(); document.getElementById('set-exits').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Why the app closed'));
   const body = h('div', { class: 'set-body' });
   data.groups.forEach(g => {
     const sec = h('section', { class: 'set-group', id: settingsSlug(g.name) }, h('h2', null, g.name));
@@ -1220,6 +1264,7 @@ function renderSettings(main, data) {
   body.appendChild(zoteroSettingsSection());
   body.appendChild(gcalSettingsSection());
   body.appendChild(storageSection(data.info));
+  body.appendChild(exitsSection());
   main.append(h('div', { class: 'set-head' }, h('h1', null, 'Settings'),
     h('p', { class: 'muted' }, 'The same settings as on the tablet. Changes are saved there straight away.')),
     h('div', { class: 'set-layout' }, nav, body));
