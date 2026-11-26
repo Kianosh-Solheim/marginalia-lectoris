@@ -123,6 +123,42 @@ fun SettingsScreen(
 
     val tagsList = tagsText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
+    // Saved straight away, as in the web view: every change is written after a short pause (no Save button).
+    // The storage location is the exception: it moves the library, so it waits for "Use this storage".
+    val autoSaved = currentSettings.copy(
+        defaultTags = tagsText.trim(),
+        mocTitleFormat = mocTitleFormat.trim(),
+        wikiLinkStyle = wikiLinkStyle,
+        includeDateInFrontmatter = includeDate,
+        includePageInFrontmatter = includePage,
+        includeSourceInFrontmatter = includeSource,
+        includeAuthorInFrontmatter = includeAuthor,
+        customFrontmatterYaml = customYaml.trim(),
+        volumeKeyNavigation = volumeKeyNav,
+        volumeKeyAnimation = volumeKeyAnim,
+        readerViewMode = readerViewMode,
+        pageTurnAnimation = pageTurnAnimation,
+        readerTheme = readerTheme,
+        readerMarginDp = readerMarginDp,
+        readerFontSizeSp = readerFontSizeSp,
+        showEpubPageEquivalents = showEpubPageEquivalents,
+        paginateByEpubPageEquivalents = paginateByEpubPageEquivalents,
+        readerParagraphStyle = readerParagraphStyle,
+        readerColumnCount = readerColumnCount.coerceIn(1, 2),
+        publisherStylesEnabled = publisherStylesEnabled,
+        readerTopMarginDp = readerTopMarginDp.coerceIn(0, 160),
+        readerBottomMarginDp = readerBottomMarginDp.coerceIn(0, 160),
+        showContinueReadingCard = showContinueReadingCard,
+        customStoragePath = currentSettings.customStoragePath,
+        storageLocationType = currentSettings.storageLocationType
+    )
+    androidx.compose.runtime.LaunchedEffect(autoSaved) {
+        if (autoSaved != currentSettings) {
+            kotlinx.coroutines.delay(600)
+            onSaveSettings(autoSaved)
+        }
+    }
+
     Scaffold(
         topBar = {
             Column {
@@ -142,55 +178,6 @@ fun SettingsScreen(
                                 contentDescription = "Back",
                                 tint = Color.Black
                             )
-                        }
-                    },
-                    actions = {
-                        Button(
-                            onClick = {
-                                val updated = currentSettings.copy(
-                                    defaultTags = tagsText.trim(),
-                                    mocTitleFormat = mocTitleFormat.trim(),
-                                    wikiLinkStyle = wikiLinkStyle,
-                                    includeDateInFrontmatter = includeDate,
-                                    includePageInFrontmatter = includePage,
-                                    includeSourceInFrontmatter = includeSource,
-                                    includeAuthorInFrontmatter = includeAuthor,
-                                    customFrontmatterYaml = customYaml.trim(),
-                                    volumeKeyNavigation = volumeKeyNav,
-                                    volumeKeyAnimation = volumeKeyAnim,
-                                    readerViewMode = readerViewMode,
-                                    pageTurnAnimation = pageTurnAnimation,
-                                    readerTheme = readerTheme,
-                                    readerMarginDp = readerMarginDp,
-                                    readerFontSizeSp = readerFontSizeSp,
-                                    showEpubPageEquivalents = showEpubPageEquivalents,
-                                    paginateByEpubPageEquivalents = paginateByEpubPageEquivalents,
-                                    readerParagraphStyle = readerParagraphStyle,
-                                    readerColumnCount = readerColumnCount.coerceIn(1, 2),
-                                    publisherStylesEnabled = publisherStylesEnabled,
-                                    readerTopMarginDp = readerTopMarginDp.coerceIn(0, 160),
-                                    readerBottomMarginDp = readerBottomMarginDp.coerceIn(0, 160),
-                                    showContinueReadingCard = showContinueReadingCard,
-                                    customStoragePath = customStoragePath.trim(),
-                                    storageLocationType = storageLocationType
-                                )
-                                onSaveSettings(updated)
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Settings saved")
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.Black,
-                                contentColor = Color.White
-                            ),
-                            shape = RoundedCornerShape(4.dp),
-                            modifier = Modifier
-                                .padding(end = 8.dp)
-                                .testTag("save_settings_button")
-                        ) {
-                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.height(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Save", fontWeight = FontWeight.Bold)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -231,7 +218,7 @@ fun SettingsScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.5.dp, Color.Black, RoundedCornerShape(4.dp))
+                    .border(1.5.dp, Color.Black, RoundedCornerShape(0.dp))
                     .padding(16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -251,7 +238,7 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .testTag("moc_title_format_input"),
                         singleLine = true,
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(0.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = Color.White,
                             unfocusedContainerColor = Color.White,
@@ -299,7 +286,7 @@ fun SettingsScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.5.dp, Color.Black, RoundedCornerShape(4.dp))
+                    .border(1.5.dp, Color.Black, RoundedCornerShape(0.dp))
                     .padding(16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -318,7 +305,7 @@ fun SettingsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("default_tags_input"),
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(0.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = Color.White,
                             unfocusedContainerColor = Color.White,
@@ -370,7 +357,7 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .testTag("custom_yaml_input"),
                         minLines = 2,
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(0.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = Color.White,
                             unfocusedContainerColor = Color.White,
@@ -387,7 +374,7 @@ fun SettingsScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.5.dp, Color.Black, RoundedCornerShape(4.dp))
+                    .border(1.5.dp, Color.Black, RoundedCornerShape(0.dp))
                     .padding(16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -413,7 +400,7 @@ fun SettingsScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.5.dp, Color.Black, RoundedCornerShape(4.dp))
+                    .border(1.5.dp, Color.Black, RoundedCornerShape(0.dp))
                     .padding(16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -904,7 +891,7 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "Set where Readmark stores your files. The app creates dedicated folders for Books and Articles, saving documents and markdown notes alongside each other.",
+                        text = "Where Marginalia Lectoris keeps your files, in its Readmark folder: one folder per book or article, with the book file and its Markdown notes side by side.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF71717A)
                     )
@@ -953,7 +940,7 @@ fun SettingsScreen(
                             placeholder = { Text("/storage/emulated/0/Documents/Readmark") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            shape = RoundedCornerShape(4.dp),
+                            shape = RoundedCornerShape(0.dp),
                             trailingIcon = {
                                 IconButton(onClick = { folderPickerLauncher.launch(null) }) {
                                     Icon(Icons.Default.Folder, contentDescription = "Choose Folder", tint = Color.Black)
@@ -970,10 +957,22 @@ fun SettingsScreen(
                         )
                     }
 
+                    if (customStoragePath.trim() != currentSettings.customStoragePath || storageLocationType != currentSettings.storageLocationType) {
+                        InkButton(
+                            label = "Use this storage",
+                            filled = true,
+                            minHeight = 44.dp,
+                            onClick = {
+                                onSaveSettings(autoSaved.copy(customStoragePath = customStoragePath.trim(), storageLocationType = storageLocationType))
+                                coroutineScope.launch { snackbarHostState.showSnackbar("Storage location saved") }
+                            },
+                            modifier = Modifier.testTag("save_storage_button")
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFFF4F4F5), RoundedCornerShape(6.dp))
+                            .background(Color.White, RoundedCornerShape(0.dp)).border(1.dp, Color.Black)
                             .padding(10.dp)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -995,7 +994,7 @@ fun SettingsScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, Color(0xFFE4E4E7), RoundedCornerShape(6.dp))
+                            .border(1.dp, Color(0xFFE4E4E7), RoundedCornerShape(0.dp))
                             .background(Color(0xFFFAFAFA))
                             .padding(10.dp)
                     ) {
@@ -1031,7 +1030,7 @@ fun SettingsScreen(
                                     snackbarHostState.showSnackbar("Storage path copied to clipboard")
                                 }
                             },
-                            shape = RoundedCornerShape(18.dp),
+                            shape = RoundedCornerShape(0.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.Black)
@@ -1048,7 +1047,7 @@ fun SettingsScreen(
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color.Black, contentColor = Color.White),
-                            shape = RoundedCornerShape(18.dp),
+                            shape = RoundedCornerShape(0.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
@@ -1232,9 +1231,9 @@ fun SettingsScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(4.dp))
+                            .clip(RoundedCornerShape(0.dp))
                             .background(Color.White)
-                            .border(1.dp, Color(0xFFE4E4E7), RoundedCornerShape(4.dp))
+                            .border(1.dp, Color(0xFFE4E4E7), RoundedCornerShape(0.dp))
                             .padding(12.dp)
                     ) {
                         Text(
