@@ -28,7 +28,7 @@ import java.io.RandomAccessFile
  * Positions are on one timeline across all the files. The tablet's player and the web view's player share it.
  */
 object Audiobooks {
-    val EXTENSIONS = setOf("mp3", "m4a", "m4b", "aac", "ogg", "opus", "flac", "wav")
+    val EXTENSIONS = setOf("mp3", "m4a", "m4b", "aac", "ogg", "oga", "opus", "flac", "wav")
     private val lock = Any()
     /** Bumped on every change (screens refresh on it). */
     val changes = MutableStateFlow(0)
@@ -161,19 +161,30 @@ object Audiobooks {
         }
     }
 
-    private fun probe(f: File): Pair<Long, String> = runCatching {
-        val r = MediaMetadataRetriever()
-        try { r.setDataSource(f.absolutePath)
-            (r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) to (r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orEmpty())
-        } finally { r.release() }
-    }.getOrDefault(0L to "")
+    private fun probe(f: File): Pair<Long, String> {
+        val (dur, title) = runCatching {
+            val r = MediaMetadataRetriever()
+            try { r.setDataSource(f.absolutePath)
+                (r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) to (r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orEmpty())
+            } finally { r.release() }
+        }.getOrDefault(0L to "")
+        if (dur > 0 || f.extension.lowercase() !in setOf("opus", "ogg", "oga")) return dur to title
+        // Ogg (Opus, Vorbis) the system could not read: the length from the file itself, the title from its comments
+        val len = runCatching { OggAudio.durationMs(f) }.getOrDefault(0L)
+        val tagTitle = title.ifBlank { runCatching { OggAudio.comments(f).firstOrNull { it.startsWith("TITLE=", ignoreCase = true) }?.substringAfter('=') }.getOrNull().orEmpty() }
+        return len to tagTitle
+    }
 
-    /** Chapters: from the files' own chapter marks (Nero “chpl”, as most .m4b have), else one per file. */
+    /** Chapters: from the files' own chapter marks (Nero “chpl”, as most .m4b have; CHAPTER comments in .opus/.ogg), else one per file. */
     private fun chapters(ctx: Context, docId: Long, list: List<JSONObject>): JSONArray {
         val out = JSONArray(); var at = 0L
         for (f in list) {
             val file = fileOf(ctx, docId, f)
-            val marks = if (file.extension.lowercase() in setOf("m4b", "m4a", "mp4", "aac")) runCatching { mp4Chapters(file) }.getOrDefault(emptyList()) else emptyList()
+            val marks = when (file.extension.lowercase()) {
+                "m4b", "m4a", "mp4", "aac" -> runCatching { mp4Chapters(file) }.getOrDefault(emptyList())
+                "opus", "ogg", "oga" -> runCatching { OggAudio.chapters(file) }.getOrDefault(emptyList())   // CHAPTER001=… comments
+                else -> emptyList()
+            }
             if (marks.size > 1) marks.forEach { (t, ms) -> out.put(JSONObject().put("title", t).put("startMs", at + ms)) }
             else out.put(JSONObject().put("title", f.optString("title").ifBlank { file.nameWithoutExtension }).put("startMs", at))
             at += f.optLong("durationMs")

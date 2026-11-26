@@ -53,7 +53,7 @@ object ItemFiles {
             e == "txt" -> "Text"
             e in setOf("html", "htm", "xhtml") -> "HTML"
             e in images -> "Image"
-            e in setOf("m4a", "mp3", "wav", "ogg", "opus", "aac") -> "Audio"
+            e in setOf("m4a", "m4b", "mp3", "wav", "ogg", "oga", "opus", "aac", "flac") -> "Audio"
             e in setOf("json", "bib", "ris") -> e.uppercase()
             e in setOf("docx", "doc", "odt") -> "Document"
             else -> e.uppercase().ifBlank { "File" }

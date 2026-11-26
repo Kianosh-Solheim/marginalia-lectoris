@@ -8,11 +8,11 @@ function audiobookSection(d) {
     let a; try { a = await api(`doc/${d.id}/audiobook`); } catch (e) { clear(box).append(h('p', { class: 'muted' }, e.message)); return; }
     if (player) player.stop();
     clear(box).append(h('h2', null, 'Audiobook', a.exists ? h('span', { class: 'count' }, clockOf(a.durationMs)) : null));
-    const add = h('input', { type: 'file', multiple: true, accept: 'audio/*,.m4b,.mp3,.m4a,.opus,.ogg,.flac', style: { display: 'none' } });
+    const add = h('input', { type: 'file', multiple: true, accept: 'audio/*,.m4b,.mp3,.m4a,.opus,.ogg,.oga,.flac', style: { display: 'none' } });
     add.addEventListener('change', () => { const fs = [...add.files]; add.value = ''; if (fs.length) abUpload(d, fs, load); });
     const addBtn = h('button', { class: 'btn' + (a.exists ? '' : ' fill'), onclick: () => add.click() }, a.exists ? 'Add files…' : 'Add the audio files…');
     if (!a.exists) {
-      box.append(h('p', { class: 'muted', style: { marginTop: 0 } }, 'One .m4b with chapters, or all the .mp3 files at once (they are put in name order). They are kept in the book’s folder on the tablet (one file as “Audiobook – title”, several in a folder of that name), and the tablet plays them with the screen off; you can listen here too, and the place is shared.'),
+      box.append(h('p', { class: 'muted', style: { marginTop: 0 } }, 'One .m4b or .opus with chapters, or all the .mp3 or .opus files at once (they are put in name order). They are kept in the book’s folder on the tablet (one file as “Audiobook – title”, several in a folder of that name), and the tablet plays them with the screen off; you can listen here too, and the place is shared.'),
         h('div', { class: 'row' }, addBtn), add);
       return;
     }

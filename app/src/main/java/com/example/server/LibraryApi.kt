@@ -1151,7 +1151,7 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             }
             rest.size == 2 && rest[0] == "file" && m == "GET" -> {
                 val part = ab.files(context, doc.id).getOrNull(rest[1].toIntOrNull() ?: -1) ?: throw NoSuchElementException("No such file")
-                val type = when (part.file.extension.lowercase(Locale.ROOT)) { "mp3" -> "audio/mpeg"; "m4a", "m4b", "aac" -> "audio/mp4"; "ogg", "opus" -> "audio/ogg"; "flac" -> "audio/flac"; "wav" -> "audio/wav"; else -> "application/octet-stream" }
+                val type = when (part.file.extension.lowercase(Locale.ROOT)) { "mp3" -> "audio/mpeg"; "m4a", "m4b", "aac" -> "audio/mp4"; "ogg", "oga", "opus" -> "audio/ogg"; "flac" -> "audio/flac"; "wav" -> "audio/wav"; else -> "application/octet-stream" }
                 HttpResponse.FileBody(part.file, type, if (req.query["download"] == "1") part.file.name else null)
             }
             rest.size == 2 && rest[0] == "file" && m == "DELETE" -> HttpResponse.json(withContext(Dispatchers.IO) { ab.remove(context, doc, rest[1].toIntOrNull()) }.toString())
