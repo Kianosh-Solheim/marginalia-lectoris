@@ -208,10 +208,7 @@ class WritingApi(private val context: Context) {
                         HttpResponse.json(summary(nd).toString())
                     }
                     what.isEmpty() && m == "DELETE" -> {
-                        val s2 = db.settingsDao().getSettingsSnapshot()
-                        val bin = File(File(StorageManager.getRootDirectory(context, s2?.customStoragePath.orEmpty(), s2?.storageLocationType ?: "DOCUMENTS"), "_to_delete"), "Writing").apply { mkdirs() }
-                        val target = unique(bin, dir.name)
-                        if (!dir.renameTo(target)) { dir.copyRecursively(target); dir.deleteRecursively() }
+                        com.example.reader.TrashBin.put(context, dir, "Writing")   // into the bin, from where it can be put back
                         HttpResponse.json("{}")
                     }
                     else -> HttpResponse.error(404, "Not found")

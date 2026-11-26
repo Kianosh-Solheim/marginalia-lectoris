@@ -227,6 +227,7 @@ function route() {
   if (parts[0] === 'read' && parts[1]) return openReader(+parts[1], params);
   if (parts[0] === 'notes') { state.tab = 'notes'; return showNotes(parts); }
   if (parts[0] === 'settings') { state.tab = 'settings'; return showSettings(); }
+  if (parts[0] === 'trash') { state.tab = 'trash'; return showTrash(); }
   if (parts[0] === 'presentations') { state.tab = 'presentations'; return showPresentations(); }
   if (parts[0] === 'zotero') { state.tab = 'zotero'; return showZotero(); }
   if (parts[0] === 'search') { state.tab = 'search'; return showTextSearch(params); }
@@ -315,6 +316,7 @@ function header() {
     ['Convert books', 'Web pages → EPUB or PDF, or a PDF\'s page numbers into an EPUB', () => convertDialog()],
     ['Colours', 'Light, dark, or as the computer has it', () => themeDialog()],
     ['Settings', 'Search, AI, backups, notes export…', () => { location.hash = '#/settings'; }],
+    ['Deleted files', 'Removed and replaced files: open, put back, or delete for good', () => { location.hash = '#/trash'; }],
     [(typeof relay !== 'undefined' && relay.on && !EMBEDDED) ? '✓ Take notes here' : 'Take notes here', 'Highlights made on the tablet open here for title, note and links', () => relaySet(!(typeof relay !== 'undefined' && relay.on))],
     ['Tablet screen', 'See and control the tablet from here', () => { location.hash = '#/screen'; }],
     ['Keyboard shortcuts', 'What the keys do', () => shortcutsDialog()],
@@ -1178,6 +1180,63 @@ function readerContext(ctx, e, inSelection) {
 }
 
 // ------------------------------------------------------------------ settings
+
+/** The bin (Readmark/_to_delete on the tablet): deleted and replaced files, by book, to open, put back or delete for good. */
+async function showTrash() {
+  const app = clear(document.getElementById('app'));
+  app.appendChild(header());
+  const main = h('main', { class: 'trash' });
+  app.appendChild(main);
+  const q = h('input', { type: 'search', placeholder: 'Find a file or a book…' });
+  const list = h('div', { class: 'trash-list' });
+  let data = { items: [] };
+  const url = (it, dl) => `/api/trash/file?rel=${encodeURIComponent(it.rel)}${dl ? '&download=1' : ''}`;
+  const OPENS = ['pdf', 'txt', 'md', 'html', 'htm', 'json', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'mp3', 'm4a', 'm4b', 'ogg', 'oga', 'opus', 'wav', 'flac', 'mp4', 'webm'];
+  const when = ms => { const d = new Date(ms); return isNaN(d) ? '' : d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+  const act = async (fn, msg) => { try { await fn(); if (msg) toast(msg); await load(); } catch (e) { fail(e); } };
+  const head = h('div', { class: 'trash-head' });
+  function draw() {
+    const term = q.value.trim().toLowerCase();
+    const items = data.items.filter(it => !term || (it.name + ' ' + it.group).toLowerCase().includes(term));
+    clear(head).append(
+      h('div', null, h('h1', null, 'Deleted files'),
+        h('p', { class: 'muted' }, data.items.length
+          ? `${data.items.length} thing${data.items.length === 1 ? '' : 's'} · ${fmtSize(data.size || 0)} · removed and replaced files are kept here until you delete them for good.`
+          : 'Nothing here. Removed and replaced files are kept here until you delete them for good.')),
+      h('div', { class: 'row', style: { gap: '6px' } }, q,
+        h('button', { class: 'btn', disabled: !data.items.length, onclick: () => confirmBox('Empty the bin?', `All ${data.items.length} thing${data.items.length === 1 ? '' : 's'} (${fmtSize(data.size || 0)}) are deleted from the tablet for good. This cannot be undone.`, 'Delete all for good',
+          () => act(() => api('trash?all=1', { method: 'DELETE' }), 'The bin is empty')) }, 'Empty the bin')));
+    clear(list);
+    if (!items.length) { list.append(h('div', { class: 'muted', style: { padding: '24px 0' } }, data.items.length ? 'Nothing matches.' : '')); return; }
+    const groups = new Map();
+    items.forEach(it => { if (!groups.has(it.group)) groups.set(it.group, []); groups.get(it.group).push(it); });
+    groups.forEach((its, g) => {
+      list.append(h('section', { class: 'trash-group' }, h('h2', null, g === 'Writing' ? 'Writing (documents)' : g),
+        ...its.map(it => {
+          const ext = it.dir ? 'folder' : (it.ext || 'file');
+          const acts = h('div', { class: 'trash-acts' });
+          if (!it.dir && OPENS.includes(it.ext)) acts.append(h('a', { class: 'btn quiet', href: url(it), target: '_blank', rel: 'noopener' }, 'Open'));
+          if (!it.dir) acts.append(h('a', { class: 'btn quiet', href: url(it, true) }, 'Download'));
+          acts.append(
+            h('button', { class: 'btn', title: it.from ? 'Back to ' + it.from : 'Back into its book’s folder', onclick: () => act(async () => { const r = await api('trash/restore', { method: 'POST', json: { rel: it.rel } }); toast(`Put back as “${r.name}”`, 3000); }) }, 'Put back'),
+            h('button', { class: 'btn quiet', onclick: () => confirmBox('Delete for good?', `“${it.name}”${it.dir ? ` (a folder of ${it.files} files)` : ''} is deleted from the tablet. This cannot be undone.`, 'Delete for good',
+              () => act(() => api('trash?rel=' + encodeURIComponent(it.rel), { method: 'DELETE' }), 'Deleted for good')) }, 'Delete for good'));
+          return h('div', { class: 'trash-item' },
+            h('span', { class: 'trash-kind mono' }, ext.toUpperCase().slice(0, 6)),
+            h('div', { class: 'trash-what' }, h('b', null, it.name),
+              h('div', { class: 'muted' }, [it.dir ? `folder · ${it.files} file${it.files === 1 ? '' : 's'}` : '', fmtSize(it.size), 'removed ' + when(it.deletedAt)].filter(Boolean).join(' · '))),
+            acts);
+        })));
+    });
+  }
+  async function load() {
+    try { data = await api('trash'); } catch (e) { fail(e); return; }
+    draw();
+  }
+  q.addEventListener('input', draw);
+  main.append(head, list);
+  await load();
+}
 
 async function showSettings() {
   const app = clear(document.getElementById('app'));
