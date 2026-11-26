@@ -448,26 +448,60 @@ object AudiobookSync {
         return JSONObject().put("kind", "epub").put("units", units).put("language", book.language)
     }
 
-    /** 16 kHz mono 16-bit little-endian PCM of [lenMs] from [fromMs] in one audio file (what Whisper wants). */
+    /**
+     * 16 kHz mono 16-bit little-endian PCM of [lenMs] from [fromMs] in one audio file (what Whisper wants).
+     * Android's usual decoder for the format first; if it fails, every other decoder the tablet has for it
+     * (software ones first). If none can, the error says which file, which format and what each said.
+     */
     fun pcmWindow(file: File, fromMs: Long, lenMs: Long): ByteArray {
+        val mime = runCatching {
+            val ex = android.media.MediaExtractor()
+            try {
+                ex.setDataSource(file.absolutePath)
+                (0 until ex.trackCount).firstNotNullOfOrNull { ex.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)?.takeIf { m -> m.startsWith("audio/") } }
+            } finally { ex.release() }
+        }.getOrElse { throw IllegalStateException("Android cannot open “${file.name}” as audio (${it.message ?: it.javaClass.simpleName}).") }
+            ?: throw IllegalStateException("“${file.name}” has no audio track Android can read.")
+        val names = runCatching {
+            android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).codecInfos
+                .filter { !it.isEncoder && it.supportedTypes.any { t -> t.equals(mime, ignoreCase = true) } }
+                .sortedBy { if (it.name.startsWith("c2.android.") || it.name.startsWith("OMX.google.")) 0 else 1 }
+                .map { it.name }
+        }.getOrDefault(emptyList())
+        val errors = mutableListOf<String>()
+        for (name in listOf<String?>(null) + names) {
+            try { return pcmWindowWith(file, fromMs, lenMs, name) }
+            catch (t: Throwable) { errors += "${name ?: "default decoder"}: ${t.message ?: t.javaClass.simpleName}" }
+        }
+        throw IllegalStateException("Android could not decode “${file.name}” ($mime). " + errors.distinct().joinToString("; "))
+    }
+
+    private fun pcmWindowWith(file: File, fromMs: Long, lenMs: Long, codecName: String?): ByteArray {
         val ex = android.media.MediaExtractor()
         ex.setDataSource(file.absolutePath)
         val track = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
-            ?: error("No audio in the file.")
+            ?: run { ex.release(); error("No audio in the file.") }
         ex.selectTrack(track)
         val fmt = ex.getTrackFormat(track)
         val fromUs = fromMs * 1000; val toUs = (fromMs + lenMs) * 1000
         ex.seekTo(fromUs, android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-        val codec = android.media.MediaCodec.createDecoderByType(fmt.getString(android.media.MediaFormat.KEY_MIME)!!)
-        codec.configure(fmt, null, null, 0); codec.start()
-        var rate = fmt.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)
-        var channels = fmt.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
+        val codec = try {
+            if (codecName != null) android.media.MediaCodec.createByCodecName(codecName)
+            else android.media.MediaCodec.createDecoderByType(fmt.getString(android.media.MediaFormat.KEY_MIME)!!)
+        } catch (t: Throwable) { ex.release(); throw t }
+        try { codec.configure(fmt, null, null, 0); codec.start() } catch (t: Throwable) { codec.release(); ex.release(); throw t }
+        fun intOf(f: android.media.MediaFormat, key: String, def: Int) = if (f.containsKey(key)) runCatching { f.getInteger(key) }.getOrDefault(def) else def
+        var rate = intOf(fmt, android.media.MediaFormat.KEY_SAMPLE_RATE, 48_000).takeIf { it > 0 } ?: 48_000
+        var channels = intOf(fmt, android.media.MediaFormat.KEY_CHANNEL_COUNT, 1).coerceAtLeast(1)
+        var floats = false
         val out = java.io.ByteArrayOutputStream((lenMs * 32).toInt().coerceAtMost(64 shl 20))
         try {
             val info = android.media.MediaCodec.BufferInfo()
             var inputDone = false; var outputDone = false
             var pos = 0.0; var inIndex = 0L; var carry = 0f; var haveCarry = false; var started = false
+            var idle = 0   // turns with nothing from the decoder after the input has ended: it has stalled
             while (!outputDone) {
+                if (inputDone && ++idle > 600) error("the decoder stopped giving sound")
                 if (!inputDone) {
                     val ib = codec.dequeueInputBuffer(10_000)
                     if (ib >= 0) {
@@ -480,12 +514,16 @@ object AudiobookSync {
                 val ob = codec.dequeueOutputBuffer(info, 10_000)
                 if (ob == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     val f = codec.outputFormat
-                    rate = f.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE); channels = f.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
+                    rate = intOf(f, android.media.MediaFormat.KEY_SAMPLE_RATE, rate).takeIf { it > 0 } ?: rate
+                    channels = intOf(f, android.media.MediaFormat.KEY_CHANNEL_COUNT, channels).coerceAtLeast(1)
+                    floats = intOf(f, "pcm-encoding", 2) == 4   // some decoders give 32-bit float sound
                 } else if (ob >= 0) {
+                    idle = 0
                     val buf = codec.getOutputBuffer(ob)!!.order(java.nio.ByteOrder.nativeOrder())
                     buf.position(info.offset); buf.limit(info.offset + info.size)
-                    val sb = buf.asShortBuffer()
-                    val frames = sb.remaining() / channels
+                    val sb = if (floats) null else buf.asShortBuffer()
+                    val fb = if (floats) buf.asFloatBuffer() else null
+                    val frames = (sb?.remaining() ?: fb!!.remaining()) / channels
                     val usPerFrame = 1_000_000.0 / rate
                     val step = rate / 16000.0
                     for (fi in 0 until frames) {
@@ -494,7 +532,7 @@ object AudiobookSync {
                         if (tUs >= toUs) { outputDone = true; break }
                         if (!started) { started = true; pos = 0.0; inIndex = 0 }
                         var acc = 0f
-                        for (c in 0 until channels) acc += sb.get(fi * channels + c)
+                        for (c in 0 until channels) acc += if (sb != null) sb.get(fi * channels + c).toFloat() else fb!!.get(fi * channels + c) * 32767f
                         val v = acc / channels
                         val prev = if (haveCarry) carry else v
                         while (pos <= inIndex) {

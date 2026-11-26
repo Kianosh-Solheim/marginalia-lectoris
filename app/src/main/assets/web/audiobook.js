@@ -146,6 +146,23 @@ const AB_MODELS = {
   other: { label: 'Other language (Whisper small, detected)', model: 'onnx-community/whisper-small', lang: '' },
 };
 
+/**
+ * A stretch of the audio from the tablet, as 16 kHz mono 16-bit PCM. The tablet's own error is shown when it
+ * cannot read the audio (it answers with a message, not sound); a dropped connection is tried again once.
+ */
+async function abPcm(d, f, off, len) {
+  for (let attempt = 0; ; attempt++) {
+    let r;
+    try { r = await fetch(`/api/doc/${d.id}/audiobook/pcm?file=${f.index}&from=${off}&len=${len}`, { credentials: 'same-origin', headers: { 'X-Marginalia': '1' } }); }
+    catch (e) { if (attempt < 1) continue; throw new Error('The tablet stopped answering while sending the audio.'); }
+    if (r.ok && !/json|text/.test(r.headers.get('Content-Type') || '')) return r.arrayBuffer();
+    let msg = `Error ${r.status}`;
+    try { const t = await r.text(); msg = (JSON.parse(t).error) || t || msg; } catch (_) {}
+    if (r.status >= 500 && attempt < 1 && /timeout|reset|closed/i.test(msg)) continue;
+    throw new Error(`The tablet could not read “${f.title || f.name}” at ${clockOf(off)}: ${msg}`);
+  }
+}
+
 /** Transcribes the audiobook with Whisper in this browser (resumable), lines it up with the book's text and saves the map. */
 async function abSyncDialog(d, reload) {
   let a, prev;
@@ -186,8 +203,8 @@ async function abSyncDialog(d, reload) {
             const g = f.startMs + off, len = Math.min(300000, f.durationMs - off);
             if (g + len <= tr.doneMs + 500) continue;
             setP(`Transcribing ${clockOf(g)} of ${clockOf(a.durationMs)}…`, g / a.durationMs);
-            const buf = await (await fetch(`/api/doc/${d.id}/audiobook/pcm?file=${f.index}&from=${off}&len=${len}`, { credentials: 'same-origin', headers: { 'X-Marginalia': '1' } })).arrayBuffer();
-            const i16 = new Int16Array(buf), pcm = new Float32Array(i16.length);
+            const buf = await abPcm(d, f, off, len);
+            const i16 = new Int16Array(buf, 0, buf.byteLength >> 1), pcm = new Float32Array(i16.length);
             for (let k = 0; k < i16.length; k++) pcm[k] = i16[k] / 32768;
             const opts = { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, task: 'transcribe' };
             if (m.lang) opts.language = m.lang;
