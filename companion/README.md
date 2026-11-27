@@ -44,6 +44,10 @@ Each model is downloaded once (75 MB to 1.6 GB) and kept on the computer.
 
 **Ready-made builds:** Releases → *Marginalia Companion* → the file for your computer. Unpack it and open
 *Marginalia Companion*.
+- Windows with an NVIDIA graphics card (e.g. RTX 3070): take **Marginalia-Companion-windows-nvidia**. It carries
+  NVIDIA's libraries (about 1 GB more) and does the listening on the card, many times faster. At the start it
+  tries the card on a second of silence; if that fails, it uses the processor instead, so it never stops.
+  The window says which one it runs on.
 - Windows may warn about an unknown publisher: *More info* → *Run anyway*.
 - macOS: right-click the app → *Open* the first time.
 

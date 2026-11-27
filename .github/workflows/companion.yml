@@ -37,6 +37,10 @@ jobs:
             name: linux
           - os: windows-latest
             name: windows
+          # For computers with an NVIDIA graphics card: NVIDIA's cuBLAS and cuDNN go in the app (about 1 GB more).
+          - os: windows-latest
+            name: windows-nvidia
+            extra: nvidia-cublas-cu12 "nvidia-cudnn-cu12>=9,<10"
           - os: macos-latest
             name: macos
     runs-on: ${{ matrix.os }}
@@ -53,11 +57,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
+          if [ -n "${{ matrix.extra }}" ]; then python -m pip install ${{ matrix.extra }}; fi
       - name: Build
         run: |
+          extra_args=()
+          if [ "${{ matrix.name }}" = windows-nvidia ]; then
+            # NVIDIA's DLLs from the pip packages, into nvidia_dlls/ in the app (found at start by _nvidia_libraries).
+            while IFS= read -r dll; do extra_args+=(--add-binary "$dll;nvidia_dlls"); done < <(python -c "import nvidia, glob, os; [print(p) for d in nvidia.__path__ for p in glob.glob(os.path.join(d, '*', 'bin', '*.dll'))]")
+            echo "NVIDIA libraries: ${#extra_args[@]} arguments"
+          fi
           python -m PyInstaller --noconfirm --onedir --windowed --name "Marginalia Companion" \
             --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all av \
-            --hidden-import align marginalia_companion.py
+            --hidden-import align "${extra_args[@]}" marginalia_companion.py
       - name: Self-test the build (matcher, audio decoder, speech engine)
         timeout-minutes: 15
         env:
@@ -67,14 +78,14 @@ jobs:
         run: |
           case "${{ matrix.name }}" in
             macos) exe="dist/Marginalia Companion.app/Contents/MacOS/Marginalia Companion" ;;
-            windows) exe="dist/Marginalia Companion/Marginalia Companion.exe" ;;
+            windows|windows-nvidia) exe="dist/Marginalia Companion/Marginalia Companion.exe" ;;
             *) exe="dist/Marginalia Companion/Marginalia Companion" ;;
           esac
           "$exe" --self-test
       - name: Pack
         run: |
           cd dist
-          if [ "${{ matrix.name }}" = windows ]; then 7z a -tzip "../Marginalia-Companion-${{ matrix.name }}.zip" "Marginalia Companion" >/dev/null
+          if [ "${{ matrix.name }}" = windows ] || [ "${{ matrix.name }}" = windows-nvidia ]; then 7z a -tzip "../Marginalia-Companion-${{ matrix.name }}.zip" "Marginalia Companion" >/dev/null
           elif [ "${{ matrix.name }}" = macos ]; then ditto -c -k --keepParent "Marginalia Companion.app" "../Marginalia-Companion-${{ matrix.name }}.zip"
           else tar czf "../Marginalia-Companion-${{ matrix.name }}.tar.gz" "Marginalia Companion"; fi
       - uses: actions/upload-artifact@v4
