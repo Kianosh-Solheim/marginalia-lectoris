@@ -242,8 +242,9 @@ fun HomeScreen(
         scrimColor = Color.Transparent,
         drawerContent = {
             // Never taller than the window (on some phones the sheet ran past the bottom, hiding Settings).
-            val windowHeight = with(androidx.compose.ui.platform.LocalDensity.current) { androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height.toDp() }
-            val phone = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp < 600
+            val config = androidx.compose.ui.platform.LocalConfiguration.current
+            val windowHeight = config.screenHeightDp.dp
+            val phone = config.smallestScreenWidthDp < 600
             ModalDrawerSheet(
                 modifier = Modifier
                     .width(284.dp)
@@ -265,6 +266,7 @@ fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
+                            modifier = Modifier.weight(1f, fill = false),
                             text = "Marginalia Lectoris",
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontFamily = FontFamily.Serif,
