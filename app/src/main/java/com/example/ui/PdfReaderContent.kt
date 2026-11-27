@@ -1175,7 +1175,8 @@ fun PdfReaderPagerContent(
                             )
 
                             // Overlay Canvas for saved PDF highlights + active word-level selection + KOReader selection handles!
-                            LaunchedEffect(selectedWordRange, words, pageCanvasCoords) {
+                            LaunchedEffect(selectedWordRange, pageTextData, pageCanvasCoords) {
+                                val words = pageTextData?.words ?: emptyList()
                                 val r = selectedWordRange
                                 val c = pageCanvasCoords
                                 if (r != null && words.isNotEmpty() && c != null && c.isAttached) {
