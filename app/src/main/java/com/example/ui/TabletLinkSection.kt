@@ -62,9 +62,17 @@ fun TabletLinkSection() {
         )
         scanner.startScan()
             .addOnSuccessListener { b ->
-                val offer = TabletLink.parse(b.rawValue.orEmpty())
-                if (offer == null) message = "That QR code is not a Marginalia pairing code. On the tablet: Settings → Library in the browser → Pair a phone."
-                else pairWith(offer)
+                val raw = b.rawValue.orEmpty().trim()
+                val offer = TabletLink.parse(raw)
+                when {
+                    offer != null -> pairWith(offer)
+                    // The browser address's QR code (beside the PIN): keep the address, the code still has to come from Pair a phone.
+                    raw.startsWith("http://") || raw.startsWith("https://") -> {
+                        address = raw.removePrefix("http://").removePrefix("https://").trimEnd('/')
+                        message = "That was the tablet's browser address (filled in below). Now press Pair a phone on the tablet, under Phones further down in the same settings, and scan that code instead, or type its 8-letter code below."
+                    }
+                    else -> message = "That QR code is not a Marginalia pairing code. On the tablet: Settings → Library in the browser → Phones → Pair a phone."
+                }
             }
             .addOnFailureListener { message = "The scanner could not start here (it needs Google Play services). Type the address and code instead." }
     }
