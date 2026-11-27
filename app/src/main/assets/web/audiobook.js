@@ -183,13 +183,38 @@ async function abSyncDialog(d, reload) {
   try { [a, prev] = await Promise.all([api(`doc/${d.id}/audiobook`), api(`doc/${d.id}/audiobook/transcript`)]); } catch (e) { fail(e); return; }
   const gpu = !!navigator.gpu;
   let choice = prev.modelKey || (/^(no|nb|nn)/i.test(d.language || '') ? 'no' : 'en_fast');
+  const fromComputer = () => /^pc_/.test(prev.modelKey || '');
+  const complete = () => (prev.doneMs || 0) >= a.durationMs - 1000;
   let cancelled = false, running = false;
   const status = h('div', { class: 'mono', style: { fontSize: '12px', margin: '10px 0' } });
   const bar = h('div', { class: 'pbar' }, h('i'));
   const setP = (text, frac) => { status.textContent = text; if (frac != null) bar.firstChild.style.width = Math.round(frac * 100) + '%'; };
   const pick = h('select', { style: { width: 'auto' } }, Object.entries(AB_MODELS).map(([k, m]) => h('option', { value: k, selected: k === choice }, m.label)));
   pick.addEventListener('change', () => { choice = pick.value; });
-  const go = h('button', { class: 'btn fill' }, prev.doneMs ? 'Continue' : 'Start');
+  const go = h('button', { class: 'btn fill' }, complete() ? 'Match the sentences' : prev.doneMs ? 'Continue' : 'Start');
+  // A transcript made by Marginalia Companion on a computer, saved as a file: bring it here, then match.
+  const importBtn = h('button', { class: 'btn' }, 'Import transcript…');
+  importBtn.addEventListener('click', () => {
+    const inp = h('input', { type: 'file', accept: '.json,application/json' });
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0]; if (!f) return;
+      try {
+        const tr = JSON.parse(await f.text());
+        if (!Array.isArray(tr.segments) || !tr.segments.length || typeof tr.doneMs !== 'number') throw new Error('This is not a transcript from Marginalia Companion.');
+        tr.segments = tr.segments.filter(x => x && typeof x.s === 'number' && typeof x.e === 'number' && typeof x.t === 'string');
+        if (tr.durationMs && Math.abs(tr.durationMs - a.durationMs) > 60000)
+          toast(`Note: the transcript is ${clockOf(tr.durationMs)} long and the audiobook on the tablet ${clockOf(a.durationMs)}. If they are not the same files, the sync will be off.`, 9000);
+        await api(`doc/${d.id}/audiobook/transcript`, { method: 'PUT', json: tr, timeout: 120000 });
+        prev = tr; choice = tr.modelKey || choice;
+        go.textContent = complete() ? 'Match the sentences' : 'Continue';
+        setP(`Imported: ${tr.segments.length} lines, ${clockOf(tr.doneMs)} of ${clockOf(a.durationMs)}${complete() ? '. Press “Match the sentences”.' : '.'}`, Math.min(1, tr.doneMs / a.durationMs));
+      } catch (e) { setP('Could not import: ' + (e.message || e)); }
+    };
+    inp.click();
+  });
+  const companion = h('p', { class: 'muted', style: { fontSize: '13px' } }, 'Faster, and without straining the browser: ',
+    h('a', { href: 'https://github.com/Kianosh-Solheim/marginalia-lectoris/releases?q=companion', target: '_blank', rel: 'noopener' }, 'Marginalia Companion'),
+    ' does the listening on this computer (Linux, Windows, macOS), over Wi‑Fi or from files, and the map lands here.');
   const restart = prev.doneMs ? h('label', { class: 'row', style: { gap: '6px', fontSize: '13px' } }, h('input', { type: 'checkbox' }), 'Start the transcription over') : null;
   const est = Math.round(a.durationMs / 60000);
   const close = modal((box, close) => {
@@ -198,17 +223,20 @@ async function abSyncDialog(d, reload) {
       h('p', { class: 'muted', style: { fontSize: '13px' } }, gpu ? 'Using the graphics card (WebGPU): expect roughly a tenth to a third of the listening time.'
         : `This browser cannot use the graphics card on this address, so Whisper runs on the processor: expect several hours for ${est} minutes of audio. It saves as it goes — you can close the tab and continue later, here or on another computer.`),
       h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, h('span', null, 'Speech model'), pick),
-      prev.doneMs ? h('p', { class: 'muted', style: { fontSize: '13px' } }, `Already transcribed: ${clockOf(prev.doneMs)} of ${clockOf(a.durationMs)}.`) : null,
-      restart, status, bar,
-      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: () => { cancelled = true; close(); } }, running ? 'Stop (keeps what is done)' : 'Close'), go)].filter(Boolean));
+      prev.doneMs ? h('p', { class: 'muted', style: { fontSize: '13px' } }, `Already transcribed${fromComputer() ? ' on a computer' : ''}: ${clockOf(prev.doneMs)} of ${clockOf(a.durationMs)}.`) : null,
+      companion, restart, status, bar,
+      h('div', { class: 'foot' }, h('button', { class: 'btn', onclick: () => { cancelled = true; close(); } }, running ? 'Stop (keeps what is done)' : 'Close'), importBtn, go)].filter(Boolean));
   }, () => { cancelled = true; });
   go.addEventListener('click', async () => {
     if (running) return; running = true; go.disabled = true; pick.disabled = true;
     try {
-      const m = AB_MODELS[choice];
+      const m = AB_MODELS[choice] || AB_MODELS[pick.value] || AB_MODELS.en_fast;
       let tr = prev;
-      if ((restart && restart.firstChild.checked) || (tr.modelKey && tr.modelKey !== choice) || !tr.segments) tr = { modelKey: choice, segments: [], doneMs: 0 };
-      tr.modelKey = choice;
+      const wantsOver = restart && restart.firstChild.checked;
+      // A transcript made on a computer is kept (and finished here if it stopped short) unless asked to start over.
+      const otherModel = tr.modelKey && tr.modelKey !== choice && !/^pc_/.test(tr.modelKey);
+      if (wantsOver || otherModel || !tr.segments) tr = { modelKey: AB_MODELS[choice] ? choice : pick.value, segments: [], doneMs: 0 };
+      if (!/^pc_/.test(tr.modelKey || '')) tr.modelKey = AB_MODELS[choice] ? choice : pick.value;
       if (tr.doneMs < a.durationMs - 1000) {
         const asr = await abWhisper(m.model, gpu, setP);
         for (const f of a.files) {
@@ -239,8 +267,8 @@ async function abSyncDialog(d, reload) {
       setP('Matching the sentences with the audio…', 1);
       await new Promise(r => setTimeout(r, 30));
       const map = abAlign(text, tr.segments);
-      map.engine = 'Whisper in the browser (' + (gpu ? 'WebGPU' : 'CPU') + ', ' + m.model.split('/')[1] + ')';
-      map.language = m.lang || 'auto'; map.durationMs = a.durationMs;
+      map.engine = /^pc_/.test(tr.modelKey || '') && tr.engine ? tr.engine : 'Whisper in the browser (' + (gpu ? 'WebGPU' : 'CPU') + ', ' + m.model.split('/')[1] + ')';
+      map.language = /^pc_/.test(tr.modelKey || '') ? (tr.language || 'auto') : (m.lang || 'auto'); map.durationMs = a.durationMs;
       await api(`doc/${d.id}/audiobook/sync`, { method: 'POST', json: map, timeout: 120000 });
       close();
       toast(`Synced: ${Math.round(map.coverage * 100)}% of the sentences have a place in the audio`, 5000);

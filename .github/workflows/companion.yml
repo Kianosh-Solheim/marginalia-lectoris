@@ -1,0 +1,93 @@
+name: Companion app
+
+# Builds Marginalia Companion (the computer helper that syncs an audiobook with its text) for Linux, Windows and
+# macOS, after checking that its sentence matcher gives the same map as the web view's. A tag companion-v* also
+# publishes the three builds as a release.
+on:
+  push:
+    branches: [main]
+    paths: ['companion/**', 'app/src/main/assets/web/audiobook.js', '.github/workflows/companion.yml']
+    tags: ['companion-v*']
+  pull_request:
+    paths: ['companion/**', 'app/src/main/assets/web/audiobook.js', '.github/workflows/companion.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Same map as the web view
+        run: python3 companion/tests/parity.py
+
+  build:
+    needs: parity
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux
+          - os: windows-latest
+            name: windows
+          - os: macos-14
+            name: macos
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: companion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+      - name: Build
+        run: |
+          python -m PyInstaller --noconfirm --onedir --windowed --name "Marginalia Companion" \
+            --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all av \
+            --hidden-import align marginalia_companion.py
+      - name: Self-test the build (matcher, audio decoder, speech engine)
+        run: |
+          case "${{ matrix.name }}" in
+            macos) exe="dist/Marginalia Companion.app/Contents/MacOS/Marginalia Companion" ;;
+            windows) exe="dist/Marginalia Companion/Marginalia Companion.exe" ;;
+            *) exe="dist/Marginalia Companion/Marginalia Companion" ;;
+          esac
+          "$exe" --self-test
+      - name: Pack
+        run: |
+          cd dist
+          if [ "${{ matrix.name }}" = windows ]; then 7z a -tzip "../Marginalia-Companion-${{ matrix.name }}.zip" "Marginalia Companion" >/dev/null
+          elif [ "${{ matrix.name }}" = macos ]; then ditto -c -k --keepParent "Marginalia Companion.app" "../Marginalia-Companion-${{ matrix.name }}.zip"
+          else tar czf "../Marginalia-Companion-${{ matrix.name }}.tar.gz" "Marginalia Companion"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Marginalia-Companion-${{ matrix.name }}
+          path: companion/Marginalia-Companion-${{ matrix.name }}.*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/companion-v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A pre-release that is never "latest", so Obtainium on the tablet keeps following the app's own releases.
+          gh release create "${GITHUB_REF_NAME}" out/* --repo "${GITHUB_REPOSITORY}" --prerelease --latest=false \
+            --title "Marginalia Companion ${GITHUB_REF_NAME#companion-v}" \
+            --notes "Syncs an audiobook with its book's text on a computer. Download the file for your computer, unpack it and open Marginalia Companion. See companion/README.md."
