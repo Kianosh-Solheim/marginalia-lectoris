@@ -727,6 +727,9 @@ fun ReaderScreen(
     }
 
     val activeReaderTheme = ReaderTheme.entries.firstOrNull { it.id.equals(readerThemeSetting, ignoreCase = true) } ?: ReaderTheme.WHITE
+    // The bars, panels and pop-ups over the page follow its colour (White or Black).
+    androidx.compose.runtime.SideEffect { com.example.ui.theme.ReaderInk.colors = activeReaderTheme.inkColors() }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { com.example.ui.theme.ReaderInk.colors = com.example.ui.theme.LightInk } }
 
     var showFormattingSheet by remember { mutableStateOf(false) }
     var showHighlightsSheet by remember { mutableStateOf(false) }
@@ -936,8 +939,8 @@ fun ReaderScreen(
                     Modifier
                         .width(minOf(400.dp, LocalConfiguration.current.screenWidthDp.dp * 0.92f))
                         .fillMaxHeight()
-                        .background(Color.White)
-                        .border(1.5.dp, Color.Black)
+                        .background(activeReaderTheme.backgroundColor)
+                        .border(1.5.dp, activeReaderTheme.textColor)
                         .statusBarsPadding()
                 ) {
                     FindBar(findState, findSearch, findJump,

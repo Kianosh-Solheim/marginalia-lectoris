@@ -158,20 +158,22 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
         if (state.searched.isNotBlank()) run(false)
     }
     if (panel) {
+        val rc = com.example.ui.theme.ReaderInk.colors
+        ReaderInkScope {
         // The Search panel: field and arrows, options that wrap, where the matches are, and the matches themselves.
-        Column(modifier.fillMaxHeight().background(Color.White).padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Column(modifier.fillMaxHeight().background(rc.paper).padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Search", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.Black, modifier = Modifier.weight(1f))
+                Text("Search", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = rc.ink, modifier = Modifier.weight(1f))
                 InkChip("?", showHelp, { showHelp = true }, minHeight = 40.dp)
                 InkChip("×", false, { if (onClose != null) onClose() else state.open = false }, minHeight = 40.dp)
             }
             Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(Modifier.weight(1f).height(44.dp).border(1.dp, Color.Black).padding(horizontal = 8.dp), contentAlignment = Alignment.CenterStart) {
-                    BasicTextField(state.query, { state.query = it }, singleLine = true, textStyle = TextStyle(fontSize = 15.sp, color = Color.Black), cursorBrush = SolidColor(Color.Black),
+                Box(Modifier.weight(1f).height(44.dp).border(1.dp, rc.ink).padding(horizontal = 8.dp), contentAlignment = Alignment.CenterStart) {
+                    BasicTextField(state.query, { state.query = it }, singleLine = true, textStyle = TextStyle(fontSize = 15.sp, color = rc.ink), cursorBrush = SolidColor(rc.ink),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = { if (state.searched != state.query.trim()) run() else go(state.index + 1) }),
                         modifier = Modifier.fillMaxWidth().focusRequester(focus))
-                    if (state.query.isEmpty()) Text("Search in this book…", color = Color(0xFF71717A), fontSize = 15.sp)
+                    if (state.query.isEmpty()) Text("Search in this book…", color = rc.grey, fontSize = 15.sp)
                 }
                 InkChip("‹", false, { go(state.index - 1) }, minHeight = 44.dp)
                 InkChip("›", false, { if (state.searched != state.query.trim()) run() else go(state.index + 1) }, minHeight = 44.dp)
@@ -206,37 +208,40 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
                 }, minHeight = 36.dp)
             }
             Box(Modifier.padding(top = 8.dp).fillMaxWidth()) { HitMapStrip(state.hits.map { it.page }, totalPages, state.index, { go(it) }) }
-            if (aiNote.isNotBlank() && !state.busy) Text(aiNote, fontSize = 12.sp, color = Color.Black, modifier = Modifier.padding(top = 4.dp))
+            if (aiNote.isNotBlank() && !state.busy) Text(aiNote, fontSize = 12.sp, color = rc.ink, modifier = Modifier.padding(top = 4.dp))
             Text(when {
                 state.busy -> if (aiNote.isNotBlank()) "Asking the AI… (10–40 s)" else "Searching…"
                 state.searched.isBlank() -> if (state.exact) "Exact: the words in this order, as one sentence." else "Fuzzy: the words close together, in any order. \"Quotes\" keep a phrase together."
                 state.hits.isEmpty() -> "Nothing found for “${state.searched}”."
                 else -> "${state.hits.size} match${if (state.hits.size == 1) "" else "es"}" + if (state.index >= 0) " · ${state.index + 1} of ${state.hits.size}" else ""
-            }, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Color(0xFF3F3F46), modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
+            }, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = rc.grey, modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
             LazyColumn(Modifier.weight(1f)) {
                 itemsIndexed(state.hits.take(1000)) { i, h ->
-                    Row(Modifier.fillMaxWidth().background(if (i == state.index) Color.Black else Color.White)
+                    Row(Modifier.fillMaxWidth().background(if (i == state.index) rc.ink else rc.paper)
                         .clickable { go(i) }.padding(horizontal = 6.dp, vertical = 8.dp), verticalAlignment = Alignment.Top) {
-                        val fg = if (i == state.index) Color.White else Color.Black
+                        val fg = if (i == state.index) rc.paper else rc.ink
                         Column(Modifier.weight(1f)) {
                             Text(h.where, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = fg)
                             Text(snippetText(h), fontSize = 14.sp, color = fg)
                         }
                         if (doc != null) InkChip("+ Note", false, { noteFor = h })
                     }
-                    HorizontalDivider(color = Color(0xFFD4D4D8))
+                    HorizontalDivider(color = rc.rule)
                 }
             }
         }
+        }
     } else {
-    Column(modifier.fillMaxWidth().background(Color.White).border(1.5.dp, Color.Black).padding(horizontal = 10.dp, vertical = 6.dp)) {
+        val rc = com.example.ui.theme.ReaderInk.colors
+        ReaderInkScope {
+    Column(modifier.fillMaxWidth().background(rc.paper).border(1.5.dp, rc.ink).padding(horizontal = 10.dp, vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(Modifier.weight(1f).border(1.dp, Color.Black).padding(horizontal = 8.dp, vertical = 8.dp)) {
-                BasicTextField(state.query, { state.query = it }, singleLine = true, textStyle = TextStyle(fontSize = 16.sp, color = Color.Black), cursorBrush = SolidColor(Color.Black),
+            Box(Modifier.weight(1f).border(1.dp, rc.ink).padding(horizontal = 8.dp, vertical = 8.dp)) {
+                BasicTextField(state.query, { state.query = it }, singleLine = true, textStyle = TextStyle(fontSize = 16.sp, color = rc.ink), cursorBrush = SolidColor(rc.ink),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { if (state.searched != state.query.trim()) run() else go(state.index + 1) }),
                     modifier = Modifier.fillMaxWidth().focusRequester(focus))
-                if (state.query.isEmpty()) Text("Search in this book…", color = Color(0xFF9CA3AF), fontSize = 16.sp)
+                if (state.query.isEmpty()) Text("Search in this book…", color = rc.grey, fontSize = 16.sp)
             }
             InkChip("Fuzzy", !state.exact, { setExact(false) })
             InkChip("Exact", state.exact, { setExact(true) })
@@ -292,19 +297,19 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
                 "queued" -> if (st.pagesDone > 0) "Waiting to finish reading for search (${st.pagesDone} of ${st.pagesTotal} pages read)" else "Waiting to be read for search — it is next in line"
                 else -> null
             }
-            if (line != null) Text(line, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Color.Black,
-                modifier = Modifier.padding(top = 4.dp).fillMaxWidth().background(Color(0xFFFFFBEB)).border(1.dp, Color.Black).padding(horizontal = 6.dp, vertical = 3.dp))
+            if (line != null) Text(line, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = rc.ink,
+                modifier = Modifier.padding(top = 4.dp).fillMaxWidth().background(rc.paper).border(1.dp, rc.ink).padding(horizontal = 6.dp, vertical = 3.dp))
         }
-        if (aiNote.isNotBlank() && !state.busy) Text(aiNote, fontSize = 12.sp, color = Color(0xFF5B21B6), modifier = Modifier.padding(top = 2.dp))
+        if (aiNote.isNotBlank() && !state.busy) Text(aiNote, fontSize = 12.sp, color = rc.ink, modifier = Modifier.padding(top = 2.dp))
         Text(when {
             state.busy -> if (aiNote.isNotBlank()) "Asking the AI… (10–40 s)" else "Searching…"
             state.searched.isBlank() -> if (state.exact) "Exact: the words in this order, as one sentence (case, accents and punctuation ignored)."
                 else "Fuzzy: the words close together, in any order. \"Quotes\" keep a phrase together. Typos: also similar spellings (tried by itself when nothing is found)."
             state.hits.isEmpty() -> "Nothing found for “${state.searched}”."
             else -> "${state.hits.size} match${if (state.hits.size == 1) "" else "es"}" + if (state.index >= 0) " · ${state.index + 1} of ${state.hits.size} · ${state.hits[state.index].where}" else ""
-        }, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Color(0xFF52525B), modifier = Modifier.padding(top = 4.dp))
+        }, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = rc.grey, modifier = Modifier.padding(top = 4.dp))
     }
-
+        }
     }
 
     if (listOpen) {

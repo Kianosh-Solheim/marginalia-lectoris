@@ -95,6 +95,7 @@ internal fun ReaderChapterDrawerSheet(
     landmarksSection: (@Composable () -> Unit)? = null,
     chapterAuthor: (BookChapter) -> String? = { null }
 ) {
+    val rc = com.example.ui.theme.ReaderInk.colors
     var selectedDaisyTab by androidx.compose.runtime.remember(daisyBookIndex != null) {
         androidx.compose.runtime.mutableIntStateOf(0) // 0 = NCC Chapters, 1 = NCC Pages, 2 = SMIL Audio Clips
     }
@@ -102,10 +103,10 @@ internal fun ReaderChapterDrawerSheet(
     ModalDrawerSheet(
         modifier = Modifier
             .width(332.dp)
-            .border(width = 2.dp, color = Color.Black)
+            .border(width = 2.dp, color = rc.ink)
             .testTag("reader_toc_drawer_sheet"),
         drawerShape = RoundedCornerShape(0.dp),
-        drawerContainerColor = Color.White
+        drawerContainerColor = rc.paper
     ) {
         // Table of Contents Header
         Column(
@@ -126,7 +127,7 @@ internal fun ReaderChapterDrawerSheet(
                         text = if (daisyBookIndex != null) "NCC Table of Contents" else "Chapters",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color.Black
+                        color = rc.ink
                     )
                     if (daisyBookIndex != null) {
                         Surface(
@@ -137,7 +138,7 @@ internal fun ReaderChapterDrawerSheet(
                                 text = daisyBookIndex.formatVersion,
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White,
+                                color = rc.paper,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
@@ -150,7 +151,7 @@ internal fun ReaderChapterDrawerSheet(
                     Icon(
                         imageVector = Icons.Default.BookmarkAdd,
                         contentDescription = "Add Chapter Marker",
-                        tint = Color.Black,
+                        tint = rc.ink,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -160,7 +161,7 @@ internal fun ReaderChapterDrawerSheet(
             Text(
                 text = documentTitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF71717A),
+                color = rc.grey,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -173,7 +174,7 @@ internal fun ReaderChapterDrawerSheet(
             Text(
                 text = subSummary,
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF71717A)
+                color = rc.grey
             )
 
             if (daisyBookIndex != null) {
@@ -187,8 +188,8 @@ internal fun ReaderChapterDrawerSheet(
                         onClick = { selectedDaisyTab = 0 },
                         label = { Text("Chapters (${daisyBookIndex.nccNavItems.size})", fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color.Black,
-                            selectedLabelColor = Color.White
+                            selectedContainerColor = rc.ink,
+                            selectedLabelColor = rc.paper
                         ),
                         modifier = Modifier
                             .weight(1f)
@@ -200,8 +201,8 @@ internal fun ReaderChapterDrawerSheet(
                             onClick = { selectedDaisyTab = 1 },
                             label = { Text("Pages (${daisyBookIndex.pageTargets.size})", fontSize = 11.sp) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color.Black,
-                                selectedLabelColor = Color.White
+                                selectedContainerColor = rc.ink,
+                                selectedLabelColor = rc.paper
                             ),
                             modifier = Modifier
                                 .weight(1f)
@@ -214,7 +215,7 @@ internal fun ReaderChapterDrawerSheet(
                         label = { Text("SMIL (${daisyBookIndex.smilClips.size})", fontSize = 11.sp) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = Color(0xFF7C3AED),
-                            selectedLabelColor = Color.White
+                            selectedLabelColor = rc.paper
                         ),
                         modifier = Modifier
                             .weight(1f)
@@ -224,7 +225,7 @@ internal fun ReaderChapterDrawerSheet(
             }
         }
 
-        HorizontalDivider(color = Color(0xFFE4E4E7))
+        HorizontalDivider(color = rc.rule)
 
         landmarksSection?.invoke()
 
@@ -262,7 +263,7 @@ internal fun ReaderChapterDrawerSheet(
                                 Text(
                                     text = "h${navItem.level.coerceIn(1, 6)} • Page ${navItem.pageNumber} • ${navItem.formatTimecode()}",
                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                    color = if (isSelected) Color(0xFFD4D4D8) else Color(0xFF71717A)
+                                    color = if (isSelected) rc.rule else rc.grey
                                 )
                             }
                         },
@@ -271,7 +272,7 @@ internal fun ReaderChapterDrawerSheet(
                                 text = navItem.formatTimecode(),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
-                                color = if (isSelected) Color.White else Color(0xFF7C3AED)
+                                color = if (isSelected) rc.paper else Color(0xFF7C3AED)
                             )
                         },
                         selected = isSelected,
@@ -290,11 +291,11 @@ internal fun ReaderChapterDrawerSheet(
                             }
                         },
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = Color.Black,
-                            selectedTextColor = Color.White,
-                            selectedBadgeColor = Color.White,
+                            selectedContainerColor = rc.ink,
+                            selectedTextColor = rc.paper,
+                            selectedBadgeColor = rc.paper,
                             unselectedContainerColor = Color.Transparent,
-                            unselectedTextColor = Color.Black
+                            unselectedTextColor = rc.ink
                         ),
                         modifier = Modifier
                             .padding(NavigationDrawerItemDefaults.ItemPadding)
@@ -323,7 +324,7 @@ internal fun ReaderChapterDrawerSheet(
                                 Text(
                                     text = "Ebook p. ${pageTarget.pageNumber} • Audio ${pageTarget.formatTimecode()}",
                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                    color = if (isSelected) Color(0xFFD4D4D8) else Color(0xFF71717A)
+                                    color = if (isSelected) rc.rule else rc.grey
                                 )
                             }
                         },
@@ -331,7 +332,7 @@ internal fun ReaderChapterDrawerSheet(
                             Text(
                                 text = "p. ${pageTarget.pageLabel.ifBlank { pageTarget.pageNumber.toString() }}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (isSelected) Color.White else Color(0xFF2563EB)
+                                color = if (isSelected) rc.paper else Color(0xFF2563EB)
                             )
                         },
                         selected = isSelected,
@@ -341,11 +342,11 @@ internal fun ReaderChapterDrawerSheet(
                             }
                         },
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = Color.Black,
-                            selectedTextColor = Color.White,
-                            selectedBadgeColor = Color.White,
+                            selectedContainerColor = rc.ink,
+                            selectedTextColor = rc.paper,
+                            selectedBadgeColor = rc.paper,
                             unselectedContainerColor = Color.Transparent,
-                            unselectedTextColor = Color.Black
+                            unselectedTextColor = rc.ink
                         ),
                         modifier = Modifier
                             .padding(NavigationDrawerItemDefaults.ItemPadding)
@@ -376,7 +377,7 @@ internal fun ReaderChapterDrawerSheet(
                                 Text(
                                     text = "${clip.chapterTitle} • p. ${clip.pageNumber} • ${com.example.reader.DaisyParserEngine.formatTimeMs(clip.globalStartMs)}",
                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                    color = if (isSelected) Color(0xFFFEF3C7) else Color(0xFF71717A)
+                                    color = if (isSelected) rc.rule else rc.grey
                                 )
                             }
                         },
@@ -385,7 +386,7 @@ internal fun ReaderChapterDrawerSheet(
                                 text = com.example.reader.DaisyParserEngine.formatTimeMs(clip.globalStartMs),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
-                                color = if (isSelected) Color.White else Color(0xFF7C3AED)
+                                color = if (isSelected) rc.paper else Color(0xFF7C3AED)
                             )
                         },
                         selected = isSelected,
@@ -394,10 +395,10 @@ internal fun ReaderChapterDrawerSheet(
                         },
                         colors = NavigationDrawerItemDefaults.colors(
                             selectedContainerColor = Color(0xFF7C3AED),
-                            selectedTextColor = Color.White,
-                            selectedBadgeColor = Color.White,
+                            selectedTextColor = rc.paper,
+                            selectedBadgeColor = rc.paper,
                             unselectedContainerColor = Color.Transparent,
-                            unselectedTextColor = Color.Black
+                            unselectedTextColor = rc.ink
                         ),
                         modifier = Modifier
                             .padding(NavigationDrawerItemDefaults.ItemPadding)
@@ -456,7 +457,7 @@ internal fun ReaderChapterDrawerSheet(
                                         fontSize = 12.sp,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
-                                        color = if (isSelected) Color(0xFFE4E4E7) else if (a.isBlank()) Color(0xFF71717A) else Color(0xFF27272A)
+                                        color = if (isSelected) rc.rule else if (a.isBlank()) rc.grey else rc.ink
                                     )
                                 }
                                 val anchorSuffix = if (chapter.anchorId.isNotBlank()) " • #${chapter.anchorId}" else ""
@@ -464,7 +465,7 @@ internal fun ReaderChapterDrawerSheet(
                                 Text(
                                     text = (if (printedLabel != null) "p. $printedLabel · PDF page ${chapter.pageNumber}" else "Page ${chapter.pageNumber}") + anchorSuffix,
                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                    color = if (isSelected) Color(0xFFD4D4D8) else Color(0xFF71717A)
+                                    color = if (isSelected) rc.rule else rc.grey
                                 )
                             }
                         },
@@ -472,19 +473,19 @@ internal fun ReaderChapterDrawerSheet(
                             Text(
                                 text = "p. ${chapter.pageLabel.trim().ifBlank { chapter.pageNumber.toString() }}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (isSelected) Color.White else Color(0xFF71717A)
+                                color = if (isSelected) rc.paper else rc.grey
                             )
                         },
                         selected = isSelected,
                         onClick = { onChapterSelected(chapter) },
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = Color.Black,
-                            selectedTextColor = Color.White,
-                            selectedIconColor = Color.White,
-                            selectedBadgeColor = Color.White,
+                            selectedContainerColor = rc.ink,
+                            selectedTextColor = rc.paper,
+                            selectedIconColor = rc.paper,
+                            selectedBadgeColor = rc.paper,
                             unselectedContainerColor = Color.Transparent,
-                            unselectedTextColor = Color.Black,
-                            unselectedIconColor = Color.Black
+                            unselectedTextColor = rc.ink,
+                            unselectedIconColor = rc.ink
                         ),
                         modifier = Modifier.weight(1f).padding(end = 12.dp)
                     )
@@ -494,7 +495,7 @@ internal fun ReaderChapterDrawerSheet(
             }
         }
 
-        HorizontalDivider(color = Color(0xFFE4E4E7))
+        HorizontalDivider(color = rc.rule)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -505,10 +506,10 @@ internal fun ReaderChapterDrawerSheet(
             Text(
                 text = "$highlightsCount notes taken",
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF71717A)
+                color = rc.grey
             )
             TextButton(onClick = onViewNotesClick) {
-                Text("View Notes", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                Text("View Notes", fontSize = 12.sp, color = rc.ink, fontWeight = FontWeight.Bold)
             }
         }
     }

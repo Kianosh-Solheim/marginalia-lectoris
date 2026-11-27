@@ -1,6 +1,8 @@
 package com.example.ui.theme
 
 import androidx.compose.foundation.border
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
 import androidx.compose.ui.Modifier
@@ -69,22 +71,26 @@ object Ink {
     val ShadowOffset: Dp = 4.dp
 }
 
-/** Text styles shared by the tablet and the web view (serif titles, mono labels, sans body). */
+/**
+ * Text styles shared by the tablet and the web view (serif titles, mono labels, sans body).
+ * Title, Heading, Control, Body and Quote take the colour of where they sit (LocalContentColor),
+ * so they follow the reader's White or Black page; Label and Meta are grey on white.
+ */
 object InkType {
     /** Dialog and screen titles (web: .modal h2, .set-head h1). */
-    val Title = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 21.sp, lineHeight = 26.sp, color = Ink.Ink)
+    val Title = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 21.sp, lineHeight = 26.sp)
     /** Section and panel headings (web: .set-group h2, .rside h3). */
-    val Heading = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 18.sp, lineHeight = 23.sp, color = Ink.Ink)
+    val Heading = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 18.sp, lineHeight = 23.sp)
     /** Small uppercase labels above fields and groups (web: .label). */
     val Label = TextStyle(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 11.sp, letterSpacing = 0.05.em, color = Ink.Grey)
     /** Button and chip text (web: .btn, .chip). */
-    val Control = TextStyle(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Ink.Ink)
+    val Control = TextStyle(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 12.sp)
     /** Running text in dialogs and panels. */
-    val Body = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 15.sp, lineHeight = 21.sp, color = Ink.Ink)
+    val Body = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 15.sp, lineHeight = 21.sp)
     /** Pages, places, counts, times (web: .mono, .rbar .rt span). */
     val Meta = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Ink.Grey)
     /** Quotations from the book. */
-    val Quote = TextStyle(fontFamily = FontFamily.Serif, fontSize = 15.sp, lineHeight = 21.sp, color = Ink.Ink)
+    val Quote = TextStyle(fontFamily = FontFamily.Serif, fontSize = 15.sp, lineHeight = 21.sp)
 }
 
 /** The outer rule of a panel, menu or dialog. */
@@ -101,3 +107,24 @@ fun Modifier.inkShadow(offset: Dp = Ink.ShadowOffset, color: Color = Ink.Ink): M
         val o = offset.toPx()
         drawRect(color = color, topLeft = Offset(o, o), size = Size(size.width, size.height))
     }
+
+
+/** The colours a panel, bar or button is drawn in: ink on paper (black on white, or white on black in the reader). */
+data class InkColors(
+    val ink: Color,
+    val paper: Color,
+    val grey: Color,
+    val rule: Color,
+    /** The hard offset shadow: ink on a white page, a dark grey on a black one. */
+    val shadow: Color
+)
+
+val LightInk = InkColors(Ink.Ink, Ink.Paper, Ink.Grey, Ink.Rule, Ink.Ink)
+
+/** The colours [com.example.ui.InkButton] and [com.example.ui.InkChip] use; black on white unless a reader panel provides its own. */
+val LocalInkColors = androidx.compose.runtime.staticCompositionLocalOf { LightInk }
+
+/** The reader's colours, set by the reader for its bars and panels (White or Black page). */
+object ReaderInk {
+    var colors by androidx.compose.runtime.mutableStateOf(LightInk)
+}

@@ -76,12 +76,14 @@ internal fun ReaderNotesPanel(
             .sortedWith(compareBy({ it.pageNumber }, { it.createdTimestamp }))
     }
 
+    val rc = com.example.ui.theme.ReaderInk.colors
+    ReaderInkScope {
     Column(
         modifier = Modifier
             .width(width)
             .fillMaxHeight()
-            .background(Ink.Paper)
-            .border(Ink.OuterRule, Ink.Ink)
+            .background(rc.paper)
+            .border(Ink.OuterRule, rc.ink)
             .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .testTag("reader_notes_panel")
@@ -105,7 +107,7 @@ internal fun ReaderNotesPanel(
                 .padding(top = 8.dp, bottom = 4.dp)
                 .fillMaxWidth()
                 .height(44.dp)
-                .border(Ink.InnerRule, Ink.Ink)
+                .border(Ink.InnerRule, rc.ink)
                 .padding(horizontal = 10.dp),
             contentAlignment = Alignment.CenterStart
         ) {
@@ -114,8 +116,8 @@ internal fun ReaderNotesPanel(
                 value = query,
                 onValueChange = { query = it },
                 singleLine = true,
-                textStyle = TextStyle(fontSize = 14.sp, color = Ink.Ink),
-                cursorBrush = SolidColor(Ink.Ink),
+                textStyle = TextStyle(fontSize = 14.sp, color = rc.ink),
+                cursorBrush = SolidColor(rc.ink),
                 modifier = Modifier.fillMaxWidth().testTag("reader_notes_jump")
             )
         }
@@ -123,7 +125,7 @@ internal fun ReaderNotesPanel(
         if (shown.isEmpty()) {
             Text(
                 if (highlights.isEmpty()) "No notes in this book yet. Select a passage and tap Note…" else "No notes match.",
-                style = InkType.Body.copy(color = Ink.Grey, fontSize = 14.sp),
+                style = InkType.Body.copy(color = rc.grey, fontSize = 14.sp),
                 modifier = Modifier.padding(vertical = 16.dp)
             )
         }
@@ -139,13 +141,13 @@ internal fun ReaderNotesPanel(
                     if (h.title.isNotBlank()) {
                         Text(
                             h.title,
-                            fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Ink.Ink,
+                            fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = rc.ink,
                             maxLines = 2, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(bottom = 6.dp)
                         )
                     }
                     Row {
-                        Box(Modifier.width(4.dp).height(40.dp).background(colourOf(h.colorHex)))
+                        Box(Modifier.width(4.dp).height(40.dp).background(colourOf(h.colorHex, rc.rule)))
                         Text(
                             h.highlightedText,
                             style = InkType.Quote.copy(fontSize = 14.sp, lineHeight = 20.sp),
@@ -157,19 +159,20 @@ internal fun ReaderNotesPanel(
                         val tags = h.tags.split(',').map { it.trim().removePrefix("#") }.filter { it.isNotEmpty() }
                         Text(
                             (listOf(pageOf(h)) + tags.map { "#$it" }).filter { it.isNotBlank() }.joinToString(" · "),
-                            style = InkType.Meta, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            style = InkType.Meta.copy(color = rc.grey), maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
                         InkButton(label = "Go to ›", onClick = { onGoTo(h) }, minHeight = 34.dp)
                     }
                 }
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.Rule))
+                Box(Modifier.fillMaxWidth().height(1.dp).background(rc.rule))
             }
         }
 
         Row(Modifier.padding(top = 8.dp)) {
             InkButton(label = "Export & Obsidian…", onClick = onOpenExport, minHeight = 40.dp)
         }
+    }
     }
 }
 
@@ -178,5 +181,5 @@ private fun pageOf(h: HighlightEntity): String {
     return if (printed.isNotBlank()) (if (printed.startsWith("p")) printed else "p. $printed") else "p. ${h.pageNumber}"
 }
 
-private fun colourOf(hex: String): Color =
-    runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrDefault(Ink.Rule)
+private fun colourOf(hex: String, fallback: Color): Color =
+    runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrDefault(fallback)
