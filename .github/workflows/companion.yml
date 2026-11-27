@@ -37,7 +37,7 @@ jobs:
             name: linux
           - os: windows-latest
             name: windows
-          - os: macos-14
+          - os: macos-latest
             name: macos
     runs-on: ${{ matrix.os }}
     defaults:
