@@ -541,6 +541,9 @@ def self_test():
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         self_test()
+        # The speech engine leaves background threads (on macOS) that keep the process alive: end it here.
+        sys.stdout.flush()
+        os._exit(0)
     elif "--version" in sys.argv:
         print(APP, VERSION)
     else:
