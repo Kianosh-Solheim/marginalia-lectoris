@@ -77,3 +77,22 @@ fun Modifier.selectionBarPlacement(anchorTopRoot: Float?, anchorBottomRoot: Floa
             IntOffset(0, y)
         }
 }
+
+/** The reader's White or Black page as ink colours, for its bars and panels. */
+internal fun ReaderTheme.inkColors(): com.example.ui.theme.InkColors = com.example.ui.theme.InkColors(
+    ink = textColor,
+    paper = backgroundColor,
+    grey = secondaryTextColor,
+    rule = dividerColor,
+    shadow = if (backgroundColor.red + backgroundColor.green + backgroundColor.blue < 1.5f) dividerColor else textColor
+)
+
+/** Draws [content] in the reader's colours: buttons, chips and plain text follow the White or Black page. */
+@androidx.compose.runtime.Composable
+internal fun ReaderInkScope(content: @androidx.compose.runtime.Composable () -> Unit) {
+    val c = com.example.ui.theme.ReaderInk.colors
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.example.ui.theme.LocalInkColors provides c,
+        androidx.compose.material3.LocalContentColor provides c.ink
+    ) { content() }
+}

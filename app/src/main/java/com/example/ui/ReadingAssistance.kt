@@ -70,16 +70,17 @@ fun InkChip(
     enabled: Boolean = true,
     minHeight: Dp = Dp.Unspecified
 ) {
+    val c = com.example.ui.theme.LocalInkColors.current
     val fg = when {
         !enabled -> Ink.Soft
-        selected -> Ink.Paper
-        else -> Ink.Ink
+        selected -> c.paper
+        else -> c.ink
     }
     Box(
         modifier = modifier
             .heightIn(min = minHeight)
-            .border(Ink.InnerRule, if (enabled) Ink.Ink else Ink.Soft, PaperShape)
-            .background(if (selected && enabled) Ink.Ink else Ink.Paper, PaperShape)
+            .border(Ink.InnerRule, if (enabled) c.ink else Ink.Soft, PaperShape)
+            .background(if (selected && enabled) c.ink else c.paper, PaperShape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 5.dp),
         contentAlignment = Alignment.Center
@@ -113,22 +114,23 @@ fun InkButton(
     danger: Boolean = false,
     minHeight: Dp = Dp.Unspecified
 ) {
+    val c = com.example.ui.theme.LocalInkColors.current
     val fg = when {
         !enabled -> Color(0xFF9CA3AF)
-        filled -> Ink.Paper
+        filled -> c.paper
         danger -> Ink.Danger
-        else -> Ink.Ink
+        else -> c.ink
     }
     val rule = when {
         quiet && !filled -> Color.Transparent
         !enabled -> Color(0xFF9CA3AF)
-        else -> Ink.Ink
+        else -> c.ink
     }
     Row(
         modifier = modifier
             .heightIn(min = minHeight)
             .border(Ink.InnerRule, rule, PaperShape)
-            .background(if (filled && enabled) Ink.Ink else Ink.Paper, PaperShape)
+            .background(if (filled && enabled) c.ink else c.paper, PaperShape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

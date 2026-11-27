@@ -95,26 +95,28 @@ internal fun ReaderAaPanel(
     val edge = 12.dp
     val chip = 40.dp
 
+    val rc = com.example.ui.theme.ReaderInk.colors
     Popup(
         alignment = Alignment.TopEnd,
         offset = with(density) { IntOffset(-edge.roundToPx(), topOffset.roundToPx()) },
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true)
     ) {
+        ReaderInkScope {
         Column(
             modifier = Modifier
                 .widthIn(max = minOf(520.dp, screenWidth - edge * 2))
                 .heightIn(max = (LocalConfiguration.current.screenHeightDp.dp - topOffset - 24.dp).coerceAtLeast(240.dp))
-                .inkShadow()
-                .background(Ink.Paper)
-                .inkFrame()
+                .inkShadow(color = rc.shadow)
+                .background(rc.paper)
+                .inkFrame(color = rc.ink)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 12.dp)
                 .testTag("reader_aa_panel")
         ) {
             Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
                 Text("Reading settings", style = InkType.Heading, modifier = Modifier.weight(1f))
-                Text("SAME AS THE WEB VIEW", style = InkType.Meta.copy(fontSize = 10.sp))
+                Text("SAME AS THE WEB VIEW", style = InkType.Meta.copy(color = rc.grey, fontSize = 10.sp))
             }
 
             AaLine("Page colour") {
@@ -170,7 +172,7 @@ internal fun ReaderAaPanel(
                     InkButton(label = "+", minHeight = chip, enabled = !isFixedLayoutBook,
                         onClick = { onMarginDpChange((marginDp + 4).coerceIn(4, 120)) })
                     Text(
-                        "$marginDp dp", style = InkType.Meta.copy(color = Ink.Ink, fontWeight = FontWeight.Bold),
+                        "$marginDp dp", style = InkType.Meta.copy(color = rc.ink, fontWeight = FontWeight.Bold),
                         modifier = Modifier.align(Alignment.CenterVertically)
                     )
                 }
@@ -209,10 +211,11 @@ internal fun ReaderAaPanel(
                     .fillMaxWidth()
                     .padding(top = 10.dp)
             ) {
-                Text("Changes show at once.", style = InkType.Meta, modifier = Modifier.weight(1f))
+                Text("Changes show at once.", style = InkType.Meta.copy(color = rc.grey), modifier = Modifier.weight(1f))
                 InkButton(label = "More formatting ›", minHeight = chip, onClick = onMoreFormatting,
                     modifier = Modifier.testTag("reader_aa_more_formatting"))
             }
+        }
         }
     }
 }
@@ -221,9 +224,10 @@ internal fun ReaderAaPanel(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AaLine(label: String, content: @Composable androidx.compose.foundation.layout.FlowRowScope.() -> Unit) {
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Ink.Ink))
+    val rc = com.example.ui.theme.ReaderInk.colors
+    Box(Modifier.fillMaxWidth().height(1.dp).background(com.example.ui.theme.ReaderInk.colors.ink))
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label.uppercase(), style = InkType.Label.copy(color = Ink.Ink), modifier = Modifier.width(124.dp))
+        Text(label.uppercase(), style = InkType.Label.copy(color = rc.ink), modifier = Modifier.width(124.dp))
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -234,7 +238,8 @@ private fun AaLine(label: String, content: @Composable androidx.compose.foundati
 
 @Composable
 private fun AaNote(text: String) {
-    Text(text, style = InkType.Meta.copy(fontFamily = FontFamily.SansSerif, fontSize = 12.sp), modifier = Modifier.padding(start = 124.dp, bottom = 8.dp))
+    val rc = com.example.ui.theme.ReaderInk.colors
+    Text(text, style = InkType.Meta.copy(color = rc.grey, fontFamily = FontFamily.SansSerif, fontSize = 12.sp), modifier = Modifier.padding(start = 124.dp, bottom = 8.dp))
 }
 
 /**
@@ -252,7 +257,7 @@ internal fun InkSlider(
 ) {
     val span = (range.last - range.first).coerceAtLeast(1)
     val frac = ((value - range.first).toFloat() / span).coerceIn(0f, 1f)
-    val ink = if (enabled) Ink.Ink else Ink.Soft
+    val ink = if (enabled) com.example.ui.theme.ReaderInk.colors.ink else Ink.Soft
     BoxWithConstraints(
         modifier = modifier
             .height(36.dp)
@@ -286,7 +291,7 @@ internal fun InkSlider(
                     .align(Alignment.CenterStart)
                     .offset { IntOffset((frac * (widthPx - thumbPx)).roundToInt(), 0) }
                     .size(width = 16.dp, height = 32.dp)
-                    .background(Ink.Paper)
+                    .background(com.example.ui.theme.ReaderInk.colors.paper)
                     .border(2.dp, ink)
                     .padding(4.dp)
                     .background(ink)

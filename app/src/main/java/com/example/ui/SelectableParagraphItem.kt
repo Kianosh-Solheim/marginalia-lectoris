@@ -246,11 +246,13 @@ internal fun SelectionActionToolbarCard(
     }
 
     // The web view's selection bar: one-tap swatches, then the actions in one ruled strip.
+    val rc = com.example.ui.theme.ReaderInk.colors
+    ReaderInkScope {
     Column(
         modifier = modifier
-            .inkShadow(3.dp)
-            .background(com.example.ui.theme.Ink.Paper)
-            .inkFrame()
+            .inkShadow(3.dp, rc.shadow)
+            .background(rc.paper)
+            .inkFrame(color = rc.ink)
             .padding(6.dp)
             .testTag("selection_action_toolbar"),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -267,7 +269,7 @@ internal fun SelectionActionToolbarCard(
                         modifier = Modifier
                             .size(swatchSize)
                             .background(c)
-                            .border(if (last) 2.5.dp else 1.dp, Color.Black)
+                            .border(if (last) 2.5.dp else 1.dp, rc.ink)
                             .clickable {
                                 selectedColorHex = hex
                                 LastHighlightColour.hex = hex
@@ -281,7 +283,7 @@ internal fun SelectionActionToolbarCard(
 
             // Actions, as on the web: Note… · Copy · Listen · Define · Ask AI · More · ×
             Row(
-                modifier = Modifier.height(cellHeight).inkFrame(com.example.ui.theme.Ink.InnerRule),
+                modifier = Modifier.height(cellHeight).inkFrame(com.example.ui.theme.Ink.InnerRule, rc.ink),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val cells = listOf(
@@ -302,7 +304,7 @@ internal fun SelectionActionToolbarCard(
                     BarCellSpec("×", "selection_clear_button", description = "Clear the selection") { state.onClearSelection() }
                 )
                 cells.forEachIndexed { i, cell ->
-                    if (i > 0) Box(Modifier.width(1.dp).height(cellHeight).background(Color.Black))
+                    if (i > 0) Box(Modifier.width(1.dp).height(cellHeight).background(rc.ink))
                     BarCell(cell, cellHeight, cellFont)
                 }
             }
@@ -313,12 +315,12 @@ internal fun SelectionActionToolbarCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(com.example.ui.theme.Ink.InnerRule, Color.Black)
+                    .border(com.example.ui.theme.Ink.InnerRule, rc.ink)
                     .padding(8.dp)
                     .testTag("selection_more_actions_row"),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text("SET AS", style = com.example.ui.theme.InkType.Label)
+                Text("SET AS", style = com.example.ui.theme.InkType.Label.copy(color = rc.grey))
                         androidx.compose.foundation.layout.FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -348,7 +350,7 @@ internal fun SelectionActionToolbarCard(
                             onClick = { isMoreMenuExpanded = false; showSetAs = true })
                     }
                 }
-                Text("COPY & SHARE", style = com.example.ui.theme.InkType.Label)
+                Text("COPY & SHARE", style = com.example.ui.theme.InkType.Label.copy(color = rc.grey))
                         androidx.compose.foundation.layout.FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -385,7 +387,7 @@ internal fun SelectionActionToolbarCard(
                 if (resolvedLocus.isNotBlank()) {
                     Text(
                         resolvedLocus,
-                        style = com.example.ui.theme.InkType.Meta,
+                        style = com.example.ui.theme.InkType.Meta.copy(color = rc.grey),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.testTag("selection_toolbar_page_info")
@@ -400,10 +402,10 @@ internal fun SelectionActionToolbarCard(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.Black,
+                color = rc.ink,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, Color.Black)
+                    .border(1.dp, rc.ink)
                     .clickable { state.onCompareOrOcrSelection.invoke() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .testTag("selection_unusual_chars_warning_banner")
@@ -441,7 +443,7 @@ internal fun SelectionActionToolbarCard(
                     Text(
                         text = "Continues the selection from ${state.continuedFrom} — saved as one note",
                         fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold,
-                        color = Color.Black, modifier = Modifier.weight(1f), maxLines = 2
+                        color = rc.ink, modifier = Modifier.weight(1f), maxLines = 2
                     )
                     state.onCancelContinuation?.let { cancel -> InkButton(label = "Drop first part", onClick = cancel) }
                 } else {
@@ -453,6 +455,7 @@ internal fun SelectionActionToolbarCard(
                 }
             }
         }
+    }
     }
 }
 
@@ -468,12 +471,13 @@ private class BarCellSpec(
 /** One cell of the selection bar: square, inverted when it is the main action or open. */
 @Composable
 private fun BarCell(cell: BarCellSpec, height: androidx.compose.ui.unit.Dp, fontSize: androidx.compose.ui.unit.TextUnit) {
+    val rc = com.example.ui.theme.ReaderInk.colors
     val inverted = cell.filled || cell.active
     Box(
         modifier = Modifier
             .height(height)
             .widthIn(min = height)
-            .background(if (inverted) Color.Black else Color.White)
+            .background(if (inverted) rc.ink else rc.paper)
             .clickable(onClick = cell.onClick)
             .semantics { contentDescription = cell.description }
             .padding(horizontal = 10.dp)
@@ -485,7 +489,7 @@ private fun BarCell(cell: BarCellSpec, height: androidx.compose.ui.unit.Dp, font
             fontFamily = FontFamily.Monospace,
             fontSize = fontSize,
             fontWeight = FontWeight.Bold,
-            color = if (inverted) Color.White else Color.Black,
+            color = if (inverted) rc.paper else rc.ink,
             maxLines = 1
         )
     }
