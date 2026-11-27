@@ -432,7 +432,9 @@ async function abReaderAttach(ctx, viewer, d, bar, root) {
     sents.length ? null : h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Not synced with the text yet — on the book’s page, “Sync with the text…” makes the text follow the audio.'));
   const btn = h('button', { class: 'btn' + (host.hidden ? '' : ' fill'), title: 'The audiobook: listen while the text follows', onclick: () => { host.hidden = !host.hidden; btn.classList.toggle('fill', !host.hidden); localSet('ml.abar', host.hidden ? '0' : '1'); } }, 'Listen');
   bar.insertBefore(btn, bar.querySelector('.rsep'));
-  root.insertBefore(host, bar.nextSibling);
+  // At the foot of the reader, above the status line, as on the tablet (easy to reach, out of the text's way).
+  const statusLine = root.querySelector('.rstatus');
+  if (statusLine) root.insertBefore(host, statusLine); else root.append(host);
   if (sents.length) ctx.audio = {
     playFromText: (text, page) => {
       const i = find(text, page, Math.max(0, last));

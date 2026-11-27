@@ -1324,8 +1324,22 @@ function renderSettings(main, data) {
   body.appendChild(gcalSettingsSection());
   body.appendChild(storageSection(data.info));
   body.appendChild(exitsSection());
+  // Find a setting (as on the tablet): hides the rows, and then the groups, that do not match.
+  const find = h('input', { class: 'set-find', type: 'search', placeholder: 'Find a setting' });
+  find.oninput = () => {
+    const words = find.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const hit = el => words.every(w => el.textContent.toLowerCase().includes(w));
+    body.querySelectorAll(':scope > section').forEach(sec => {
+      const head = sec.querySelector('h2');
+      const rows = [...sec.querySelectorAll('.set-row')];
+      if (!words.length) { sec.hidden = false; rows.forEach(r => { r.hidden = false; }); return; }
+      if (head && hit(head)) { sec.hidden = false; rows.forEach(r => { r.hidden = false; }); return; }
+      if (rows.length) { let any = false; rows.forEach(r => { r.hidden = !hit(r); any = any || !r.hidden; }); sec.hidden = !any; }
+      else sec.hidden = !hit(sec);
+    });
+  };
   main.append(h('div', { class: 'set-head' }, h('h1', null, 'Settings'),
-    h('p', { class: 'muted' }, 'The same settings as on the tablet. Changes are saved there straight away.')),
+    h('p', { class: 'muted' }, 'The same settings as on the tablet. Changes are saved there straight away.'), find),
     h('div', { class: 'set-layout' }, nav, body));
   window.scrollTo(0, y);
 }
@@ -3312,6 +3326,17 @@ async function openReader(id, params) {
     } else {
       side.append(h('h3', null, 'Notes', h('span', { class: 'mono muted', style: { fontSize: '12px', fontWeight: 400, marginLeft: '6px' } }, ctx.notes.length)));
       if (!ctx.notes.length) side.append(h('div', { class: 'muted' }, 'Select text in the book to highlight it or add a note.'));
+      // Jump to a note: its title or words, a page ("p. 183") or a tag ("#restraint"), as on the tablet.
+      const jump = h('input', { class: 'njump', type: 'search', placeholder: 'Jump to a note, a page or a tag…', value: ctx.noteJump || '' });
+      if (ctx.notes.length) side.append(jump);
+      const matches = n => {
+        const q = (ctx.noteJump || '').trim().toLowerCase();
+        if (!q) return true;
+        if (q.startsWith('#')) return String(n.tags || '').toLowerCase().split(',').some(t => t.trim().replace(/^#/, '').startsWith(q.slice(1)));
+        if (/^(p|s)\.\s*/.test(q)) return noteLocus(n, d).toLowerCase().includes(q.replace(/^(p|s)\.\s*/, ''));
+        return [n.title, n.highlightedText, n.userNotes, n.tags].some(v => String(v || '').toLowerCase().includes(q));
+      };
+      jump.oninput = () => { ctx.noteJump = jump.value; side.querySelectorAll('.nitem').forEach(el => { el.hidden = !matches(el._note); }); };
       ctx.notes.slice().sort((a, b) => a.pageNumber - b.pageNumber).forEach(n => {
         const ni = h('div', { class: 'nitem' + (n.file ? ' otherfile' : ''), draggable: 'true', title: n.file ? `Made in ${n.file}: opens that file` : 'Click to go there · drag into a writing document to quote or cite it', onclick: () => n.file ? openNoteInFile(d, n) : readerOpen && readerOpen.goToNote(n) },
           n.title ? h('div', { class: 'ntitle' }, n.title) : null,
@@ -3320,6 +3345,7 @@ async function openReader(id, params) {
           h('div', { class: 'w' }, noteLocus(n, d), n.file ? h('span', { class: 'nfile' }, ' · in ' + n.file) : null, ' · ', h('a', { href: 'javascript:void 0', onclick: e => { e.stopPropagation(); editNote(n, () => { ctx.refreshNotes(); }); } }, 'edit')));
         onContext(ni, () => noteMenu(n, d, () => ctx.refreshNotes(), () => readerOpen && readerOpen.goToNote(n)));
         noteDragData(ni, n);
+        ni._note = n; ni.hidden = !matches(n);
         side.append(ni);
       });
     }
