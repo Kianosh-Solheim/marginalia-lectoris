@@ -203,7 +203,7 @@ internal fun ReaderAaPanel(
                 InkChip("On", runningHead, { onRunningHeadChange(true) }, minHeight = chip)
                 InkChip("Off", !runningHead, { onRunningHeadChange(false) }, minHeight = chip)
             }
-            AaNote("In full screen: the title and chapter in small capitals at the top.")
+            AaNote("In full screen: the title and chapter in small capitals at the top. While it is on, the book’s own running head (chapter and author) is left out.")
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
