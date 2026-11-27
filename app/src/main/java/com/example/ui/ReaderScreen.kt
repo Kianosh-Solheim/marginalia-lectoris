@@ -158,6 +158,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -238,8 +239,8 @@ fun ReaderScreen(
     }
     val coroutineScope = rememberCoroutineScope()
     val chapterDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    // Which panel the right-hand drawer shows: Contents (false) or Notes (true).
-    var sidePanelNotes by remember { mutableStateOf(false) }
+    // Which panel the right-hand drawer shows: "TOC" (Contents), "NOTES" or "SEARCH".
+    var sidePanelMode by remember { mutableStateOf("TOC") }
 
     var currentDocAuthor by remember(document.id, document.author) { mutableStateOf(document.author) }
     var currentDocSummary by remember(document.id, document.summary) { mutableStateOf(document.summary) }
@@ -855,6 +856,73 @@ fun ReaderScreen(
         }
     }
 
+    // Search in this book: the find bar at the bottom, or the Search panel on the right.
+    val findSearch: suspend (String, Boolean) -> List<FindHit> = { q, w ->
+        if (isPdfDocument) findInPdf(context, document, q, w, findState.exact, findState.typos) else findInPages(context, activeEpubPages, q, w, findState.exact, findState.typos)
+    }
+    val findJump: (FindHit) -> Unit = { h ->
+        if (isPdfDocument && isPdfEbookMode) {
+            currentActivePage = syncedPdfPageAnchor.coerceIn(1, syncedPdfTotalPages.coerceAtLeast(1))
+            activeTotalPages = syncedPdfTotalPages.coerceAtLeast(1)
+            isPdfEbookMode = false
+        }
+        targetHighlightRequest = null
+        targetPageRequest = (h.page - 1).coerceAtLeast(0)
+        jumpRequestToken++
+    }
+    // Opened from the library's search: show the search here and go to the chosen match.
+    LaunchedEffect(document.id, activeEpubPages.size) {
+        val p = pendingFind.value ?: return@LaunchedEffect
+        if (p.docId != document.id || (!isPdfDocument && activeEpubPages.isEmpty())) return@LaunchedEffect
+        pendingFind.value = null
+        findState.query = p.query; findState.whole = p.whole; findState.exact = p.exact; findState.typos = p.typos; findState.open = true; findState.busy = true
+        val hits = runCatching { findSearch(p.query, p.whole) }.getOrDefault(emptyList())
+        findState.hits = hits; findState.searched = p.query; findState.busy = false
+        val i = if (isPdfDocument) hits.indexOfFirst { it.page == p.loc }.takeIf { it >= 0 } ?: hits.indexOfFirst { it.page >= p.loc }
+            else hits.indexOfFirst { p.label.isNotBlank() && it.where == p.label }.takeIf { it >= 0 } ?: 0
+        if (i >= 0 && i < hits.size) { findState.index = i; findJump(hits[i]) }
+    }
+    // "This chapter only": the chapter around the page being read (PDF bookmarks, or the EPUB's chapter).
+    var findPdfChapters by remember(document.id) { mutableStateOf<List<com.example.reader.BookChapter>>(emptyList()) }
+    LaunchedEffect(document.id, findState.open) {
+        if (findState.open && isPdfDocument && findPdfChapters.isEmpty()) findPdfChapters = withContext(Dispatchers.IO) {
+            runCatching { com.example.reader.PdfChapterHelper.extractOrGenerateChapters(File(document.filePath), activeTotalPages.coerceAtLeast(1), document.chaptersJson) }.getOrDefault(emptyList())
+        }
+    }
+    // AI search in this book: passages found by what they are about; an EPUB passage is placed on its reader page by its words.
+    val findAi: suspend (String, String) -> List<FindHit> = { method, q ->
+        withContext(Dispatchers.IO) {
+            val ans = runAiSearch(context, method, q, document.id, null)
+            ans.results.map { r ->
+                val page = if (isPdfDocument) r.loc else {
+                    val words = com.example.reader.SearchIndex.tokens(if (r.end > r.start) r.snippet.substring(r.start, r.end) else r.snippet.removePrefix("…")).take(7)
+                    val pq = com.example.reader.SearchIndex.Query("\"" + words.joinToString(" ") + "\"", false, true)
+                    activeEpubPages.indexOfFirst { p -> com.example.reader.SearchIndex.findIn(p.paragraphs.joinToString("\n"), pq).isNotEmpty() }.let { if (it < 0) 1 else it + 1 }
+                }
+                val where = (if (isPdfDocument) "p. ${r.label.ifBlank { r.loc.toString() }}" else r.label.ifBlank { "page $page" }) + " · ${(r.score * 100).toInt()}%" + (if (r.why.isNotBlank()) " · ✦ ${r.why}" else "")
+                FindHit(page, where, r.snippet, r.start, r.end, loc = r.loc, label = r.label)
+            }
+        }
+    }
+    val findChapterOf: () -> Pair<String, IntRange>? = {
+        if (isPdfDocument) {
+            val p = currentActivePage
+            val c = findPdfChapters.filter { it.level <= 1 && it.pageNumber <= p }.lastOrNull()
+            if (c == null) null else {
+                val next = findPdfChapters.firstOrNull { it.pageNumber > c.pageNumber && it.level <= c.level }
+                c.title to (c.pageNumber..(next?.pageNumber?.minus(1) ?: activeTotalPages))
+            }
+        } else {
+            val i = (currentActivePage - 1).coerceIn(0, (activeEpubPages.size - 1).coerceAtLeast(0))
+            val page = activeEpubPages.getOrNull(i)
+            if (page == null) null else {
+                var a = i; var b = i
+                while (a > 0 && activeEpubPages[a - 1].chapterIndex == page.chapterIndex) a--
+                while (b < activeEpubPages.size - 1 && activeEpubPages[b + 1].chapterIndex == page.chapterIndex) b++
+                page.chapterTitle to ((a + 1)..(b + 1))
+            }
+        }
+    }
     // Contents and Notes open from the right, as in the web view (the drawer is mirrored; its contents are not).
     androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl) {
     ModalNavigationDrawer(
@@ -863,7 +931,23 @@ fun ReaderScreen(
         scrimColor = Color.Transparent,
         drawerContent = {
             androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
-            if (sidePanelNotes) {
+            if (sidePanelMode == "SEARCH") {
+                Box(
+                    Modifier
+                        .width(minOf(400.dp, LocalConfiguration.current.screenWidthDp.dp * 0.92f))
+                        .fillMaxHeight()
+                        .background(Color.White)
+                        .border(1.5.dp, Color.Black)
+                        .statusBarsPadding()
+                ) {
+                    FindBar(findState, findSearch, findJump,
+                        statusOf = if (isPdfDocument) ({ com.example.reader.SearchIndex.status(context, document) }) else null,
+                        doc = document, totalPages = if (isPdfDocument) activeTotalPages else activeEpubPages.size,
+                        chapterOf = findChapterOf, aiSearch = findAi,
+                        panel = true,
+                        onClose = { coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) } })
+                }
+            } else if (sidePanelMode == "NOTES") {
                 ReaderNotesPanel(
                     highlights = highlights,
                     currentChapterTitle = activeChapter?.title.orEmpty(),
@@ -874,7 +958,7 @@ fun ReaderScreen(
                         coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
                     },
                     onEdit = { h -> highlightToEdit = h },
-                    onShowContents = { sidePanelNotes = false },
+                    onShowContents = { sidePanelMode = "TOC" },
                     onOpenExport = {
                         coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
                         showObsidianHubDialog = true
@@ -957,7 +1041,7 @@ fun ReaderScreen(
                     }
                     coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Closed) }
                 },
-                onViewNotesClick = { sidePanelNotes = true },
+                onViewNotesClick = { sidePanelMode = "NOTES" },
                 landmarksSection = if (!isPdfDocument && landmarksList.isNotEmpty()) {
                     {
                         EpubLandmarksDrawerSection(
@@ -1028,8 +1112,8 @@ fun ReaderScreen(
                         onNavigateBack()
                     },
                     onOpenFileMenu = { showBookInfoDialog = true },
-                    onOpenTocMenu = { sidePanelNotes = false; coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Open) } },
-                    onOpenSearch = { findState.open = true },
+                    onOpenTocMenu = { sidePanelMode = "TOC"; coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Open) } },
+                    onOpenSearch = { findState.open = false; sidePanelMode = "SEARCH"; coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Open) } },
                     onOpenTypesettingMenu = { showAaPanel = true },
                     onHeightChanged = { topBarHeightPx = it },
                     onOpenPdfCropMenu = { showPdfCropDialog = true },
@@ -1057,7 +1141,7 @@ fun ReaderScreen(
                             if (showReadAloudBar) showAudiobookBar = false
                         }
                     },
-                    onOpenAnnotationsMenu = { sidePanelNotes = true; coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Open) } },
+                    onOpenAnnotationsMenu = { sidePanelMode = "NOTES"; coroutineScope.launch { chapterDrawerState.snapTo(DrawerValue.Open) } },
                     onOpenSettingsMenu = { showToolsDialog = true },
                     glossaeEnabled = glossaeEnabled,
                     onToggleGlossae = {
@@ -1742,73 +1826,6 @@ fun ReaderScreen(
         RecordingBadge()
     }
 
-    // Search in this book: the find bar at the bottom.
-    val findSearch: suspend (String, Boolean) -> List<FindHit> = { q, w ->
-        if (isPdfDocument) findInPdf(context, document, q, w, findState.exact, findState.typos) else findInPages(context, activeEpubPages, q, w, findState.exact, findState.typos)
-    }
-    val findJump: (FindHit) -> Unit = { h ->
-        if (isPdfDocument && isPdfEbookMode) {
-            currentActivePage = syncedPdfPageAnchor.coerceIn(1, syncedPdfTotalPages.coerceAtLeast(1))
-            activeTotalPages = syncedPdfTotalPages.coerceAtLeast(1)
-            isPdfEbookMode = false
-        }
-        targetHighlightRequest = null
-        targetPageRequest = (h.page - 1).coerceAtLeast(0)
-        jumpRequestToken++
-    }
-    // Opened from the library's search: show the search here and go to the chosen match.
-    LaunchedEffect(document.id, activeEpubPages.size) {
-        val p = pendingFind.value ?: return@LaunchedEffect
-        if (p.docId != document.id || (!isPdfDocument && activeEpubPages.isEmpty())) return@LaunchedEffect
-        pendingFind.value = null
-        findState.query = p.query; findState.whole = p.whole; findState.exact = p.exact; findState.typos = p.typos; findState.open = true; findState.busy = true
-        val hits = runCatching { findSearch(p.query, p.whole) }.getOrDefault(emptyList())
-        findState.hits = hits; findState.searched = p.query; findState.busy = false
-        val i = if (isPdfDocument) hits.indexOfFirst { it.page == p.loc }.takeIf { it >= 0 } ?: hits.indexOfFirst { it.page >= p.loc }
-            else hits.indexOfFirst { p.label.isNotBlank() && it.where == p.label }.takeIf { it >= 0 } ?: 0
-        if (i >= 0 && i < hits.size) { findState.index = i; findJump(hits[i]) }
-    }
-    // "This chapter only": the chapter around the page being read (PDF bookmarks, or the EPUB's chapter).
-    var findPdfChapters by remember(document.id) { mutableStateOf<List<com.example.reader.BookChapter>>(emptyList()) }
-    LaunchedEffect(document.id, findState.open) {
-        if (findState.open && isPdfDocument && findPdfChapters.isEmpty()) findPdfChapters = withContext(Dispatchers.IO) {
-            runCatching { com.example.reader.PdfChapterHelper.extractOrGenerateChapters(File(document.filePath), activeTotalPages.coerceAtLeast(1), document.chaptersJson) }.getOrDefault(emptyList())
-        }
-    }
-    // AI search in this book: passages found by what they are about; an EPUB passage is placed on its reader page by its words.
-    val findAi: suspend (String, String) -> List<FindHit> = { method, q ->
-        withContext(Dispatchers.IO) {
-            val ans = runAiSearch(context, method, q, document.id, null)
-            ans.results.map { r ->
-                val page = if (isPdfDocument) r.loc else {
-                    val words = com.example.reader.SearchIndex.tokens(if (r.end > r.start) r.snippet.substring(r.start, r.end) else r.snippet.removePrefix("…")).take(7)
-                    val pq = com.example.reader.SearchIndex.Query("\"" + words.joinToString(" ") + "\"", false, true)
-                    activeEpubPages.indexOfFirst { p -> com.example.reader.SearchIndex.findIn(p.paragraphs.joinToString("\n"), pq).isNotEmpty() }.let { if (it < 0) 1 else it + 1 }
-                }
-                val where = (if (isPdfDocument) "p. ${r.label.ifBlank { r.loc.toString() }}" else r.label.ifBlank { "page $page" }) + " · ${(r.score * 100).toInt()}%" + (if (r.why.isNotBlank()) " · ✦ ${r.why}" else "")
-                FindHit(page, where, r.snippet, r.start, r.end, loc = r.loc, label = r.label)
-            }
-        }
-    }
-    val findChapterOf: () -> Pair<String, IntRange>? = {
-        if (isPdfDocument) {
-            val p = currentActivePage
-            val c = findPdfChapters.filter { it.level <= 1 && it.pageNumber <= p }.lastOrNull()
-            if (c == null) null else {
-                val next = findPdfChapters.firstOrNull { it.pageNumber > c.pageNumber && it.level <= c.level }
-                c.title to (c.pageNumber..(next?.pageNumber?.minus(1) ?: activeTotalPages))
-            }
-        } else {
-            val i = (currentActivePage - 1).coerceIn(0, (activeEpubPages.size - 1).coerceAtLeast(0))
-            val page = activeEpubPages.getOrNull(i)
-            if (page == null) null else {
-                var a = i; var b = i
-                while (a > 0 && activeEpubPages[a - 1].chapterIndex == page.chapterIndex) a--
-                while (b < activeEpubPages.size - 1 && activeEpubPages[b + 1].chapterIndex == page.chapterIndex) b++
-                page.chapterTitle to ((a + 1)..(b + 1))
-            }
-        }
-    }
     if (findState.open) {
         Box(Modifier.fillMaxSize().navigationBarsPadding().padding(start = 8.dp, end = 8.dp, bottom = if (isUiVisible) 60.dp else 8.dp), contentAlignment = Alignment.BottomCenter) {
             FindBar(findState, findSearch, findJump, Modifier.widthIn(max = 760.dp),
