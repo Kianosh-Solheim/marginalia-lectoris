@@ -40,6 +40,7 @@ jobs:
           - os: macos-latest
             name: macos
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -58,6 +59,11 @@ jobs:
             --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all av \
             --hidden-import align marginalia_companion.py
       - name: Self-test the build (matcher, audio decoder, speech engine)
+        timeout-minutes: 15
+        env:
+          # ctranslate2 and onnxruntime each bring an OpenMP library; on macOS two copies can stall.
+          KMP_DUPLICATE_LIB_OK: 'TRUE'
+          PYTHONUNBUFFERED: '1'
         run: |
           case "${{ matrix.name }}" in
             macos) exe="dist/Marginalia Companion.app/Contents/MacOS/Marginalia Companion" ;;

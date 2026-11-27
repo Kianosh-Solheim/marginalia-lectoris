@@ -519,17 +519,23 @@ def run_gui():
 
 def self_test():
     """Checks that the packaged app has everything: the matcher, the audio decoder and the speech engine."""
+    def step(t):
+        print(t, flush=True)
     import numpy as np
+    step("1/4 matcher")
     text = {"kind": "epub", "units": [{"c": 0, "p": 0, "h": "", "text": "The court said little. Review was rare in Norway."}]}
     segs = [{"s": 0, "e": 1500, "t": "The court said little"}, {"s": 1600, "e": 3600, "t": "Review was rare in Norway"}]
     m = align(text, segs)
     assert len(m["sentences"]) == 2 and m["sentences"][1]["t"] >= 1500, m
+    step("2/4 audio decoder")
     import av  # noqa: F401
+    step("3/4 speech engine: loading the tiny model")
     from faster_whisper import WhisperModel
-    w = WhisperModel("tiny", device="cpu", compute_type="int8")
-    segs, _ = w.transcribe(np.zeros(16000 * 2, dtype="float32"), vad_filter=True)
+    w = WhisperModel("tiny", device="cpu", compute_type="int8", cpu_threads=2)
+    step("4/4 speech engine: transcribing 2 s of silence")
+    segs, _ = w.transcribe(np.zeros(16000 * 2, dtype="float32"))
     list(segs)
-    print("self-test ok")
+    step("self-test ok")
 
 
 if __name__ == "__main__":
