@@ -118,6 +118,14 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 return HttpResponse.json("{}").header("Set-Cookie", "$COOKIE=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
             }
             s == listOf("library") && m == "GET" -> return HttpResponse.json(library().toString())
+            // A paired phone's notes: its changes (already on this tablet's clock) in, this tablet's changes since its last sync out.
+            s == listOf("sync", "notes") && m == "POST" -> {
+                val b = JSONObject(req.bodyText(32 * 1024 * 1024))
+                val docs = b.optJSONArray("docs")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+                val r = withContext(Dispatchers.IO) { com.example.reader.NoteSync.apply(context, b.optJSONObject("push") ?: JSONObject(), 0L) }
+                val out = withContext(Dispatchers.IO) { com.example.reader.NoteSync.changes(context, docs, b.optLong("since")) }
+                return HttpResponse.json(out.put("applied", r.total).toString())
+            }
             s.firstOrNull() == "dictation" -> return dictationRoute(req, s.drop(1))
             s.firstOrNull() == "lexicon" -> return lexiconRoute(req, s.drop(1))
             s.firstOrNull() == "screen" -> return screenRoute(req, s.drop(1))

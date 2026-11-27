@@ -99,7 +99,8 @@ fun TabletLinkSection() {
                 Text("Paired with ${link.tabletName.ifBlank { "a tablet" }}", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color.Black)
                 Text(if (busy) "Syncing…" else status.ifBlank { "Not synced yet." }, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = grey)
                 Text(
-                    "Syncs when the app opens and when you pause listening, if the tablet's server is on and both are on the same Wi‑Fi. " +
+                    "Listening places, highlights and notes of the downloaded books sync both ways when the app opens or is left and when you pause listening, " +
+                        "if the tablet's server is on and both are on the same Wi‑Fi. " +
                         "When it can't reach the tablet, the phone keeps its places and sends them next time.",
                     style = MaterialTheme.typography.bodySmall, color = grey
                 )
