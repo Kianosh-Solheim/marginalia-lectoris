@@ -74,8 +74,11 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         if (!p.startsWith("/api/")) return static(p)
 
         if (p == "/api/login" && req.method == "POST") return login(req)
+        if (p == "/api/pair" && req.method == "POST") return pair(req)
         if (p == "/api/session") {
-            return HttpResponse.json(JSONObject().put("signedIn", authed(req)).put("device", deviceName()).toString())
+            // "now" lets a paired phone measure how far its clock is from the tablet's (for "newest change wins").
+            return HttpResponse.json(JSONObject().put("signedIn", authed(req)).put("device", deviceName())
+                .put("tabletId", PairedDevices.tabletId(context)).put("now", System.currentTimeMillis()).toString())
         }
         // The tablet's own presenter screen (a WebView on 127.0.0.1) signs in with a token only the app knows.
         if (p == "/api/local-login" && (req.remote.startsWith("127.") || req.remote == "::1" || req.remote.endsWith(":127.0.0.1")) &&
@@ -554,7 +557,26 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
 
     // ------------------------------------------------------------------------------- sign-in
 
-    private fun authed(req: HttpRequest): Boolean = Sessions.valid(context, req.cookie(COOKIE))
+    private fun authed(req: HttpRequest): Boolean = Sessions.valid(context, req.cookie(COOKIE)) ||
+        (req.header("authorization").startsWith("Bearer ") && PairedDevices.check(context, req.header("authorization")) != null)
+
+    /** A phone scanning the pairing QR code: the one-time code from it, for a device key. Wrong codes count like wrong PINs. */
+    private fun pair(req: HttpRequest): HttpResponse {
+        val now = System.currentTimeMillis()
+        val (count, until) = failures[req.remote] ?: (0 to 0L)
+        if (until > now) return HttpResponse.error(429, "Too many wrong codes. Try again in ${((until - now) / 1000) + 1} s.")
+        val b = runCatching { JSONObject(req.bodyText(4096)) }.getOrDefault(JSONObject())
+        val got = PairedDevices.redeem(context, b.optString("code"), b.optString("name"))
+        if (got == null) {
+            val n = count + 1
+            failures[req.remote] = if (n >= 5) 0 to now + 60_000 else n to 0L
+            return HttpResponse.error(401, "The code is wrong or has expired. Show a new one on the tablet: Settings → Library in the browser → Pair a phone.")
+        }
+        failures.remove(req.remote)
+        WebServer.lastActivity = now
+        return HttpResponse.json(JSONObject().put("ok", true).put("deviceId", got.first).put("key", got.second)
+            .put("tabletId", PairedDevices.tabletId(context)).put("tabletName", deviceName()).put("now", now).toString())
+    }
 
     private fun login(req: HttpRequest): HttpResponse {
         val now = System.currentTimeMillis()
@@ -634,6 +656,9 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
         val cover = d.coverUri?.let { File(it) }?.takeIf { it.isFile }
         return JSONObject()
             .put("id", d.id)
+            .put("uuid", d.uuid)
+            .put("audiobook", runCatching { com.example.reader.Audiobooks.files(context, d.id).isNotEmpty() }.getOrDefault(false))
+            .put("updatedAt", d.updatedAt)
             .put("title", d.title)
             .put("author", d.author)
             .put("displayAuthor", runCatching { EditedVolumes.displayAuthor(d) }.getOrDefault(d.author))

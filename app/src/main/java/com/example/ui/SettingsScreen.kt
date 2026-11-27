@@ -1053,10 +1053,12 @@ fun SettingsScreen(
 
             }
 
-            SettingsGroup("sync", "Sync & web view", "folder sync syncthing vault web server browser computer", settingsQuery, groupPositions) {
+            SettingsGroup("sync", "Sync & web view", "folder sync syncthing vault web server browser computer phone tablet pair qr", settingsQuery, groupPositions) {
                 FolderSyncSettingsSection()
 
                 WebServerSettingsSection()
+
+                TabletLinkSection()
 
             }
 

@@ -211,11 +211,12 @@ object Audiobooks {
     }
 
     /** Saves where you are (from the tablet's player or the web view). */
-    fun savePosition(ctx: Context, docId: Long, positionMs: Long, speed: Double? = null) {
+    /** [at]: when the place was set; a place taken over from a paired tablet keeps the tablet's time. */
+    fun savePosition(ctx: Context, docId: Long, positionMs: Long, speed: Double? = null, at: Long = System.currentTimeMillis()) {
         if (!meta(ctx, docId).isFile) return
         synchronized(lock) {
             val o = read(ctx, docId)
-            o.put("positionMs", positionMs.coerceAtLeast(0)).put("updatedAt", System.currentTimeMillis())
+            o.put("positionMs", positionMs.coerceAtLeast(0)).put("updatedAt", at)
             if (speed != null && speed in 0.5..3.0) o.put("speed", speed)
             val f = meta(ctx, docId); val t = File(f.parentFile, f.name + ".tmp"); t.writeText(o.toString()); t.renameTo(f)
         }
@@ -434,7 +435,8 @@ object AudiobookPlayer {
         if (!force && (!s.playing || now - lastSaved < 5000)) return
         lastSaved = now
         val pos = global(); val speed = s.speed.toDouble()
-        Thread { Audiobooks.savePosition(ctx, s.docId, pos, speed) }.start()
+        val paused = !s.playing
+        Thread { Audiobooks.savePosition(ctx, s.docId, pos, speed); if (force && paused) TabletLink.syncSoon(ctx) }.start()
     }
 }
 

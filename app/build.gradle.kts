@@ -143,6 +143,8 @@ dependencies {
   implementation(libs.pdfbox.android)
   implementation(libs.mlkit.text.recognition)
   implementation(libs.kotlinx.coroutines.play.services)
+  // Scanning the tablet's pairing QR code on a phone (Google's scanner: no camera permission needed)
+  implementation(libs.play.services.code.scanner)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   implementation(libs.readium.shared)
