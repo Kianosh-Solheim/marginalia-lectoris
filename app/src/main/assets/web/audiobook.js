@@ -8,14 +8,15 @@ function audiobookSection(d) {
     let a; try { a = await api(`doc/${d.id}/audiobook`); } catch (e) { clear(box).append(h('p', { class: 'muted' }, e.message)); return; }
     if (player) player.stop();
     clear(box).append(h('h2', null, 'Audiobook', a.exists ? h('span', { class: 'count' }, clockOf(a.durationMs)) : null));
-    const add = h('input', { type: 'file', multiple: true, accept: 'audio/*,.m4b,.mp3,.m4a,.opus,.ogg,.oga,.flac', style: { display: 'none' } });
+    const add = h('input', { type: 'file', multiple: true, accept: 'audio/*,.m4b,.mp3,.m4a,.opus,.ogg,.oga,.flac,.zip', style: { display: 'none' } });
     add.addEventListener('change', () => { const fs = [...add.files]; add.value = ''; if (fs.length) abUpload(d, fs, load); });
     const addBtn = h('button', { class: 'btn' + (a.exists ? '' : ' fill'), onclick: () => add.click() }, a.exists ? 'Add files…' : 'Add the audio files…');
     if (!a.exists) {
-      box.append(h('p', { class: 'muted', style: { marginTop: 0 } }, 'One .m4b or .opus with chapters, or all the .mp3 or .opus files at once (they are put in name order). They are kept in the book’s folder on the tablet (one file as “Audiobook – title”, several in a folder of that name), and the tablet plays them with the screen off; you can listen here too, and the place is shared.'),
+      box.append(h('p', { class: 'muted', style: { marginTop: 0 } }, 'One .m4b or .opus with chapters, all the .mp3 or .opus files at once (they are put in name order), or a DAISY talking book as its .zip (from NLB, say: it brings its chapters and printed pages, and an EPUB with page numbers is synced by page at once). They are kept in the book’s folder on the tablet (one file as “Audiobook – title”, several in a folder of that name), and the tablet plays them with the screen off; you can listen here too, and the place is shared.'),
         h('div', { class: 'row' }, addBtn), add);
       return;
     }
+    d._abPages = a.pages || 0;
     player = abPlayer(d, a);
     box.append(player.el, abSyncRow(d, load), h('div', { class: 'row', style: { marginTop: '8px' } }, addBtn, add,
       menuButton('Files ▾', a.files.map(f => [`${f.index + 1}. ${f.title || f.name}`, `${clockOf(f.durationMs)} · ${fmtSize(f.size)}`, () => confirmBox('Remove this file?', f.name, 'Remove', async () => { try { await api(`doc/${d.id}/audiobook/file/${f.index}`, { method: 'DELETE' }); load(); } catch (e) { fail(e); } })]), 'btn quiet'),
@@ -125,15 +126,28 @@ function abPlayer(d, a, hooks = {}) {
 
 // ------------------------------------------------------------------ syncing the audio with the text
 
+/** Syncs by the talking book's printed pages, at once (no transcribing). */
+async function abPageSync(d, reload) {
+  try {
+    const r = await api(`doc/${d.id}/audiobook/page-sync`, { method: 'POST', timeout: 120000 });
+    const miss = (r.skipped || []).length;
+    toast(`Synced by printed page: ${r.placed} of ${r.pagesTotal} pages${miss ? ` (not found: ${(r.skipped || []).slice(0, 8).map(x => String(x).split(' ')[0]).join(', ')}${miss > 8 ? '…' : ''})` : ''}`, 7000);
+    reload();
+  } catch (e) { fail(e); }
+}
+
 /** The sync line under the player: how far it is, and the button. */
 function abSyncRow(d, reload) {
   const row = h('div', { class: 'absync' }, h('span', { class: 'muted' }, 'Checking the sync…'));
   api(`doc/${d.id}/audiobook/sync-info`).then(s => {
     clear(row);
-    if (s.exists) row.append(h('span', null, h('b', null, 'Synced with the text'), h('span', { class: 'muted' }, ` · ${Math.round(s.coverage * 100)}% of the sentences · ${new Date(s.created).toLocaleDateString()} · ${s.engine}`)),
+    const byPage = s.engine === 'daisy-pages';
+    const pageBtn = isEpub(d) && d._abPages ? h('button', { class: 'btn quiet', title: 'At once, from the talking book’s printed pages: the text follows the audio page by page. “Sync with the text…” (Whisper) then makes it follow sentence by sentence.', onclick: () => abPageSync(d, reload) }, byPage ? 'Sync by page again' : 'Sync by printed page') : null;
+    if (s.exists) row.append(h('span', null, h('b', null, byPage ? 'Synced by printed page' : 'Synced with the text'), h('span', { class: 'muted' }, byPage ? ` · ${s.pages} of ${s.pagesTotal} pages · ${new Date(s.created).toLocaleDateString()}` : ` · ${Math.round(s.coverage * 100)}% of the sentences · ${new Date(s.created).toLocaleDateString()} · ${s.engine}`)),
+      pageBtn,
       isEpub(d) ? h('button', { class: 'btn quiet', title: 'A copy of the EPUB with the audio and the sync built in (EPUB 3 Media Overlays), for other reading apps', onclick: () => abExportEpub(d) }, 'Export EPUB with audio…') : null,
-      h('button', { class: 'btn quiet', onclick: () => abSyncDialog(d, reload) }, 'Sync again…'));
-    else row.append(h('span', { class: 'muted' }, s.transcribedMs ? `Not synced yet · transcribed up to ${clockOf(s.transcribedMs)} (it continues where it stopped)` : 'Not synced with the text yet.'),
+      h('button', { class: 'btn quiet', onclick: () => abSyncDialog(d, reload) }, byPage ? 'Sync by sentence…' : 'Sync again…'));
+    else row.append(h('span', { class: 'muted' }, s.transcribedMs ? `Not synced yet · transcribed up to ${clockOf(s.transcribedMs)} (it continues where it stopped)` : 'Not synced with the text yet.'), pageBtn,
       h('button', { class: 'btn', onclick: () => abSyncDialog(d, reload) }, s.transcribedMs ? 'Continue syncing…' : 'Sync with the text…'));
   }).catch(e => { clear(row).append(h('span', { class: 'muted' }, e.message)); });
   return row;

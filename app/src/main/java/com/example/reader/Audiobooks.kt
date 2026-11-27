@@ -72,6 +72,7 @@ object Audiobooks {
             .put("chapters", o.optJSONArray("chapters") ?: JSONArray())
             .put("durationMs", parts.sumOf { it.durationMs })
             .put("positionMs", o.optLong("positionMs")).put("speed", o.optDouble("speed", 1.0)).put("updatedAt", o.optLong("updatedAt"))
+            .put("pages", o.optJSONArray("pages")?.length() ?: 0).put("source", o.optString("source"))
     }
 
     /** A place for an incoming file before it is put in the book's folder. */
@@ -99,10 +100,14 @@ object Audiobooks {
         if (list.size <= 1 && sub.isDirectory && (sub.listFiles()?.isEmpty() == true)) sub.delete()
     }
 
-    /** Adds one audio file (moved in from [src]); the files are kept in natural name order (track 2 before track 10). */
+    /** Adds one audio file (moved in from [src]); the files are kept in natural name order (track 2 before track 10). A DAISY book (.zip) replaces the audiobook. */
     suspend fun add(ctx: Context, doc: com.example.data.local.DocumentEntity, src: File, name: String): JSONObject {
         val ext = name.substringAfterLast('.', "").lowercase()
-        require(ext in EXTENSIONS) { "“$name” is not an audio file (MP3, M4B/M4A, AAC, OGG/Opus, FLAC or WAV)." }
+        if (ext == "zip") {
+            require(DaisyBook.isDaisyZip(src)) { "“$name” is not a DAISY talking book (it has no ncc.html). Unpack it and add the audio files instead." }
+            return addDaisy(ctx, doc, src)
+        }
+        require(ext in EXTENSIONS) { "“$name” is not an audio file (MP3, M4B/M4A, AAC, OGG/Opus, FLAC or WAV), nor a DAISY book (.zip)." }
         val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(150)
         val (dur, title) = probe(src)
         require(dur > 0) { "“$name” could not be read as audio." }
@@ -117,7 +122,49 @@ object Audiobooks {
         list.sortWith { x, y -> naturalCompare(x.optString("name"), y.optString("name")) }
         arrange(ctx, doc, list)
         o.put("files", JSONArray(list)).put("chapters", chapters(ctx, doc.id, list))
+        o.remove("pages"); o.remove("source")   // a DAISY book's page times no longer hold once other files come in
         write(ctx, doc.id, o)
+        return json(ctx, doc.id)
+    }
+
+    /**
+     * A DAISY 2.02 talking book (a .zip with ncc.html, as NLB lends them) becomes the book's audiobook: its audio
+     * files in its own order, its headings as the chapters, and its printed pages with their times ("pages", for
+     * syncing by page). Replaces an audiobook the book had. With an EPUB that has printed pages, it is synced by
+     * page at once (unless it has a sync map from Whisper already).
+     */
+    suspend fun addDaisy(ctx: Context, doc: com.example.data.local.DocumentEntity, zip: File): JSONObject {
+        val work = File(ctx.cacheDir, "daisy-${System.nanoTime()}")
+        try {
+            val ncc = DaisyBook.unzip(zip, work)
+            val book = DaisyBook.read(ncc)
+            require(book.audio.isNotEmpty()) { "The DAISY book has no audio files." }
+            if ((read(ctx, doc.id).optJSONArray("files")?.length() ?: 0) > 0) remove(ctx, doc, null)
+            AudiobookPlayer.unload(doc.id)
+            val folder = ItemFiles.folderOf(ctx, doc).apply { mkdirs() }
+            val firstHeading = book.headings.groupBy { it.audio }.mapValues { it.value.first().title }
+            val list = mutableListOf<JSONObject>(); val start = HashMap<String, Long>(); var at = 0L
+            for (a in book.audio) {
+                val src = File(ncc.parentFile, a)
+                if (!src.isFile) continue
+                val (dur, _) = probe(src)
+                require(dur > 0) { "“${src.name}” in the DAISY book could not be read as audio." }
+                val safe = src.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(150)
+                val landed = unique(File(File(folder, baseName(doc)), safe)); moveFile(src, landed)
+                list += JSONObject().put("name", safe).put("path", landed.absolutePath).put("title", firstHeading[a] ?: safe.substringBeforeLast('.')).put("durationMs", dur)
+                start[a] = at; at += dur
+            }
+            require(list.isNotEmpty()) { "None of the DAISY book's audio files were in the zip." }
+            arrange(ctx, doc, list)
+            val chapters = JSONArray()
+            book.headings.forEach { h -> start[h.audio]?.let { chapters.put(JSONObject().put("title", h.title).put("startMs", it + h.ms).put("level", h.level)) } }
+            val pages = JSONArray()
+            book.pages.forEach { p -> start[p.audio]?.let { pages.put(JSONObject().put("label", p.label).put("startMs", it + p.ms).put("headings", JSONArray(p.headings)).put("next", p.next ?: "")) } }
+            val o = read(ctx, doc.id).put("files", JSONArray(list)).put("chapters", chapters).put("pages", pages)
+                .put("source", "daisy").put("daisyTitle", book.title).put("positionMs", 0L)
+            write(ctx, doc.id, o)
+        } finally { work.deleteRecursively() }
+        if (doc.fileType.equals("EPUB", true) || doc.filePath.endsWith(".epub", true)) runCatching { AudiobookSync.pageSync(ctx, doc, replace = false) }
         return json(ctx, doc.id)
     }
 
@@ -137,6 +184,7 @@ object Audiobooks {
         }
         arrange(ctx, doc, list)
         o.put("files", JSONArray(list)).put("chapters", chapters(ctx, doc.id, list)).put("positionMs", 0L)
+        o.remove("pages"); o.remove("source")
         write(ctx, doc.id, o)
         return json(ctx, doc.id)
     }
@@ -434,11 +482,43 @@ object AudiobookSync {
 
     suspend fun map(ctx: Context, doc: com.example.data.local.DocumentEntity): File? = syncFile(ctx, doc).takeIf { it.isFile }
 
+    /**
+     * Syncs by printed page, at once: the audiobook's page times (from a DAISY book) with where the EPUB's printed
+     * pages begin. [replace]: also over a map from Whisper (which is finer); otherwise only a missing map or one
+     * made this way is (re)made. → info, with how many pages were placed and which were not.
+     */
+    suspend fun pageSync(ctx: Context, doc: com.example.data.local.DocumentEntity, replace: Boolean): JSONObject {
+        require(doc.fileType.equals("EPUB", true) || doc.filePath.endsWith(".epub", true)) { "Syncing by printed page works with EPUB books." }
+        val pages = Audiobooks.read(ctx, doc.id).optJSONArray("pages")
+        require(pages != null && pages.length() > 0) { "This audiobook has no printed pages to sync by (a DAISY talking book has them)." }
+        val existing = map(ctx, doc)?.let { f -> runCatching { JSONObject(f.readText()) }.getOrNull() }
+        if (!replace && existing != null && existing.optString("engine") != "daisy-pages") return info(ctx, doc).put("kept", true)
+        val epub = File(doc.filePath)
+        val marks = EpubPageMarks.read(epub)
+        require(marks.isNotEmpty()) { "The book has no printed page numbers. Add them first (Convert books → page numbers from a PDF)." }
+        val book = EpubParser.parseEpub(epub, "audiobook-${doc.id}")
+        val tocByFile = book.tocItems.groupBy({ it.fileKey }, { it.title })
+        val chapters = book.chapters.map { DaisyPageSync.Chapter(it.fileKey, (tocByFile[it.fileKey] ?: emptyList()) + it.title, it.paragraphs, it.paragraphPageEquivalents) }
+        val audio = (0 until pages.length()).map { i ->
+            val p = pages.getJSONObject(i)
+            val hs = p.optJSONArray("headings")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
+            DaisyPageSync.AudioPage(p.optString("label"), p.optLong("startMs"), hs, p.optString("next").ifBlank { null })
+        }
+        val r = DaisyPageSync.build(audio, marks, chapters)
+        require(r.placed > 0) { "None of the audiobook's printed pages could be found in the book: are they the same edition?" }
+        val map = JSONObject().put("version", 1).put("kind", "epub").put("engine", "daisy-pages").put("created", System.currentTimeMillis())
+            .put("coverage", r.placed.toDouble() / r.pages).put("durationMs", Audiobooks.files(ctx, doc.id).sumOf { it.durationMs })
+            .put("pages", r.placed).put("pagesTotal", r.pages).put("sentences", r.sentences)
+        saveMap(ctx, doc, map)
+        return info(ctx, doc).put("placed", r.placed).put("pagesTotal", r.pages).put("skipped", JSONArray(r.skipped))
+    }
+
     suspend fun info(ctx: Context, doc: com.example.data.local.DocumentEntity): JSONObject {
         val f = map(ctx, doc) ?: return JSONObject().put("exists", false).put("transcribedMs", transcript(ctx, doc.id).optLong("doneMs"))
         val o = runCatching { JSONObject(f.readText()) }.getOrDefault(JSONObject())
         return JSONObject().put("exists", true).put("name", f.name).put("coverage", o.optDouble("coverage", 0.0)).put("created", o.optLong("created"))
             .put("engine", o.optString("engine")).put("sentences", o.optJSONArray("sentences")?.length() ?: 0).put("transcribedMs", transcript(ctx, doc.id).optLong("doneMs"))
+            .put("pages", o.optInt("pages")).put("pagesTotal", o.optInt("pagesTotal"))
     }
 
     /** The book's text in units with what locators need: PDF pages with their words, or EPUB paragraphs. */

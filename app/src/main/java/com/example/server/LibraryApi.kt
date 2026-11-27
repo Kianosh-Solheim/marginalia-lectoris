@@ -1159,7 +1159,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
             rest == listOf("file") && m == "POST" -> {
                 val name = File(req.query["name"].orEmpty()).name.ifBlank { "audio.mp3" }
                 require(req.contentLength > 0) { "The file is empty." }
-                require(name.substringAfterLast('.', "").lowercase(Locale.ROOT) in ab.EXTENSIONS) { "“$name” is not an audio file (MP3, M4B/M4A, AAC, OGG/Opus, FLAC or WAV)." }
+                val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                require(ext in ab.EXTENSIONS || ext == "zip") { "“$name” is not an audio file (MP3, M4B/M4A, AAC, OGG/Opus, FLAC or WAV), nor a DAISY book (.zip)." }
                 val tmp = ab.incoming(context)
                 try {
                     withContext(Dispatchers.IO) { tmp.outputStream().use { out -> req.body.copyTo(out, 256 * 1024) } }
@@ -1193,6 +1194,8 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 val bytes = withContext(Dispatchers.IO) { com.example.reader.AudiobookSync.pcmWindow(part.file, from, len) }
                 HttpResponse.Bytes(200, "application/octet-stream", bytes).header("Cache-Control", "no-store")
             }
+            // Syncing by printed page at once, from a DAISY book's page times and the EPUB's printed pages
+            rest == listOf("page-sync") && m == "POST" -> HttpResponse.json(withContext(Dispatchers.IO) { com.example.reader.AudiobookSync.pageSync(context, doc, replace = true) }.toString())
             rest == listOf("transcript") && m == "GET" -> HttpResponse.json(com.example.reader.AudiobookSync.transcript(context, doc.id).toString())
             rest == listOf("transcript") && m == "PUT" -> { com.example.reader.AudiobookSync.saveTranscript(context, doc.id, JSONObject(req.bodyText(64 * 1024 * 1024))); HttpResponse.json("{\"ok\":true}") }
             rest == listOf("transcript") && m == "DELETE" -> { com.example.reader.AudiobookSync.saveTranscript(context, doc.id, JSONObject()); HttpResponse.json("{\"ok\":true}") }

@@ -81,7 +81,7 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
                 if (onUseTts != null && busy.isBlank()) InkButton("Read aloud (TTS)", onClick = onUseTts)
                 InkButton("×", onClick = onClose)
             }
-            if (busy.isBlank()) Text("One .m4b or .opus with chapters, or all the .mp3 or .opus files at once (they are put in name order). They are kept in the book’s folder: “Audiobook – title”. You can also add them in the web view, on the book’s page.", fontSize = 12.sp, color = Color(0xFF52525B))
+            if (busy.isBlank()) Text("One .m4b or .opus with chapters, all the .mp3 or .opus files at once (they are put in name order), or a DAISY talking book (.zip). They are kept in the book’s folder: “Audiobook – title”. You can also add them in the web view, on the book’s page.", fontSize = 12.sp, color = Color(0xFF52525B))
             return@Column
         }
         if (has == null || st.docId != document.id) { Text("Loading the audiobook…", fontSize = 13.sp); return@Column }
@@ -151,4 +151,4 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
  * What the file picker offers: audio, and Ogg/Opus files that the file manager does not know as audio
  * (".opus" is often typed as an unknown file). A file that is not audio is turned away by its name.
  */
-private val AUDIO_PICK_TYPES = arrayOf("audio/*", "application/ogg", "application/x-ogg", "application/octet-stream")
+private val AUDIO_PICK_TYPES = arrayOf("audio/*", "application/ogg", "application/x-ogg", "application/zip", "application/x-zip-compressed", "application/octet-stream")
