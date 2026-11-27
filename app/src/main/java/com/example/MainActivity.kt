@@ -56,6 +56,12 @@ class MainActivity : FragmentActivity() {
     private val _incomingSharedText = MutableStateFlow<String?>(null)
     val incomingSharedText = _incomingSharedText.asStateFlow()
 
+    override fun onPause() {
+        super.onPause()
+        // Notes made here go to a paired tablet when the app is left (kept for later when it can't be reached).
+        com.example.reader.TabletLink.syncSoon(this, 300)
+    }
+
     override fun onResume() {
         super.onResume()
         com.example.reader.FolderSync.scanSoon()

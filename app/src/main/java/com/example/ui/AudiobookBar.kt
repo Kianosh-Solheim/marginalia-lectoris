@@ -72,6 +72,7 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
     val st by AudiobookPlayer.state.collectAsState()
     var showFiles by remember { mutableStateOf(false) }
     var showSleep by remember { mutableStateOf(false) }
+    var noteAtMs by remember { mutableStateOf<Long?>(null) }
 
     Column(modifier.fillMaxWidth().background(Color.White).border(1.dp, Color.Black).padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (has == false || busy.isNotBlank()) {
@@ -105,6 +106,9 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
             InkButton(if (st.playing) "Pause" else "Play", filled = true, onClick = { if (!st.playing) onBeforePlay(); AudiobookPlayer.toggle(context) })
             InkButton("+30", onClick = { AudiobookPlayer.skip(30_000) })
             InkButton("▷|", onClick = { AudiobookPlayer.chapterStep(1) })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            InkButton("Note here", onClick = { noteAtMs = st.positionMs })
             Spacer(Modifier.weight(1f))
             InkButton("%.2gx".format(st.speed), onClick = {
                 val speeds = listOf(0.8f, 1f, 1.1f, 1.25f, 1.5f, 1.75f, 2f)
@@ -116,6 +120,35 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
         }
     }
 
+    noteAtMs?.let { ms ->
+        var sentence by remember(ms) { mutableStateOf<String?>(null) }
+        var note by remember(ms) { mutableStateOf("") }
+        LaunchedEffect(ms) { sentence = withContext(Dispatchers.IO) { com.example.reader.AudiobookNotes.sentenceAt(context, document, ms) } }
+        Dialog(onDismissRequest = { noteAtMs = null }) {
+            Column(Modifier.fillMaxWidth().background(Color.White).border(1.dp, Color.Black).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Note at ${clock(ms)}", fontWeight = FontWeight.Bold)
+                val sn = sentence
+                if (sn == null) Text("Finding the sentence…", fontSize = 13.sp, color = Color(0xFF52525B))
+                else if (sn.isBlank()) Text("No sentence map yet, so the note goes to the chapter with this time. Sync the audiobook with the text (web view) to place notes in the text.", fontSize = 12.sp, color = Color(0xFF52525B))
+                else Text("“$sn”", fontSize = 15.sp, fontFamily = FontFamily.Serif)
+                OutlinedTextField(note, { note = it }, label = { Text("Your note (optional)") }, modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.Black, unfocusedBorderColor = Color.Black, cursorColor = Color.Black))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Spacer(Modifier.weight(1f))
+                    InkButton("Cancel", onClick = { noteAtMs = null })
+                    InkButton("Save", filled = true, onClick = {
+                        val text = note
+                        noteAtMs = null
+                        scope.launch {
+                            runCatching { withContext(Dispatchers.IO) { com.example.reader.AudiobookNotes.noteAt(context, document, ms, text, st.chapter) } }
+                                .onSuccess { Toast.makeText(context, "Note saved", Toast.LENGTH_SHORT).show(); com.example.reader.TabletLink.syncSoon(context) }
+                                .onFailure { Toast.makeText(context, it.message ?: "Could not save the note", Toast.LENGTH_LONG).show() }
+                        }
+                    })
+                }
+            }
+        }
+    }
     if (showSleep) Dialog(onDismissRequest = { showSleep = false }) {
         Column(Modifier.background(Color.White).border(1.dp, Color.Black).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Stop playing after…", fontWeight = FontWeight.Bold)

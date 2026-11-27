@@ -144,6 +144,13 @@ object TabletLink {
             } finally { tmp.delete() }
         }
         remember(ctx, listOf(r))
+        // The book's notes so far (later ones come with each sync).
+        runCatching {
+            progress("Notes…")
+            val offset = prefs(ctx).getLong("clockOffset", 0L)
+            val body = JSONObject().put("docs", JSONArray(listOf(r.uuid))).put("since", 0L).put("push", JSONObject())
+            NoteSync.apply(ctx, JSONObject(call(ctx, "/api/sync/notes", "POST", body.toString())), -offset)
+        }.onFailure { Log.w("TabletLink", "Notes not fetched", it) }
         if (!withAudio || !r.audiobook) return
         val ab = JSONObject(call(ctx, "/api/doc/${r.id}/audiobook"))
         val files = ab.optJSONArray("files") ?: JSONArray()
@@ -213,17 +220,50 @@ object TabletLink {
                     }
                 }
             }
+            val notes = syncNotes(app, ids.keys().asSequence().toList(), offset)
             val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date())
-            setStatus(app, "Synced at $time" + when {
-                sent + taken == 0 -> "."
-                else -> listOfNotNull(if (sent > 0) "$sent place${if (sent == 1) "" else "s"} sent" else null, if (taken > 0) "$taken taken from the tablet" else null).joinToString(", ", ": ", ".")
-            })
+            val parts = listOfNotNull(
+                if (sent > 0) "$sent place${if (sent == 1) "" else "s"} sent" else null,
+                if (taken > 0) "$taken place${if (taken == 1) "" else "s"} from the tablet" else null,
+                if (notes.first > 0) "${notes.first} note${if (notes.first == 1) "" else "s"} sent" else null,
+                if (notes.second > 0) "${notes.second} note change${if (notes.second == 1) "" else "s"} from the tablet" else null
+            )
+            setStatus(app, "Synced at $time" + if (parts.isEmpty()) "." else parts.joinToString(", ", ": ", "."))
         } catch (e: HttpError) {
             setStatus(app, if (e.code == 401) "The tablet no longer knows this phone. Pair it again." else "Sync failed: ${e.message}")
         } catch (e: Exception) {
             setStatus(app, "The tablet is not reachable now (its server off, or another Wi‑Fi). This phone keeps its places and sends them next time.")
         } finally { busy.value = false }
         status.value
+    }
+
+    /**
+     * Highlights and notes of the downloaded books, both ways, in one request. The phone's changes go on the
+     * tablet's clock (+[offset]); the tablet's come back onto this one. Returns (sent, received).
+     */
+    private fun syncNotes(ctx: Context, docUuids: List<String>, offset: Long): Pair<Int, Int> {
+        if (docUuids.isEmpty()) return 0 to 0
+        val p = prefs(ctx)
+        val pulledAt = p.getLong("notesPulledAt", 0L)   // tablet clock
+        val pushedAt = p.getLong("notesPushedAt", 0L)   // this clock
+        val started = System.currentTimeMillis()
+        val mine = NoteSync.changes(ctx, docUuids, pushedAt)
+        val push = shifted(mine, offset)
+        val body = JSONObject().put("docs", JSONArray(docUuids)).put("since", pulledAt).put("push", push)
+        val theirs = JSONObject(call(ctx, "/api/sync/notes", "POST", body.toString()))
+        val r = NoteSync.apply(ctx, theirs, -offset)
+        p.edit().putLong("notesPulledAt", theirs.optLong("now", pulledAt)).putLong("notesPushedAt", started).apply()
+        return (push.getJSONArray("highlights").length() + push.getJSONArray("deleted").length()) to r.total
+    }
+
+    private fun shifted(c: JSONObject, by: Long): JSONObject {
+        val h = c.optJSONArray("highlights") ?: JSONArray(); val d = c.optJSONArray("deleted") ?: JSONArray()
+        for (i in 0 until h.length()) h.getJSONObject(i).let { o ->
+            o.put("updatedAt", o.optLong("updatedAt") + by)
+            if (o.has("createdTimestamp")) o.put("createdTimestamp", o.optLong("createdTimestamp") + by)
+        }
+        for (i in 0 until d.length()) d.getJSONObject(i).let { o -> o.put("deletedAt", o.optLong("deletedAt") + by) }
+        return c
     }
 
     private fun setStatus(ctx: Context, s: String) { status.value = s; prefs(ctx).edit().putString("status", s).apply() }
