@@ -119,7 +119,9 @@ object TabletLink {
     suspend fun downloaded(ctx: Context): Map<String, Long> {
         val dao = AppDatabase.getInstance(ctx).documentDao()
         val ids = remoteIds(ctx)
-        return ids.keys().asSequence().mapNotNull { u -> dao.getDocumentByUuid(u)?.let { u to it.id } }.toMap()
+        val out = HashMap<String, Long>()
+        for (u in ids.keys().asSequence().toList()) dao.getDocumentByUuid(u)?.let { out[u] = it.id }
+        return out
     }
 
     /**
