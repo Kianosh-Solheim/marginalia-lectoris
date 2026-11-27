@@ -38,16 +38,36 @@ object TabletLink {
 
     data class Link(val urls: List<String>, val tabletId: String, val tabletName: String, val key: String, val deviceId: String)
     data class Offer(val code: String, val tabletId: String, val tabletName: String, val urls: List<String>)
-    data class Remote(val id: Long, val uuid: String, val title: String, val author: String, val fileType: String, val size: Long, val audiobook: Boolean)
+    data class Remote(
+        val id: Long, val uuid: String, val title: String, val author: String, val fileType: String, val size: Long, val audiobook: Boolean,
+        val progress: Double = 0.0, val place: String = "", val coverVersion: Long = 0, val category: String = ""
+    )
 
     /** One line for the settings: when it last synced, or why it couldn't. */
     val status = mutableStateOf("")
     val busy = mutableStateOf(false)
     val paired = mutableStateOf(false)
+    /** null: not tried yet; true: the last sync reached the tablet; false: it could not. */
+    val reachable = mutableStateOf<Boolean?>(null)
+    /** When the last sync reached the tablet (this clock), 0 if never. */
+    val lastSyncAt = mutableStateOf(0L)
+    /** The tablet's library as last seen, so the phone can show it away from home. */
+    val remoteBooks = mutableStateOf<List<Remote>>(emptyList())
 
     private fun prefs(ctx: Context) = ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun init(ctx: Context) { paired.value = link(ctx) != null; if (status.value.isBlank()) status.value = prefs(ctx).getString("status", "").orEmpty() }
+    fun init(ctx: Context) {
+        paired.value = link(ctx) != null
+        if (status.value.isBlank()) status.value = prefs(ctx).getString("status", "").orEmpty()
+        if (lastSyncAt.value == 0L) lastSyncAt.value = prefs(ctx).getLong("lastSyncAt", 0L)
+        if (remoteBooks.value.isEmpty()) remoteBooks.value = parseRemote(runCatching { JSONArray(prefs(ctx).getString("remoteList", "[]")) }.getOrDefault(JSONArray()))
+    }
+
+    private fun parseRemote(a: JSONArray): List<Remote> = (0 until a.length()).map { a.getJSONObject(it) }
+        .filter { !it.optBoolean("folder") && !it.optBoolean("placeholder") && it.optString("uuid").isNotBlank() }
+        .map { Remote(it.getLong("id"), it.getString("uuid"), it.optString("title"), it.optString("displayAuthor", it.optString("author")), it.optString("fileType"),
+            it.optLong("size"), it.optBoolean("audiobook"), it.optDouble("progress", 0.0).let { p -> if (p.isNaN()) 0.0 else p },
+            it.optString("chapter").ifBlank { it.optString("placeLabel") }, it.optLong("coverVersion"), it.optString("category")) }
 
     fun link(ctx: Context): Link? {
         val p = prefs(ctx)
@@ -104,10 +124,13 @@ object TabletLink {
     private fun remoteLibraryNow(ctx: Context): List<Remote> {
         val o = JSONObject(call(ctx, "/api/library"))
         val a = o.optJSONArray("documents") ?: JSONArray()
-        return (0 until a.length()).map { a.getJSONObject(it) }
-            .filter { !it.optBoolean("folder") && !it.optBoolean("placeholder") && it.optString("uuid").isNotBlank() }
-            .map { Remote(it.getLong("id"), it.getString("uuid"), it.optString("title"), it.optString("displayAuthor", it.optString("author")), it.optString("fileType"), it.optLong("size"), it.optBoolean("audiobook")) }
-            .also { list -> remember(ctx, list) }
+        // Kept (small fields only) for showing the library away from home.
+        val keep = JSONArray()
+        for (i in 0 until a.length()) a.getJSONObject(i).let { d ->
+            keep.put(JSONObject().apply { listOf("id", "uuid", "title", "author", "displayAuthor", "fileType", "size", "audiobook", "progress", "chapter", "placeLabel", "coverVersion", "category", "folder", "placeholder").forEach { k -> if (d.has(k)) put(k, d.get(k)) } })
+        }
+        prefs(ctx).edit().putString("remoteList", keep.toString()).apply()
+        return parseRemote(a).also { list -> remember(ctx, list); remoteBooks.value = list }
     }
 
     /** Remote ID by uuid, so a sync can reach a downloaded book's audiobook without listing the library. */
@@ -182,6 +205,56 @@ object TabletLink {
         Audiobooks.savePosition(ctx, doc.id, ab.optLong("positionMs"), ab.optDouble("speed", 1.0), at = ab.optLong("updatedAt") - offset)
     }
 
+    /** The tablet's cover for [r], cached on this phone (null when it has none or can't be reached). */
+    suspend fun cover(ctx: Context, r: Remote): File? = withContext(Dispatchers.IO) {
+        val dir = File(ctx.cacheDir, "tablet-covers").apply { mkdirs() }
+        val f = File(dir, "${r.uuid}-${r.coverVersion}.img")
+        if (f.isFile && f.length() > 0) return@withContext f
+        val missing = File(dir, "${r.uuid}-${r.coverVersion}.none")
+        if (missing.isFile && System.currentTimeMillis() - missing.lastModified() < 24 * 3600_000L) return@withContext null
+        if (link(ctx) == null || reachable.value == false) return@withContext null
+        runCatching {
+            val tmp = File(dir, f.name + ".part")
+            fetchToFile(ctx, "/api/doc/${r.id}/cover", tmp) {}
+            dir.listFiles()?.filter { it.name.startsWith(r.uuid + "-") && it.name != tmp.name }?.forEach { it.delete() }
+            tmp.renameTo(f); f
+        }.getOrElse { e -> if (e is HttpError && e.code == 404) missing.writeText(""); null }
+    }
+
+    /** The audiobook on the tablet (length, files, place), or null. */
+    suspend fun remoteAudiobook(ctx: Context, r: Remote): JSONObject? = withContext(Dispatchers.IO) {
+        runCatching { JSONObject(call(ctx, "/api/doc/${r.id}/audiobook")) }.getOrNull()
+    }
+
+    /** Only the audiobook leaves this phone; the book and its notes stay. */
+    suspend fun removeAudioFromPhone(ctx: Context, docId: Long) = withContext(Dispatchers.IO) {
+        val doc = AppDatabase.getInstance(ctx).documentDao().getDocumentById(docId) ?: return@withContext
+        Audiobooks.remove(ctx, doc, null)
+    }
+
+    /**
+     * Takes a book downloaded from the tablet off this phone: its file, audiobook and rows here. The sync
+     * triggers are off meanwhile, so nothing is recorded as deleted: the book and its notes stay on the
+     * tablet, and come back with it when downloaded again.
+     */
+    suspend fun removeFromPhone(ctx: Context, docId: Long) = withContext(Dispatchers.IO) {
+        val dao = AppDatabase.getInstance(ctx).documentDao()
+        val doc = dao.getDocumentById(docId) ?: return@withContext
+        runCatching { Audiobooks.remove(ctx, doc, null) }
+        runCatching { File(doc.filePath).takeIf { it.isFile }?.delete() }
+        runCatching { doc.coverUri?.let { File(it) }?.takeIf { it.isFile }?.delete() }
+        val d = AppDatabase.getInstance(ctx).openHelper.writableDatabase
+        d.beginTransaction()
+        try {
+            com.example.data.local.SyncTriggers.drop(d::execSQL)
+            d.delete("highlights", "documentId = ?", arrayOf(docId))
+            d.delete("documents", "id = ?", arrayOf(docId))
+            com.example.data.local.SyncTriggers.create(d::execSQL)
+            d.setTransactionSuccessful()
+        } finally { d.endTransaction() }
+        runCatching { com.example.data.local.SyncTriggers.create(d::execSQL) }
+    }
+
     // ------------------------------------------------------------------------------- sync
 
     /** A sync in a moment (several calls close together make one). */
@@ -236,9 +309,12 @@ object TabletLink {
                 if (notes.second > 0) "${notes.second} note change${if (notes.second == 1) "" else "s"} from the tablet" else null
             )
             setStatus(app, "Synced at $time" + if (parts.isEmpty()) "." else parts.joinToString(", ", ": ", "."))
+            reachable.value = true; lastSyncAt.value = System.currentTimeMillis(); prefs(app).edit().putLong("lastSyncAt", lastSyncAt.value).apply()
+            runCatching { remoteLibraryNow(app) }
         } catch (e: HttpError) {
             setStatus(app, if (e.code == 401) "The tablet no longer knows this phone. Pair it again." else "Sync failed: ${e.message}")
         } catch (e: Exception) {
+            reachable.value = false
             setStatus(app, "The tablet is not reachable now (its server off, or another Wi‑Fi). This phone keeps its places and sends them next time.")
         } finally { busy.value = false }
         status.value
