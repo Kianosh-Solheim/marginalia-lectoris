@@ -144,7 +144,19 @@ object Audiobooks {
             val folder = ItemFiles.folderOf(ctx, doc).apply { mkdirs() }
             val firstHeading = book.headings.groupBy { it.audio }.mapValues { it.value.first().title }
             val list = mutableListOf<JSONObject>(); val start = HashMap<String, Long>(); var at = 0L
-            for (a in book.audio) {
+            // Alike MP3 files (as a DAISY book's are) become one file, with the chapters in its tag; otherwise they are kept one by one.
+            val pairs = book.audio.map { it to File(ncc.parentFile, it) }.filter { it.second.isFile }
+            val parts = pairs.map { it.second }
+            val joined = runCatching { Mp3Join.scan(parts) }.getOrNull()
+            if (joined != null) {
+                pairs.forEachIndexed { i, (a, _) -> start[a] = joined.startsMs[i] }
+                val out = unique(File(folder, baseName(doc) + ".mp3"))
+                Mp3Join.write(joined, out, book.title.ifBlank { doc.title }, book.author,
+                    book.headings.mapNotNull { h -> start[h.audio]?.let { Mp3Join.Chapter(h.title, it + h.ms) } })
+                parts.forEach { it.delete() }
+                list += JSONObject().put("name", out.name).put("path", out.absolutePath).put("title", book.title.ifBlank { doc.title }).put("durationMs", joined.durationMs)
+            }
+            if (joined == null) for (a in book.audio) {
                 val src = File(ncc.parentFile, a)
                 if (!src.isFile) continue
                 val (dur, _) = probe(src)
