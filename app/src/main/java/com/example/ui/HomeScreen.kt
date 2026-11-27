@@ -202,6 +202,7 @@ fun HomeScreen(
         context.getSharedPreferences("lector_meus_ui_prefs", android.content.Context.MODE_PRIVATE)
     }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val phoneHome = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp < 600 && currentSection == AppNavSection.HOME
     val coroutineScope = rememberCoroutineScope()
     PresentationsHost()
     ZoteroHost()
@@ -651,6 +652,14 @@ fun HomeScreen(
             }
         }
     ) {
+        // A phone gets its own library: every book, here and on the paired tablet, as large covers.
+        if (phoneHome) PhoneLibrary(
+            documents = documents,
+            highlightCounts = highlightCountsByDocId,
+            onMenu = { coroutineScope.launch { drawerState.open() } },
+            onOpenDocument = onOpenDocument,
+            onOpenSettings = onOpenSettings
+        ) else
         Scaffold(
             topBar = {
                 Column(
