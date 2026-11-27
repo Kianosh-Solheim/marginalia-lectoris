@@ -49,6 +49,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -870,6 +871,22 @@ fun SelectableParagraphItem(
     val currentParagraph by rememberUpdatedState(displayParagraph)
     val currentLayoutResult by rememberUpdatedState(textLayoutResult)
     val currentBoxCoordinates by rememberUpdatedState(boxCoordinates)
+    // Tell the selection bar where this paragraph's selection is, so it can open right next to it.
+    val anchorOwner = remember { Any() }
+    LaunchedEffect(activeSelectionRange, textLayoutResult, boxCoordinates) {
+        val sel = activeSelectionRange
+        val layout = textLayoutResult
+        val coords = boxCoordinates
+        if (sel != null && layout != null && coords != null && coords.isAttached && displayParagraph.isNotEmpty()) {
+            val sIdx = sel.first.coerceIn(0, displayParagraph.length - 1)
+            val eIdx = (sel.second - 1).coerceIn(0, displayParagraph.length - 1)
+            val origin = coords.positionInRoot().y
+            SelectionAnchor.set(anchorOwner, origin + layout.getBoundingBox(sIdx).top, origin + layout.getBoundingBox(eIdx).bottom)
+        } else {
+            SelectionAnchor.clear(anchorOwner)
+        }
+    }
+    DisposableEffect(Unit) { onDispose { SelectionAnchor.clear(anchorOwner) } }
     val currentOnSelectionActive by rememberUpdatedState(onSelectionActive)
     val currentOnSelectionDragRootY by rememberUpdatedState(onSelectionDragRootY)
     val currentOnToggleUi by rememberUpdatedState(onToggleUi)

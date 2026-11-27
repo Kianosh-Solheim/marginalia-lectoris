@@ -2269,9 +2269,9 @@ fun EpubReaderPagerContent(
                             onAddAsAuthor = onAddAsAuthor,
                             onSetAsAbstract = onSetAsAbstract,
                             modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp)
+                                .align(Alignment.TopCenter)
+                                .selectionBarPlacement(SelectionAnchor.topRoot, SelectionAnchor.bottomRoot)
+                                .padding(horizontal = 14.dp)
                         )
                     }
                 }
