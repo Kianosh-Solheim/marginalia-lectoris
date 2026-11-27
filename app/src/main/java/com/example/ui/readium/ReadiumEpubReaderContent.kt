@@ -1380,7 +1380,13 @@ private class TouchObservingFrameLayout(
 
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         when (ev.actionMasked) {
-            android.view.MotionEvent.ACTION_DOWN -> { onTouchState(true); pinching = false; pinchScale = 1f }
+            android.view.MotionEvent.ACTION_DOWN -> {
+                onTouchState(true); pinching = false; pinchScale = 1f
+                // Pen or finger, so the selection bar can size itself (as in the PDF and classic readers).
+                val tool = ev.getToolType(0)
+                com.example.ui.LastInputTool.isStylus =
+                    tool == android.view.MotionEvent.TOOL_TYPE_STYLUS || tool == android.view.MotionEvent.TOOL_TYPE_ERASER
+            }
             android.view.MotionEvent.ACTION_POINTER_DOWN -> if (ev.pointerCount >= 2 && pinchEnabled()) pinching = true
             android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
                 onTouchState(false)
