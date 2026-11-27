@@ -526,6 +526,10 @@ fun PdfReaderPagerContent(
 
                 // Word-level selection state on this PDF page
                 var selectedWordRange by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+                // Where this page is drawn, so the selection bar can open right next to the selection.
+                var pageCanvasCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+                val anchorOwner = remember { Any() }
+                androidx.compose.runtime.DisposableEffect(Unit) { onDispose { SelectionAnchor.clear(anchorOwner) } }
                 var anchorWordIndex by remember { mutableIntStateOf(0) }
                 var extraAppendedParagraphs by remember { mutableIntStateOf(0) }
                 var isPdfDragging by remember { mutableStateOf(false) }
@@ -1171,7 +1175,20 @@ fun PdfReaderPagerContent(
                             )
 
                             // Overlay Canvas for saved PDF highlights + active word-level selection + KOReader selection handles!
-                            Canvas(modifier = Modifier.matchParentSize()) {
+                            LaunchedEffect(selectedWordRange, words, pageCanvasCoords) {
+                                val r = selectedWordRange
+                                val c = pageCanvasCoords
+                                if (r != null && words.isNotEmpty() && c != null && c.isAttached) {
+                                    val a = minOf(r.first, r.second).coerceIn(0, words.size - 1)
+                                    val z = maxOf(r.first, r.second).coerceIn(0, words.size - 1)
+                                    val slice = words.subList(a, z + 1)
+                                    val h = c.size.height.toFloat()
+                                    val top = c.localToRoot(androidx.compose.ui.geometry.Offset(0f, slice.minOf { it.topRatio } * h)).y
+                                    val bottom = c.localToRoot(androidx.compose.ui.geometry.Offset(0f, slice.maxOf { it.bottomRatio } * h)).y
+                                    SelectionAnchor.set(anchorOwner, top, bottom)
+                                } else SelectionAnchor.clear(anchorOwner)
+                            }
+                            Canvas(modifier = Modifier.matchParentSize().onGloballyPositioned { pageCanvasCoords = it }) {
                                 val canvasW = size.width
                                 val canvasH = size.height
                                 val words = pageTextData?.words ?: emptyList()
@@ -1408,8 +1425,9 @@ fun PdfReaderPagerContent(
                         onAddAsAuthor = onAddAsAuthor,
                         onSetAsAbstract = onSetAsAbstract,
                         modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                            .align(Alignment.TopCenter)
+                            .selectionBarPlacement(SelectionAnchor.topRoot, SelectionAnchor.bottomRoot)
+                            .padding(horizontal = 14.dp)
                     )
                 }
             }

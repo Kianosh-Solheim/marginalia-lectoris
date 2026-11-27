@@ -50,6 +50,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.runtime.mutableFloatStateOf
+import com.example.ui.selectionBarPlacement
 import androidx.fragment.app.FragmentActivity
 import com.example.data.local.DocumentEntity
 import com.example.data.local.HighlightEntity
@@ -219,6 +223,8 @@ fun ReadiumEpubReaderContent(
     var carriedEpub by remember(document.id) { mutableStateOf<CarriedEpubSelection?>(null) }
     var touchUpTick by remember(document.id) { mutableIntStateOf(0) }
     var readerHeightPx by remember(document.id) { mutableIntStateOf(0) }
+    // Where the web view sits on screen, to place the selection bar next to the selection.
+    var readiumViewRootY by remember(document.id) { mutableFloatStateOf(0f) }
 
     val selectionActionModeCallback = remember(document.id) {
         object : ActionMode.Callback {
@@ -969,6 +975,7 @@ fun ReadiumEpubReaderContent(
                         .fillMaxSize()
                         .padding(top = effectiveTopMargin, bottom = effectiveBottomMargin)
                         .onSizeChanged { readerHeightPx = it.height }
+                        .onGloballyPositioned { readiumViewRootY = it.positionInRoot().y }
                 )
 
                 val shownPages = bookPages
@@ -1140,9 +1147,12 @@ fun ReadiumEpubReaderContent(
                         onAddAsAuthor = onAddAsAuthor,
                         onSetAsAbstract = onSetAsAbstract,
                         modifier = Modifier
-                            .align(if (menuAtTop) Alignment.TopCenter else Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                            .align(Alignment.TopCenter)
+                            .selectionBarPlacement(
+                                selRect?.let { readiumViewRootY + it.top },
+                                selRect?.let { readiumViewRootY + it.bottom }
+                            )
+                            .padding(horizontal = 14.dp)
                     )
                 }
             }
