@@ -79,6 +79,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
@@ -288,6 +289,8 @@ fun HomeScreen(
                 }
 
                 HorizontalDivider(thickness = 1.5.dp, color = Color.Black)
+                // The links scroll on a short screen (a phone), with Settings kept in view at the bottom.
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Drawer Navigation Links — crisp ink border + Kaleido tint instead of dark heavy blocks
@@ -606,8 +609,9 @@ fun HomeScreen(
                 )
 
                 DrawerLibraryServerBlock(Modifier.padding(horizontal = 12.dp, vertical = 3.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                }
 
-                Spacer(modifier = Modifier.weight(1f))
                 HorizontalDivider(thickness = 1.5.dp, color = Color.Black)
                 Spacer(modifier = Modifier.height(8.dp))
 
