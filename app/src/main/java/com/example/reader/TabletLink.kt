@@ -17,8 +17,6 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * This device (usually a phone) paired with a Marginalia tablet: Settings → Connect to a tablet.
@@ -86,7 +84,7 @@ object TabletLink {
                 paired.value = true
                 setStatus(ctx, "Paired with ${r.optString("tabletName", "the tablet")}.")
                 return null
-            } catch (e: HttpError) { return e.message } catch (e: Exception) { lastError = "Could not reach the tablet at $url (${e.javaClass.simpleName}). Is its server on, and are both on the same Wi‑Fi?" }
+            } catch (e: HttpError) { return e.message } catch (e: Exception) { lastError = "Could not reach the tablet at $url (${e.message ?: e.javaClass.simpleName}). Is its server on, and are both on the same Wi‑Fi?" }
         }
         return lastError
     }
@@ -289,20 +287,21 @@ object TabletLink {
         var last: Exception? = null
         for (url in l.urls) {
             try {
-                val c = open(url, path, "GET", l.key, 15000)
-                try {
-                    if (c.responseCode !in 200..299) throw HttpError(c.responseCode, errorText(c))
-                    val name = Regex("filename\\*?=(?:UTF-8'')?\"?([^\";]+)").find(c.getHeaderField("Content-Disposition").orEmpty())?.groupValues?.get(1)
+                LanHttp.request(url, path, "GET", l.key, null, 15000).use { r ->
+                    if (r.code !in 200..299) throw HttpError(r.code, errorText(r))
+                    val name = Regex("filename\\*?=(?:UTF-8'')?\"?([^\";]+)").find(r.header("content-disposition"))?.groupValues?.get(1)
                         ?.let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }.orEmpty()
                     var done = 0L; var shown = 0L
-                    c.inputStream.use { inp -> out.outputStream().use { o ->
+                    out.outputStream().use { o ->
                         val buf = ByteArray(256 * 1024)
-                        while (true) { val n = inp.read(buf); if (n < 0) break; o.write(buf, 0, n); done += n
+                        while (true) { val n = r.body.read(buf); if (n < 0) break; o.write(buf, 0, n); done += n
                             if (done - shown > 2_000_000) { shown = done; progress(done) } }
-                    } }
+                    }
+                    val expected = r.header("content-length").toLongOrNull()
+                    if (expected != null && done != expected) throw java.io.IOException("The download stopped after ${mb(done)} of ${mb(expected)}.")
                     good(ctx, l, url)
                     return name
-                } finally { c.disconnect() }
+                }
             } catch (e: HttpError) { throw e } catch (e: Exception) { last = e }
         }
         throw last ?: IllegalStateException("The tablet has no address.")
@@ -313,25 +312,15 @@ object TabletLink {
         if (l.urls.firstOrNull() != url) prefs(ctx).edit().putString("urls", (listOf(url) + l.urls).distinct().joinToString("\n")).apply()
     }
 
-    private fun open(base: String, path: String, method: String, key: String?, timeoutMs: Int): HttpURLConnection =
-        (URL(base.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
-            requestMethod = method; connectTimeout = timeoutMs; readTimeout = 60_000
-            setRequestProperty("X-Marginalia", "1")
-            if (key != null) setRequestProperty("Authorization", "Bearer $key")
+    private fun http(base: String, path: String, method: String, body: String?, key: String?, timeoutMs: Int = 5000): String =
+        LanHttp.request(base, path, method, key, body?.toByteArray(), timeoutMs).use { r ->
+            if (r.code !in 200..299) throw HttpError(r.code, errorText(r))
+            r.body.readBytes().toString(Charsets.UTF_8)
         }
 
-    private fun http(base: String, path: String, method: String, body: String?, key: String?, timeoutMs: Int = 5000): String {
-        val c = open(base, path, method, key, timeoutMs)
-        try {
-            if (body != null) { c.doOutput = true; c.setRequestProperty("Content-Type", "application/json"); c.outputStream.use { it.write(body.toByteArray()) } }
-            if (c.responseCode !in 200..299) throw HttpError(c.responseCode, errorText(c))
-            return c.inputStream.bufferedReader().use { it.readText() }
-        } finally { c.disconnect() }
-    }
-
-    private fun errorText(c: HttpURLConnection): String {
-        val t = runCatching { c.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull().orEmpty()
-        return runCatching { JSONObject(t).optString("error") }.getOrNull()?.takeIf { it.isNotBlank() } ?: "The tablet answered ${c.responseCode}."
+    private fun errorText(r: LanHttp.Response): String {
+        val t = runCatching { r.body.readBytes().toString(Charsets.UTF_8) }.getOrDefault("")
+        return runCatching { JSONObject(t).optString("error") }.getOrNull()?.takeIf { it.isNotBlank() } ?: "The tablet answered ${r.code}."
     }
 
     private fun mb(b: Long) = if (b <= 0) "?" else "%.1f MB".format(b / 1_000_000.0)
