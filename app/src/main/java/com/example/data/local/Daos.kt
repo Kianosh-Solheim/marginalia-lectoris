@@ -22,6 +22,13 @@ interface DocumentDao {
     @Query("SELECT * FROM documents WHERE id = :id LIMIT 1")
     suspend fun getDocumentById(id: Long): DocumentEntity?
 
+    @Query("SELECT * FROM documents WHERE uuid = :uuid AND uuid <> '' LIMIT 1")
+    suspend fun getDocumentByUuid(uuid: String): DocumentEntity?
+
+    /** A book downloaded from a paired tablet takes the tablet's ID, so its notes and places can be matched later. */
+    @Query("UPDATE documents SET uuid = :uuid WHERE id = :id")
+    suspend fun setUuid(id: Long, uuid: String)
+
     @Query("SELECT * FROM documents WHERE filePath = :filePath LIMIT 1")
     suspend fun getDocumentByFilePath(filePath: String): DocumentEntity?
 

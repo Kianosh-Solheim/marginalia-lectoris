@@ -147,6 +147,8 @@ fun WebServerSettingsSection() {
             )
             if (note.isNotBlank()) Text(note, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.Black)
 
+            PairPhoneBlock(running, addresses.map { it.url }.ifEmpty { listOf(url) }, grey)
+
             // The tablet's screen in the browser (☰ → Tablet screen in the web view)
             var controlOn by remember { mutableStateOf(com.example.server.ScreenShare.controlOn()) }
             LaunchedEffect(Unit) { while (true) { controlOn = com.example.server.ScreenShare.controlOn(); kotlinx.coroutines.delay(1500) } }
@@ -160,6 +162,65 @@ fun WebServerSettingsSection() {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 InkChip(if (controlOn) "Remote control is on — change" else "Switch on remote control…", controlOn, { com.example.server.openAccessibilitySettings(context) })
             }
+        }
+    }
+}
+
+/**
+ * Phones: pair one by scanning a QR code (Marginalia on the phone → Settings → Connect to a tablet).
+ * A paired phone signs in with its own key, not the PIN, and can be removed here.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PairPhoneBlock(running: Boolean, urls: List<String>, grey: Color) {
+    val context = LocalContext.current
+    val offer by com.example.server.PairedDevices.offer
+    val devices by com.example.server.PairedDevices.devices
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { com.example.server.PairedDevices.refresh(context) }
+    LaunchedEffect(offer) { while (offer != null) { now = System.currentTimeMillis(); if (now > offer!!.until) com.example.server.PairedDevices.cancelOffer(); kotlinx.coroutines.delay(1000) } }
+    // A phone that has just paired: the code is used up, so close it and show the list again.
+    LaunchedEffect(devices.size) { com.example.server.PairedDevices.refresh(context) }
+
+    Text("Phones", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = Color.Black)
+    Text(
+        "Pair a phone with Marginalia on it to see this library there, download books and audiobooks to the phone, " +
+            "and keep the listening place in step. They sync when both are on the same Wi‑Fi and the server here is on.",
+        style = MaterialTheme.typography.bodySmall, color = grey
+    )
+    val o = offer
+    if (o != null && running) {
+        val tabletName = listOf(android.os.Build.MANUFACTURER, android.os.Build.MODEL).filter { it.isNotBlank() }.distinct().joinToString(" ")
+        val qr = remember(o) { com.example.server.PairedDevices.qrText(context, o, urls, tabletName) }
+        Row(
+            Modifier.fillMaxWidth().border(1.dp, Color.Black, RoundedCornerShape(2.dp)).padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically
+        ) {
+            QrCodeImage(qr, 180.dp, Modifier.border(1.dp, Color.Black))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("On the phone: Settings → Connect to a tablet → Scan.", fontSize = 13.sp, color = Color.Black)
+                Text("Or type this code there", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = grey)
+                Text(o.code.chunked(4).joinToString(" "), fontFamily = FontFamily.Monospace, fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color.Black, letterSpacing = 3.sp)
+                val left = ((o.until - now) / 1000).coerceAtLeast(0)
+                Text("Works once, for ${left / 60}:${"%02d".format(left % 60)} more.", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = grey)
+                InkButton("Cancel", onClick = { com.example.server.PairedDevices.cancelOffer() })
+            }
+        }
+    } else {
+        InkButton(if (running) "Pair a phone" else "Pair a phone (switch the server on first)", enabled = running, onClick = { com.example.server.PairedDevices.newOffer() })
+    }
+    devices.forEach { d ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(d.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.Black)
+                val ago = (System.currentTimeMillis() - d.lastSeen) / 60_000
+                Text(
+                    "Paired ${java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(d.created))} · last synced " +
+                        when { ago < 2 -> "just now"; ago < 60 -> "$ago min ago"; ago < 48 * 60 -> "${ago / 60} h ago"; else -> "${ago / 1440} days ago" },
+                    fontSize = 12.sp, color = grey
+                )
+            }
+            InkButton("Remove", onClick = { com.example.server.PairedDevices.remove(context, d.id) })
         }
     }
 }

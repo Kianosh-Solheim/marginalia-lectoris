@@ -59,6 +59,9 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         com.example.reader.FolderSync.scanSoon()
+        // A phone paired with a tablet: exchange listening places (does nothing when not paired).
+        com.example.reader.TabletLink.init(this)
+        com.example.reader.TabletLink.syncSoon(this, 500)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
