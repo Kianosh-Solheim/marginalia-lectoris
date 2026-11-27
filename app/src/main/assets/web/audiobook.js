@@ -12,7 +12,7 @@ function audiobookSection(d) {
     add.addEventListener('change', () => { const fs = [...add.files]; add.value = ''; if (fs.length) abUpload(d, fs, load); });
     const addBtn = h('button', { class: 'btn' + (a.exists ? '' : ' fill'), onclick: () => add.click() }, a.exists ? 'Add files…' : 'Add the audio files…');
     if (!a.exists) {
-      box.append(h('p', { class: 'muted', style: { marginTop: 0 } }, 'One .m4b or .opus with chapters, all the .mp3 or .opus files at once (they are put in name order), or a DAISY talking book as its .zip (from NLB, say: it brings its chapters and printed pages, and an EPUB with page numbers is synced by page at once). They are kept in the book’s folder on the tablet (one file as “Audiobook – title”, several in a folder of that name), and the tablet plays them with the screen off; you can listen here too, and the place is shared.'),
+      box.append(h('p', { class: 'muted', style: { marginTop: 0 } }, 'One .m4b or .opus with chapters, all the .mp3 or .opus files at once (they are put in name order), or a DAISY talking book as its .zip (from NLB, say: its MP3 files become one, with its chapters; its printed pages come along, and an EPUB with page numbers is synced by page at once). They are kept in the book’s folder on the tablet (one file as “Audiobook – title”, several in a folder of that name), and the tablet plays them with the screen off; you can listen here too, and the place is shared.'),
         h('div', { class: 'row' }, addBtn), add);
       return;
     }
