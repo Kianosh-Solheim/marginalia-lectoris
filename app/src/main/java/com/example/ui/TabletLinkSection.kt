@@ -65,7 +65,12 @@ fun TabletLinkSection() {
                 val raw = b.rawValue.orEmpty().trim()
                 val offer = TabletLink.parse(raw)
                 when {
-                    offer != null -> pairWith(offer)
+                    offer != null -> {
+                        // Show what was read, so it can be checked (and Connect pressed again if needed).
+                        address = offer.urls.first().removePrefix("http://").removePrefix("https://").trimEnd('/')
+                        code = offer.code
+                        pairWith(offer)
+                    }
                     // The browser address's QR code (beside the PIN): keep the address, the code still has to come from Pair a phone.
                     raw.startsWith("http://") || raw.startsWith("https://") -> {
                         address = raw.removePrefix("http://").removePrefix("https://").trimEnd('/')

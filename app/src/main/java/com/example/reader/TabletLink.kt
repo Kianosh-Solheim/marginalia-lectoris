@@ -12,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -69,7 +70,9 @@ object TabletLink {
     }
 
     /** Pairs with the tablet. Returns null when it worked, or the reason it didn't. */
-    suspend fun pair(ctx: Context, offer: Offer): String? {
+    suspend fun pair(ctx: Context, offer: Offer): String? = withContext(Dispatchers.IO) { pairNow(ctx, offer) }
+
+    private fun pairNow(ctx: Context, offer: Offer): String? {
         val name = listOf(Build.MANUFACTURER, Build.MODEL).filter { it.isNotBlank() }.distinct().joinToString(" ").replaceFirstChar { it.uppercase() }
         var lastError = "The tablet did not answer."
         for (url in offer.urls) {
@@ -96,7 +99,9 @@ object TabletLink {
 
     // ------------------------------------------------------------------------------- library and downloads
 
-    suspend fun remoteLibrary(ctx: Context): List<Remote> {
+    suspend fun remoteLibrary(ctx: Context): List<Remote> = withContext(Dispatchers.IO) { remoteLibraryNow(ctx) }
+
+    private fun remoteLibraryNow(ctx: Context): List<Remote> {
         val o = JSONObject(call(ctx, "/api/library"))
         val a = o.optJSONArray("documents") ?: JSONArray()
         return (0 until a.length()).map { a.getJSONObject(it) }
@@ -114,7 +119,9 @@ object TabletLink {
     private fun remoteIds(ctx: Context) = runCatching { JSONObject(prefs(ctx).getString("remoteIds", "{}")!!) }.getOrDefault(JSONObject())
 
     /** Books here that came from the tablet: uuid → local book ID. */
-    suspend fun downloaded(ctx: Context): Map<String, Long> {
+    suspend fun downloaded(ctx: Context): Map<String, Long> = withContext(Dispatchers.IO) { downloadedNow(ctx) }
+
+    private suspend fun downloadedNow(ctx: Context): Map<String, Long> {
         val dao = AppDatabase.getInstance(ctx).documentDao()
         val ids = remoteIds(ctx)
         val out = HashMap<String, Long>()
@@ -126,7 +133,9 @@ object TabletLink {
      * Downloads a book from the tablet, with its audiobook and sentence map when it has them.
      * [progress]: a line to show while it runs.
      */
-    suspend fun download(ctx: Context, r: Remote, withAudio: Boolean, progress: (String) -> Unit) {
+    suspend fun download(ctx: Context, r: Remote, withAudio: Boolean, progress: (String) -> Unit) = withContext(Dispatchers.IO) { downloadNow(ctx, r, withAudio, progress) }
+
+    private suspend fun downloadNow(ctx: Context, r: Remote, withAudio: Boolean, progress: (String) -> Unit) {
         val dao = AppDatabase.getInstance(ctx).documentDao()
         var doc = dao.getDocumentByUuid(r.uuid)
         if (doc == null) {
@@ -184,7 +193,7 @@ object TabletLink {
     }
 
     /** Syncs the listening places of the books downloaded from the tablet. Returns the status line. */
-    suspend fun syncNow(ctx: Context): String = mutex.withLock {
+    suspend fun syncNow(ctx: Context): String = withContext(Dispatchers.IO) { mutex.withLock {
         val app = ctx.applicationContext
         link(app) ?: return@withLock ""
         busy.value = true
@@ -233,7 +242,7 @@ object TabletLink {
             setStatus(app, "The tablet is not reachable now (its server off, or another Wi‑Fi). This phone keeps its places and sends them next time.")
         } finally { busy.value = false }
         status.value
-    }
+    } }
 
     /**
      * Highlights and notes of the downloaded books, both ways, in one request. The phone's changes go on the
