@@ -986,7 +986,9 @@ fun ReadiumEpubReaderContent(
                         author = document.author.split(';').first().trim().takeUnless { it.equals("Unknown Author", ignoreCase = true) }.orEmpty(),
                         topMargin = effectiveTopMargin,
                         bottomMargin = effectiveBottomMargin,
-                        color = activeTheme.secondaryTextColor
+                        color = activeTheme.secondaryTextColor,
+                        // The app's running head (title and chapter) already sits at the top: don't repeat it.
+                        showHead = !com.example.ui.RunningHead.isOn(context)
                     )
                 }
 
@@ -1482,7 +1484,7 @@ internal fun runningHeadTitle(raw: String): String {
  * page's number in the bottom margin, under its column.
  */
 @Composable
-private fun BookPageFurniture(pages: List<BookPageInfo>, chapter: String, author: String, topMargin: androidx.compose.ui.unit.Dp, bottomMargin: androidx.compose.ui.unit.Dp, color: Color) {
+private fun BookPageFurniture(pages: List<BookPageInfo>, chapter: String, author: String, topMargin: androidx.compose.ui.unit.Dp, bottomMargin: androidx.compose.ui.unit.Dp, color: Color, showHead: Boolean = true) {
     val style = androidx.compose.ui.text.TextStyle(
         fontFamily = androidx.compose.ui.text.font.FontFamily.Serif, fontSize = 12.sp, letterSpacing = 0.4.sp,
         fontFeatureSettings = "smcp", color = color
@@ -1499,11 +1501,11 @@ private fun BookPageFurniture(pages: List<BookPageInfo>, chapter: String, author
                 .height(if (top) topMargin else bottomMargin),
             content = content
         )
-        if (!first.opening && !first.blank && chapter.isNotBlank()) Slot(first, true) {
+        if (showHead && !first.opening && !first.blank && chapter.isNotBlank()) Slot(first, true) {
             Text(chapter, style = style, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.CenterStart).fillMaxWidth(headWidth))
         }
-        if (!last.opening && !last.blank && author.isNotBlank()) Slot(last, true) {
+        if (showHead && !last.opening && !last.blank && author.isNotBlank()) Slot(last, true) {
             Text(author, style = style.copy(textAlign = TextAlign.End), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxWidth(headWidth))
         }

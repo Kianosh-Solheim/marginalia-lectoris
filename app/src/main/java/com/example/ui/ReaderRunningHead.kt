@@ -23,9 +23,13 @@ import java.util.Locale
 object RunningHead {
     private const val PREFS = "reader_view"
     private const val KEY = "running_head"
-    fun isOn(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY, true)
+    // Kept as state, so everything that depends on it (the book's own running head) follows a change at once.
+    private val cached = androidx.compose.runtime.mutableStateOf<Boolean?>(null)
+    fun isOn(context: Context): Boolean =
+        cached.value ?: context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY, true).also { cached.value = it }
     fun set(context: Context, on: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY, on).apply()
+        cached.value = on
     }
 }
 
