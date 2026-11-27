@@ -91,10 +91,13 @@ private fun snippetText(h: FindHit) = buildAnnotatedString {
  * The find bar at the bottom of the reader: type, Enter to search, ‹ › to go between matches,
  * "List" for all of them with their passages.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>, onJump: (FindHit) -> Unit, modifier: Modifier = Modifier,
             statusOf: (() -> SearchIndex.Status)? = null, doc: DocumentEntity? = null, totalPages: Int = 0,
-            chapterOf: (() -> Pair<String, IntRange>?)? = null, aiSearch: (suspend (String, String) -> List<FindHit>)? = null) {
+            chapterOf: (() -> Pair<String, IntRange>?)? = null, aiSearch: (suspend (String, String) -> List<FindHit>)? = null,
+            /** In the right-hand panel (as in the web view): options wrap, the matches are listed in the panel. */
+            panel: Boolean = false, onClose: (() -> Unit)? = null) {
     var aiMethod by remember { mutableStateOf("guided") }
     var aiNote by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
@@ -148,6 +151,84 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
         }
     }
 
+    fun setExact(v: Boolean) {
+        if (state.exact == v) return
+        state.exact = v
+        context.getSharedPreferences("search", 0).edit().putBoolean("exact", v).apply()
+        if (state.searched.isNotBlank()) run(false)
+    }
+    if (panel) {
+        // The Search panel: field and arrows, options that wrap, where the matches are, and the matches themselves.
+        Column(modifier.fillMaxHeight().background(Color.White).padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Search", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.Black, modifier = Modifier.weight(1f))
+                InkChip("?", showHelp, { showHelp = true }, minHeight = 40.dp)
+                InkChip("×", false, { if (onClose != null) onClose() else state.open = false }, minHeight = 40.dp)
+            }
+            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(Modifier.weight(1f).height(44.dp).border(1.dp, Color.Black).padding(horizontal = 8.dp), contentAlignment = Alignment.CenterStart) {
+                    BasicTextField(state.query, { state.query = it }, singleLine = true, textStyle = TextStyle(fontSize = 15.sp, color = Color.Black), cursorBrush = SolidColor(Color.Black),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { if (state.searched != state.query.trim()) run() else go(state.index + 1) }),
+                        modifier = Modifier.fillMaxWidth().focusRequester(focus))
+                    if (state.query.isEmpty()) Text("Search in this book…", color = Color(0xFF71717A), fontSize = 15.sp)
+                }
+                InkChip("‹", false, { go(state.index - 1) }, minHeight = 44.dp)
+                InkChip("›", false, { if (state.searched != state.query.trim()) run() else go(state.index + 1) }, minHeight = 44.dp)
+            }
+            androidx.compose.foundation.layout.FlowRow(
+                Modifier.padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                InkChip("Fuzzy", !state.exact, { setExact(false) }, minHeight = 36.dp)
+                InkChip("Exact", state.exact, { setExact(true) }, minHeight = 36.dp)
+                if (!state.exact) InkChip("Typos", state.typos, {
+                    state.typos = !state.typos
+                    context.getSharedPreferences("search", 0).edit().putBoolean("typos", state.typos).apply()
+                    if (state.searched.isNotBlank()) run(false)
+                }, minHeight = 36.dp)
+                InkChip("Whole words", state.whole, { state.whole = !state.whole; if (state.searched.isNotBlank()) run(false) }, minHeight = 36.dp)
+                if (chapterOf != null) InkChip("This chapter only", state.chapterOnly, {
+                    state.chapterOnly = !state.chapterOnly; state.hits = scoped(state.all.ifEmpty { state.hits }); state.index = -1
+                }, minHeight = 36.dp)
+                if (aiSearch != null) InkChip(if (state.busy && aiNote.isNotBlank()) "✦ Asking…" else "✦ Ask AI", false, {
+                    val q = state.query.trim()
+                    if (q.isNotEmpty() && !state.busy) {
+                        state.busy = true; aiNote = "AI"
+                        scope.launch {
+                            val r = runCatching { aiSearch(aiMethod, q) }
+                            state.all = r.getOrDefault(emptyList()); state.hits = scoped(state.all)
+                            state.searched = q; state.busy = false; state.index = -1
+                            aiNote = r.exceptionOrNull()?.message?.let { "✦ $it" } ?: "✦ AI: ${state.all.size} passages for “$q” (by what they are about)"
+                        }
+                    }
+                }, minHeight = 36.dp)
+            }
+            Box(Modifier.padding(top = 8.dp).fillMaxWidth()) { HitMapStrip(state.hits.map { it.page }, totalPages, state.index, { go(it) }) }
+            if (aiNote.isNotBlank() && !state.busy) Text(aiNote, fontSize = 12.sp, color = Color.Black, modifier = Modifier.padding(top = 4.dp))
+            Text(when {
+                state.busy -> if (aiNote.isNotBlank()) "Asking the AI… (10–40 s)" else "Searching…"
+                state.searched.isBlank() -> if (state.exact) "Exact: the words in this order, as one sentence." else "Fuzzy: the words close together, in any order. \"Quotes\" keep a phrase together."
+                state.hits.isEmpty() -> "Nothing found for “${state.searched}”."
+                else -> "${state.hits.size} match${if (state.hits.size == 1) "" else "es"}" + if (state.index >= 0) " · ${state.index + 1} of ${state.hits.size}" else ""
+            }, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Color(0xFF3F3F46), modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
+            LazyColumn(Modifier.weight(1f)) {
+                itemsIndexed(state.hits.take(1000)) { i, h ->
+                    Row(Modifier.fillMaxWidth().background(if (i == state.index) Color.Black else Color.White)
+                        .clickable { go(i) }.padding(horizontal = 6.dp, vertical = 8.dp), verticalAlignment = Alignment.Top) {
+                        val fg = if (i == state.index) Color.White else Color.Black
+                        Column(Modifier.weight(1f)) {
+                            Text(h.where, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = fg)
+                            Text(snippetText(h), fontSize = 14.sp, color = fg)
+                        }
+                        if (doc != null) InkChip("+ Note", false, { noteFor = h })
+                    }
+                    HorizontalDivider(color = Color(0xFFD4D4D8))
+                }
+            }
+        }
+    } else {
     Column(modifier.fillMaxWidth().background(Color.White).border(1.5.dp, Color.Black).padding(horizontal = 10.dp, vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Box(Modifier.weight(1f).border(1.dp, Color.Black).padding(horizontal = 8.dp, vertical = 8.dp)) {
@@ -156,12 +237,6 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
                     keyboardActions = KeyboardActions(onSearch = { if (state.searched != state.query.trim()) run() else go(state.index + 1) }),
                     modifier = Modifier.fillMaxWidth().focusRequester(focus))
                 if (state.query.isEmpty()) Text("Search in this book…", color = Color(0xFF9CA3AF), fontSize = 16.sp)
-            }
-            fun setExact(v: Boolean) {
-                if (state.exact == v) return
-                state.exact = v
-                context.getSharedPreferences("search", 0).edit().putBoolean("exact", v).apply()
-                if (state.searched.isNotBlank()) run(false)
             }
             InkChip("Fuzzy", !state.exact, { setExact(false) })
             InkChip("Exact", state.exact, { setExact(true) })
@@ -174,7 +249,7 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
             InkChip("‹", false, { go(state.index - 1) })
             InkChip("›", false, { if (state.searched != state.query.trim()) run() else go(state.index + 1) })
             InkChip("List", listOpen, { listOpen = true })
-            InkChip("×", false, { state.open = false })
+            InkChip("×", false, { if (onClose != null) onClose() else state.open = false })
         }
         // This chapter only · the hit map (where the matches are in the book) · help
         Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -228,6 +303,8 @@ fun FindBar(state: FindState, search: suspend (String, Boolean) -> List<FindHit>
             state.hits.isEmpty() -> "Nothing found for “${state.searched}”."
             else -> "${state.hits.size} match${if (state.hits.size == 1) "" else "es"}" + if (state.index >= 0) " · ${state.index + 1} of ${state.hits.size} · ${state.hits[state.index].where}" else ""
         }, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Color(0xFF52525B), modifier = Modifier.padding(top = 4.dp))
+    }
+
     }
 
     if (listOpen) {
