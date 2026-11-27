@@ -17,6 +17,7 @@ import http.cookiejar
 import json
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -27,6 +28,84 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from align import align  # noqa: E402
+
+
+def _nvidia_libraries():
+    """Windows + NVIDIA build: make NVIDIA's cuBLAS and cuDNN (shipped with the app, or pip-installed) findable."""
+    if os.name != "nt":
+        return
+    dirs = []
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        dirs.append(os.path.join(base, "nvidia_dlls"))
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("nvidia")
+        for loc in (spec.submodule_search_locations if spec else []) or []:
+            for sub in ("cublas", "cudnn", "cuda_runtime", "cuda_nvrtc"):
+                dirs.append(os.path.join(loc, sub, "bin"))
+    except Exception:
+        pass
+    for d in dirs:
+        if os.path.isdir(d):
+            try:
+                os.add_dll_directory(d)
+            except Exception:
+                pass
+            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+
+
+_nvidia_libraries()
+
+
+def _self_command(arg):
+    if getattr(sys, "frozen", False):
+        return [sys.executable, arg]
+    return [sys.executable, os.path.abspath(__file__), arg]
+
+
+def _apple_silicon():
+    import platform
+    return platform.system() == "Darwin" and platform.machine() == "arm64"
+
+
+def gpu_works(log=lambda m: None):
+    """
+    The graphics device speech recognition really runs on here, as (device, compute_type), or None for the
+    processor: an NVIDIA card (cuda) or Apple Silicon graphics (mps, experimental). Tried in a separate process,
+    as a missing library can end a process outright instead of raising an error, and this app must not stop.
+    """
+    if _apple_silicon():
+        device = "mps"
+    else:
+        try:
+            import ctranslate2
+            if ctranslate2.get_cuda_device_count() <= 0:
+                return None
+        except Exception:
+            return None
+        device = "cuda"
+    log("Trying the graphics card…" if device == "cuda" else "Trying the Mac's graphics (Apple Silicon)…")
+    try:
+        r = subprocess.run(_self_command("--gpu-probe") + [device], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=900,
+                           creationflags=0x08000000 if os.name == "nt" else 0)  # no console window on Windows
+    except Exception:
+        return None
+    return {0: (device, "float16"), 10: (device, "float32")}.get(r.returncode)
+
+
+def gpu_probe(device):
+    """--gpu-probe cuda|mps: a small model on that device, a second of silence. Exit 0 (float16), 10 (float32) or 3."""
+    import numpy as np
+    from faster_whisper import WhisperModel
+    for code, ct in ((0, "float16"), (10, "float32")):
+        try:
+            w = WhisperModel("tiny", device=device, compute_type=ct)
+            list(w.transcribe(np.zeros(16000, dtype="float32"))[0])
+            os._exit(code)
+        except Exception:
+            continue
+    os._exit(3)
 
 APP = "Marginalia Companion"
 VERSION = "1.0"
@@ -147,15 +226,16 @@ class Speech:
         self.device = "cpu"
         log(f"Loading the speech model {spec['model']} (downloaded once, then kept on this computer)…")
         try:
-            import ctranslate2
-            if ctranslate2.get_cuda_device_count() > 0:
-                self.model = WhisperModel(spec["model"], device="cuda", compute_type="float16")
-                self.device = "cuda"
-            else:
-                raise RuntimeError("no CUDA")
+            g = gpu_works(log)
+            if not g:
+                raise RuntimeError("no usable graphics device")
+            self.model = WhisperModel(spec["model"], device=g[0], compute_type=g[1])
+            self.device = g[0]
         except Exception:
             self.model = WhisperModel(spec["model"], device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 4)
-        self.engine = f"faster-whisper on a computer ({'graphics card' if self.device == 'cuda' else 'processor'}, {spec['model']})"
+        log({"cuda": "Running on the graphics card.", "mps": "Running on the Mac's graphics (Apple Silicon)."}.get(self.device, f"Running on the processor ({os.cpu_count() or '?'} threads)."))
+        where = {"cuda": "graphics card", "mps": "Apple Silicon graphics"}.get(self.device, "processor")
+        self.engine = f"faster-whisper on a computer ({where}, {spec['model']})"
 
     def transcribe(self, pcm_float32, offset_ms, stop):
         """Segments ({s, e, t} in book time) for one window of 16 kHz mono audio."""
@@ -535,10 +615,14 @@ def self_test():
     step("4/4 speech engine: transcribing 2 s of silence")
     segs, _ = w.transcribe(np.zeros(16000 * 2, dtype="float32"))
     list(segs)
+    g = gpu_works()
+    step("5/5 graphics: " + (f"{g[0]} works ({g[1]})" if g else "none usable, the processor is used"))
     step("self-test ok")
 
 
 if __name__ == "__main__":
+    if "--gpu-probe" in sys.argv:
+        gpu_probe(sys.argv[sys.argv.index("--gpu-probe") + 1] if len(sys.argv) > sys.argv.index("--gpu-probe") + 1 else "cuda")
     if "--self-test" in sys.argv:
         self_test()
         # The speech engine leaves background threads (on macOS) that keep the process alive: end it here.
