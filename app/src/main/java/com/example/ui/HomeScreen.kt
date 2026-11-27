@@ -241,9 +241,13 @@ fun HomeScreen(
         drawerState = drawerState,
         scrimColor = Color.Transparent,
         drawerContent = {
+            // Never taller than the window (on some phones the sheet ran past the bottom, hiding Settings).
+            val windowHeight = with(androidx.compose.ui.platform.LocalDensity.current) { androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height.toDp() }
+            val phone = androidx.compose.ui.platform.LocalConfiguration.current.smallestScreenWidthDp < 600
             ModalDrawerSheet(
                 modifier = Modifier
                     .width(284.dp)
+                    .then(if (windowHeight > 0.dp) Modifier.heightIn(max = windowHeight) else Modifier)
                     .border(width = 2.dp, color = Color.Black),
                 drawerContainerColor = Color.White,
                 drawerTonalElevation = 0.dp
@@ -269,7 +273,16 @@ fun HomeScreen(
                             ),
                             color = Color.Black
                         )
-                        Surface(
+                        // On a phone: Settings at the top, where it is always in reach.
+                        if (phone) Surface(
+                            onClick = { coroutineScope.launch { drawerState.close() }; onOpenSettings() },
+                            color = Color.White,
+                            shape = RoundedCornerShape(0.dp),
+                            border = BorderStroke(1.dp, Color.Black),
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.Black) }
+                        } else Surface(
                             color = Color.White,
                             shape = RoundedCornerShape(4.dp),
                             border = BorderStroke(1.dp, Color.Black)
