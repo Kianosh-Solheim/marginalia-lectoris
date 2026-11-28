@@ -107,10 +107,12 @@ def _gpu_works(log=lambda m: None):
         device = "cuda"
     log("Trying the graphics card…" if device == "cuda" else "Trying the Mac's graphics (Apple Silicon)…")
     try:
-        r = subprocess.run(_self_command("--gpu-probe") + [device], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300,
-                           creationflags=0x08000000 if os.name == "nt" else 0)  # no console window on Windows
-    except Exception:
+        r = subprocess.run(_self_command("--gpu-probe") + [device], timeout=300,
+                           creationflags=0x08000000 if os.name == "nt" else 0)  # no console window; its errors go to the log
+    except Exception as e:
+        print(f"graphics check: {e}", file=sys.stderr)
         return None
+    print(f"graphics check ({device}): exit code {r.returncode}", file=sys.stderr)
     return {0: (device, "float16"), 10: (device, "float32")}.get(r.returncode)
 
 
@@ -124,11 +126,13 @@ def gpu_probe(device):
             list(w.transcribe(np.zeros(16000, dtype="float32"))[0])
             os._exit(code)
         except Exception:
+            traceback.print_exc()
+            sys.stderr.flush()
             continue
     os._exit(3)
 
 APP = "Marginalia Companion"
-VERSION = "1.2"
+VERSION = "1.2.1"
 WINDOW_MS = 300_000  # transcribe in five-minute windows, as the web view does (and resume at a window)
 DEFAULT_ADDRESS = "http://marginalia.local:8080"
 
@@ -296,6 +300,47 @@ class Tablet:
 
 # ------------------------------------------------------------------ speech
 
+MODEL_MB = {"base.en": 145, "small.en": 484, "small": 484, "medium": 1530, "large-v3-turbo": 1620, "tiny": 75}
+
+
+def ensure_model(size, log=lambda m: None):
+    """
+    The speech model's folder, downloaded the first time (with progress) and checked: a download that was
+    interrupted leaves a folder without model.bin, which the speech engine would keep opening; it is removed
+    and the model downloaded again.
+    """
+    import shutil
+    from faster_whisper.utils import _MODELS, download_model
+    from huggingface_hub import constants
+    repo = _MODELS.get(size, size)
+    cache = os.path.join(constants.HF_HUB_CACHE, "models--" + repo.replace("/", "--"))
+    total = MODEL_MB.get(size)
+    for attempt in range(2):
+        done = threading.Event()
+
+        def watch():
+            while not done.wait(2):
+                got = 0
+                for d, _, fs in os.walk(cache):
+                    for f in fs:
+                        try:
+                            got += os.path.getsize(os.path.join(d, f))
+                        except OSError:
+                            pass
+                if got > 1_000_000:
+                    log(f"Downloading the speech model ({size}, once): {got // 1_000_000} of {f'about {total}' if total else '?'} MB")
+        threading.Thread(target=watch, daemon=True).start()
+        try:
+            path = download_model(size)
+        finally:
+            done.set()
+        if os.path.isfile(os.path.join(path, "model.bin")):
+            return path
+        print(f"speech model {size}: no model.bin in {path}; removing the cache and downloading again", file=sys.stderr)
+        shutil.rmtree(cache, ignore_errors=True)
+    raise RuntimeError(f"The speech model ({size}) could not be downloaded. Check the internet connection and press Try again.")
+
+
 class Speech:
     """faster-whisper, on the graphics card when there is a CUDA one, else on every processor core."""
 
@@ -306,14 +351,16 @@ class Speech:
         self.key = key
         self.device = "cpu"
         log(f"Loading the speech model {spec['model']} (downloaded once, then kept on this computer)…")
+        path = ensure_model(spec["model"], log)
+        log("Loading the speech model…")
         try:
             g = gpu_works(log)
             if not g:
                 raise RuntimeError("no usable graphics device")
-            self.model = WhisperModel(spec["model"], device=g[0], compute_type=g[1])
+            self.model = WhisperModel(path, device=g[0], compute_type=g[1])
             self.device = g[0]
         except Exception:
-            self.model = WhisperModel(spec["model"], device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 4)
+            self.model = WhisperModel(path, device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 4)
         log({"cuda": "Running on the graphics card.", "mps": "Running on the Mac's graphics (Apple Silicon)."}.get(self.device, f"Running on the processor ({os.cpu_count() or '?'} threads)."))
         where = {"cuda": "graphics card", "mps": "Apple Silicon graphics"}.get(self.device, "processor")
         self.engine = f"faster-whisper on a computer ({where}, {spec['model']})"
