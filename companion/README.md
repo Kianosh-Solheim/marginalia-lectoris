@@ -8,24 +8,28 @@ slow mode and keeps the whole model and audio in that tab's memory, and the tab 
 (faster-whisper) runs natively, on every processor core (or a CUDA graphics card) and with the computer's own
 memory: typically several times faster, and it does not crash the browser.
 
-## Two ways to use it
+## How it works
 
-**From the tablet, over Wi‑Fi** (nothing to move by hand)
-1. On the tablet, turn on the web view: Settings → *Sync & web view* → *Library in the browser*. Note the
-   address and the PIN.
-2. In the companion: enter the address (the same one you open in the browser, e.g. `http://marginalia.local:8080`)
-   and the PIN, press **Connect**, and pick the book.
-3. Choose a speech model and press **Start**. The audio comes from the tablet five minutes at a time, and the
-   transcript is saved on the tablet as it grows: you can press **Stop**, or close the window, and continue
-   later (also from the web view).
-4. At the end the sentences are matched and the map is saved in the book's folder on the tablet, the same way as
-   the web view does it. The tablet then follows the audio sentence by sentence on its own.
+The companion lives in the **tray** by the clock (Windows, Linux Mint) or the **menu bar** (macOS) and starts with
+the computer (turn that off in its menu). Its menu shows whether the tablet is on the same Wi‑Fi and what it is
+working on; **Open the library** opens its window.
 
-**From files on this computer** (when the computer has the audiobook files too, e.g. through Syncthing)
-1. Open the *From files on this computer* tab, add the audiobook's files in reading order and press **Start**.
-2. You get a transcript file (`Transcript - <name>.json`), saved as it goes.
-3. In the web view: the book → Audiobook → **Sync with the text…** → **Import transcript…**. The sentences are
-   then matched in a few seconds and the map is saved on the tablet.
+1. **Pair once:** on the tablet, Settings → *Library in the browser* (on) → *Pair a phone*. In the companion:
+   Settings → the tablet's address and the 8‑letter code → **Pair**. The computer then appears among the tablet's
+   paired phones (remove it there to unpair).
+2. **The library:** every book on the tablet, with its audiobook and sync map. The companion keeps a copy of the
+   list and of each book's text, refreshed whenever the tablet is on the Wi‑Fi, so it also works away from it.
+3. **Make a sync map:**
+   - *From the tablet's audiobook:* **Make the sync map from the tablet's audiobook**. The audio comes from the
+     tablet five minutes at a time (it needs the tablet on the Wi‑Fi; a stopped job continues).
+   - *From audio files on this computer:* **Add audiobook files from this computer…**, put them in reading order,
+     pick the speech model. This works away from the tablet too.
+4. **Sending:** the next time the tablet is on the same Wi‑Fi, the map goes to the book's folder there, with the
+   audio files if the tablet doesn't have them yet (it checks: files of exactly the same size are not sent again).
+   If the tablet has *other* audio for the book, the companion asks before replacing it.
+
+Close the window whenever you like: the work goes on in the tray. **Pause transcribing** in the menu stops after
+the current five minutes; **Quit** closes it altogether (what is done is kept).
 
 ## Speech models
 
@@ -44,10 +48,9 @@ Each model is downloaded once (75 MB to 1.6 GB) and kept on the computer.
 
 **Ready-made builds:** Releases → *Marginalia Companion* → the file for your computer. Unpack it and open
 *Marginalia Companion*.
-- Windows with an NVIDIA graphics card (e.g. RTX 3070): take **Marginalia-Companion-windows-nvidia**. It carries
-  NVIDIA's libraries (about 1 GB more) and does the listening on the card, many times faster. At the start it
-  tries the card on a second of silence; if that fails, it uses the processor instead, so it never stops.
-  The window says which one it runs on.
+- Windows with an NVIDIA graphics card (e.g. RTX 3070): the companion notices the card and offers to download
+  its support from NVIDIA (about 1 GB, once; kept across updates). Then it does the listening on the card, many
+  times faster. It tries the card first on a second of silence; if that fails, it uses the processor instead.
 - Mac with Apple Silicon (M1 and later): the Mac's graphics are tried the same way (experimental in the speech
   engine, often about twice as fast); otherwise every processor core is used. Intel Macs: not built yet.
 - Windows may warn about an unknown publisher: *More info* → *Run anyway*.
