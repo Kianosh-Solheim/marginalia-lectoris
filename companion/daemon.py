@@ -22,6 +22,8 @@ import store
 import autostart
 
 PORT = 47815
+MODEL_MSG = ("Loading the speech model. The first time, it is downloaded (75 MB to 1.6 GB, depending on the model), "
+             "which can take a few minutes; then it is kept on this computer.")
 TEXT_KINDS = ("EPUB", "PDF")
 
 
@@ -331,7 +333,7 @@ class Daemon:
             t = self.tablet(3)
             lib = {d["uuid"]: d for d in (store.read("library.json", {}) or {}).get("docs", [])}
             doc = lib.get(j["uuid"]) or {"id": j["docId"]}
-            self.set_job(j, "transcribing", msg="Loading the speech model…")
+            self.set_job(j, "transcribing", msg=MODEL_MSG)
 
             def prog(frac, msg):
                 self.set_job(j, "transcribing" if frac < 1 else "matching", frac, msg)
@@ -358,7 +360,7 @@ class Daemon:
         total = sum(durations) or 1
         tr = store.read(trp) or {"modelKey": model, "segments": [], "doneMs": 0}
         if tr.get("doneMs", 0) < total - 1000:
-            self.set_job(j, "transcribing", tr.get("doneMs", 0) / total, "Loading the speech model…")
+            self.set_job(j, "transcribing", tr.get("doneMs", 0) / total, MODEL_MSG)
             speech = self.speech_for(model)
             tr["engine"], tr["language"] = speech.engine, core.MODELS[model]["lang"] or "auto"
             began, at_start = time.time(), tr.get("doneMs", 0)

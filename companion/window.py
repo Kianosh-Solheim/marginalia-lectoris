@@ -108,9 +108,9 @@ def run():
     tree.heading("#0", text="Book", anchor="w")
     tree.heading("audio", text="Audiobook", anchor="w")
     tree.heading("map", text="Sync map", anchor="w")
-    tree.column("#0", width=330, stretch=True)
-    tree.column("audio", width=170, stretch=False)
-    tree.column("map", width=210, stretch=False)
+    tree.column("#0", width=220, minwidth=160, stretch=True)
+    tree.column("audio", width=150, minwidth=110, stretch=False)
+    tree.column("map", width=200, minwidth=140, stretch=False)
     sb = ttk.Scrollbar(mid, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=sb.set)
     sb.pack(side="right", fill="y")
@@ -213,7 +213,7 @@ def run():
             when = time.strftime("%H:%M", time.localtime(s.get("lastSync"))) if s.get("lastSync") else "the last time"
             msg = (f"The tablet is out of reach, so this is the library as it was at {when}. You can still add audiobooks and transcribe them. "
                    "The maps, and any audio the tablet doesn't have, are sent the next time it is on the same Wi-Fi.")
-        elif state.get("gpu_offer"):
+        elif state.get("gpu_offer") and not (s.get("gpu") or {}).get("done") and not state.get("gpu_asked"):
             msg, btn = "This computer has an NVIDIA graphics card. Download its support (about 1 GB, once) to transcribe many times faster.", ("Download", download_gpu)
         if msg:
             notice_text.configure(text=msg)
@@ -438,6 +438,7 @@ def run():
     def download_gpu():
         """The tray app downloads it (it goes on when this window is closed); its progress comes back in status.json."""
         state["gpu_offer"] = False
+        state["gpu_asked"] = True
         if not daemon.tell("gpu-download"):
             notice_text.configure(text="The tray app is not running. Start Marginalia Companion again and retry.")
         render(True)
