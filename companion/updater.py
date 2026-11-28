@@ -58,6 +58,9 @@ def newer(current, timeout=10):
 
 
 def asset_for(variant, assets):
+    """The file to update this build with: on Windows the installer when there is one, else the build's own archive."""
+    if variant.startswith("windows") and "Marginalia-Companion-windows-setup.exe" in assets:
+        return "Marginalia-Companion-windows-setup.exe", assets["Marginalia-Companion-windows-setup.exe"]
     for name, url in assets.items():
         stem = name.split(".")[0]
         if stem == f"Marginalia-Companion-{variant}":
@@ -94,6 +97,8 @@ def download_and_stage(name, url, progress=lambda done, total: None):
             out.write(chunk)
             done += len(chunk)
             progress(done, total)
+    if name.endswith(".exe"):
+        return archive  # the Windows installer: run as it is
     unpacked = os.path.join(work, "new")
     os.makedirs(unpacked)
     if name.endswith(".zip"):
@@ -112,39 +117,49 @@ def download_and_stage(name, url, progress=lambda done, total: None):
     return entries[0]
 
 
-def swap_and_restart(new_path):
+def swap_and_restart(new_path, wait_pids):
     """
-    Starts a small script that waits for this app to close, puts [new_path] in place of the installed app, and
-    opens the new version. The caller then closes the app.
+    Starts a small helper that waits until every process in [wait_pids] has closed (the window and the tray app,
+    which hold the app's files), puts the new version in place (on Windows by running its installer quietly),
+    and opens the app again, also when the update could not be put in place. Start it before asking the tray
+    app to quit: closing the tray app also closes the window.
     """
     target = install_dir()
-    pid = os.getpid()
+    pids = [int(p) for p in wait_pids if p]
+    work = os.path.dirname(new_path) if new_path.endswith(".exe") else os.path.dirname(os.path.dirname(new_path))
     if os.name == "nt":
-        exe = os.path.join(target, os.path.basename(sys.executable))
+        old_exe = os.path.join(target, os.path.basename(sys.executable))
         script = os.path.join(tempfile.gettempdir(), "marginalia-companion-update.cmd")
-        with open(script, "w", encoding="utf-8") as f:
-            f.write("@echo off\r\n"
-                    f":wait\r\ntasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n"
-                    f"robocopy \"{new_path}\" \"{target}\" /MIR /R:5 /W:1 /NFL /NDL /NJH /NJS >nul\r\n"
-                    f"start \"\" \"{exe}\"\r\n"
-                    f"rmdir /S /Q \"{os.path.dirname(os.path.dirname(new_path))}\"\r\n")
-        subprocess.Popen(["cmd", "/c", script], creationflags=0x08000000 | 0x00000008)  # no window, detached
+        lines = ["@echo off", "chcp 65001 >nul", ":wait", "set alive=0"]
+        for p in pids:
+            lines.append(f'tasklist /FI "PID eq {p}" 2>nul | find "{p}" >nul && set alive=1')
+        lines += ["if %alive%==1 (ping -n 2 127.0.0.1 >nul & goto wait)", "ping -n 3 127.0.0.1 >nul"]
+        if new_path.endswith(".exe"):
+            installed = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Marginalia Companion", "Marginalia Companion.exe")
+            lines += [f'"{new_path}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS',
+                      f'set "EXE={installed}"', f'if not exist "%EXE%" set "EXE={old_exe}"']
+        else:
+            lines += [f'robocopy "{new_path}" "{target}" /MIR /R:10 /W:1 /NFL /NDL /NJH /NJS >nul', f'set "EXE={old_exe}"']
+        lines += ['start "" "%EXE%"', f'rmdir /S /Q "{work}"', '(goto) 2>nul & del "%~f0"']
+        with open(script, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write("\n".join(lines) + "\n")
+        subprocess.Popen(["cmd", "/c", script], creationflags=0x08000000 | 0x00000200, close_fds=True)  # no window, own group
         return
     script = os.path.join(tempfile.gettempdir(), "marginalia-companion-update.sh")
     if sys.platform == "darwin":
         relaunch = f'xattr -dr com.apple.quarantine "{target}" 2>/dev/null; open "{target}"'
     else:
         relaunch = f'nohup "{os.path.join(target, os.path.basename(sys.executable))}" >/dev/null 2>&1 &'
+    wait = "".join(f"while kill -0 {p} 2>/dev/null; do sleep 1; done\n" for p in pids)
     with open(script, "w") as f:
-        f.write("#!/bin/sh\n"
-                f"while kill -0 {pid} 2>/dev/null; do sleep 1; done\n"
+        f.write("#!/bin/sh\n" + wait + "sleep 1\n"
                 f'rm -rf "{target}.old" && mv "{target}" "{target}.old" && mv "{new_path}" "{target}" && rm -rf "{target}.old" '
                 f'|| {{ [ -e "{target}" ] || mv "{target}.old" "{target}"; }}\n'
                 f"{relaunch}\n"
-                f'rm -rf "{os.path.dirname(os.path.dirname(new_path))}" "$0"\n')
+                f'rm -rf "{work}" "$0"\n')
     os.chmod(script, 0o755)
     subprocess.Popen(["/bin/sh", script], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def cleanup_failed(path):
-    shutil.rmtree(os.path.dirname(os.path.dirname(path)), ignore_errors=True)
+    shutil.rmtree(os.path.dirname(path) if path.endswith(".exe") else os.path.dirname(os.path.dirname(path)), ignore_errors=True)

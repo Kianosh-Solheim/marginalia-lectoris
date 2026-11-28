@@ -548,6 +548,8 @@ def run(open_window=True):
             traceback.print_exc()
         s["autostart"] = True
         store.save_settings(s)
+    autostart.refresh()
+    autostart.linux_menu_entry()
     for target in (d.net_loop, d.job_loop, lambda: d.serve(srv)):
         threading.Thread(target=target, daemon=True).start()
     d.publish()
