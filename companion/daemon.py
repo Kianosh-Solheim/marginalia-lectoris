@@ -322,10 +322,20 @@ class Daemon:
                 return j
         return None
 
-    def speech_for(self, model):
+    def speech_for(self, model, j=None):
         if not self.speech or self.speech.key != model:
-            self.speech = core.Speech(model, lambda m: None)
+            self.speech = core.Speech(model, self.job_log(j))
         return self.speech
+
+    def job_log(self, j):
+        """Lines from the speech engine (model download progress) shown on the job, at most every 2 s."""
+        last = [0.0]
+
+        def log(msg):
+            if j is not None and time.time() - last[0] > 2:
+                last[0] = time.time()
+                self.set_job(j, "transcribing", msg=msg)
+        return log
 
     def run_job(self, j):
         model = j.get("model") or "pc_en_exact"
@@ -337,7 +347,7 @@ class Daemon:
 
             def prog(frac, msg):
                 self.set_job(j, "transcribing" if frac < 1 else "matching", frac, msg)
-            ok = core.job_tablet(t, doc, model, False, self.stop_job, lambda m: None, prog)
+            ok = core.job_tablet(t, doc, model, False, self.stop_job, self.job_log(j), prog)
             if ok:
                 self.set_job(j, "done", 1.0, j.get("msg") or "Synced.")
                 try:
@@ -361,7 +371,7 @@ class Daemon:
         tr = store.read(trp) or {"modelKey": model, "segments": [], "doneMs": 0}
         if tr.get("doneMs", 0) < total - 1000:
             self.set_job(j, "transcribing", tr.get("doneMs", 0) / total, MODEL_MSG)
-            speech = self.speech_for(model)
+            speech = self.speech_for(model, j)
             tr["engine"], tr["language"] = speech.engine, core.MODELS[model]["lang"] or "auto"
             began, at_start = time.time(), tr.get("doneMs", 0)
             for p, g0 in zip(j["files"], starts):
