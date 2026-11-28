@@ -199,6 +199,13 @@ def run():
             msg, btn = "Pair this computer with your tablet to see its library: on the tablet, Settings → Library in the browser → Pair a phone; then type the code here.", ("Pair with the tablet", open_settings)
         elif s.get("known") is False:
             msg, btn = "The tablet no longer knows this computer (it was removed there). Pair it again.", ("Pair again", open_settings)
+        elif (s.get("gpu") or {}).get("busy") or ((s.get("gpu") or {}).get("msg") and not state.get("gpu_seen")):
+            g = s["gpu"]
+            msg = g.get("msg", "")
+            if g.get("error"):
+                btn = ("Try again", download_gpu)
+            elif not g.get("busy"):
+                btn = ("OK", lambda: (state.update(gpu_seen=True), render(True)))
         elif state["update"]:
             rel = state["update"]
             msg, btn = f"Version {rel['version']} is ready (you have {info_build.get('version', core.VERSION)}). It installs itself and starts again; your work is kept.", ("Update and restart", lambda: do_update(rel))
@@ -211,7 +218,7 @@ def run():
         if msg:
             notice_text.configure(text=msg)
             if btn:
-                notice_btn.configure(text=btn[0], command=btn[1])
+                notice_btn.configure(text=btn[0], command=btn[1], state="normal")
                 notice_btn.pack(side="right", padx=(12, 0))
             else:
                 notice_btn.pack_forget()
@@ -419,27 +426,21 @@ def run():
                         variable=auto, command=lambda: autostart.set_enabled(auto.get())).pack(anchor="w", pady=4)
         import nvidia
         if nvidia.card_present():
-            ttk.Label(fr, text="Graphics card: " + ("support installed" if nvidia.installed() else "NVIDIA card found, support not downloaded"),
+            gs = (status().get("gpu") or {})
+            ttk.Label(fr, text="Graphics card: " + ("downloading its support now…" if gs.get("busy") else "support installed" if nvidia.installed() else "NVIDIA card found, support not downloaded"),
                       style="Muted.TLabel").pack(anchor="w", pady=(8, 2))
-            if not nvidia.installed():
+            if not nvidia.installed() and not gs.get("busy"):
                 ttk.Button(fr, text="Download graphics-card support (about 1 GB, once)", command=lambda: (dlg.destroy(), download_gpu())).pack(anchor="w")
         tk.Frame(fr, height=1, bg=RULE).pack(fill="x", pady=10)
         ttk.Label(fr, text=f"Version {info_build.get('version', core.VERSION)} ({info_build.get('variant', 'source')})", style="Muted.TLabel").pack(anchor="w")
         ttk.Button(fr, text="Close", command=dlg.destroy).pack(anchor="e", pady=(12, 0))
 
     def download_gpu():
-        import nvidia
+        """The tray app downloads it (it goes on when this window is closed); its progress comes back in status.json."""
         state["gpu_offer"] = False
-        notice_btn.configure(state="disabled")
-
-        def work():
-            try:
-                nvidia.download(lambda m: root.after(0, lambda: notice_text.configure(text=m)))
-                root.after(0, lambda: notice_text.configure(text="Graphics-card support is installed. The next transcription runs on the card."))
-            except Exception as e:
-                err = str(e)
-                root.after(0, lambda: notice_text.configure(text=f"The download did not finish ({err}). Try again from Settings."))
-        threading.Thread(target=work, daemon=True).start()
+        if not daemon.tell("gpu-download"):
+            notice_text.configure(text="The tray app is not running. Start Marginalia Companion again and retry.")
+        render(True)
 
     def do_update(rel):
         variant = info_build.get("variant", "source")
