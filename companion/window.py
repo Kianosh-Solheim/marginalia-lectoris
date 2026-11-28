@@ -386,6 +386,8 @@ def run():
             time.sleep(0.5)
         for rel in (os.path.join("jobs", j["id"] + ".json"), os.path.join("transcripts", j["id"] + ".json"), os.path.join("maps", j["id"] + ".json")):
             store.remove(rel)
+        import shutil
+        shutil.rmtree(os.path.join(store.DIR, "audio", j["id"]), ignore_errors=True)  # a copy of the tablet's audiobook
         daemon.tell("wake")
         render(True)
 
@@ -431,6 +433,14 @@ def run():
             threading.Thread(target=work, daemon=True).start()
         ttk.Button(fr, text="Pair", style="Fill.TButton", command=pair).pack(anchor="w", pady=(6, 14))
         tk.Frame(fr, height=1, bg=RULE).pack(fill="x", pady=6)
+        copy_audio = tk.BooleanVar(value=s.get("copyAudio", True))
+
+        def set_copy():
+            s2 = store.settings()
+            s2["copyAudio"] = copy_audio.get()
+            store.save_settings(s2)
+        ttk.Checkbutton(fr, text="Copy the tablet's audiobook to this computer before transcribing\n(goes on when the tablet leaves; the copy is removed once the map is sent)",
+                        variable=copy_audio, command=set_copy).pack(anchor="w", pady=4)
         auto = tk.BooleanVar(value=autostart.enabled())
         ttk.Checkbutton(fr, text={"nt": "Start with Windows"}.get(os.name, "Open at login" if sys.platform == "darwin" else "Start with the computer"),
                         variable=auto, command=lambda: autostart.set_enabled(auto.get())).pack(anchor="w", pady=4)

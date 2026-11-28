@@ -274,7 +274,12 @@ class Daemon:
             m = _remap(m, j.get("localStarts"), starts)
             m["durationMs"] = ab.get("durationMs") or m.get("durationMs")
         t.save_map(doc["id"], m)
-        self.set_job(j, "done", 1.0, f"Synced: {round(m.get('coverage', 0) * 100)}% of the sentences have a place in the audio.")
+        note = ""
+        if j.get("copied"):
+            import shutil
+            shutil.rmtree(self.copy_dir(j), ignore_errors=True)
+            note = " The copy on this computer is removed."
+        self.set_job(j, "done", 1.0, f"Synced: {round(m.get('coverage', 0) * 100)}% of the sentences have a place in the audio.{note}")
         try:
             self.refresh_library(t)
         except Exception:
@@ -311,7 +316,7 @@ class Daemon:
         for j in store.jobs():
             st = j.get("state")
             if st in ("queued", "transcribing", "matching"):
-                if j.get("source") == "tablet" and not self.reachable:
+                if j.get("source") == "tablet" and not self.reachable and not j.get("ab"):
                     if st != "waiting":
                         self.set_job(j, "waiting", msg="Starts when the tablet is on this Wi-Fi.")
                     continue
@@ -339,6 +344,8 @@ class Daemon:
 
     def run_job(self, j):
         model = j.get("model") or "pc_en_exact"
+        if j.get("source") == "tablet" and store.settings().get("copyAudio", True) and not j.get("stream"):
+            return self.run_copy_job(j, model)
         if j.get("source") == "tablet":
             t = self.tablet(3)
             lib = {d["uuid"]: d for d in (store.read("library.json", {}) or {}).get("docs", [])}
@@ -356,6 +363,124 @@ class Daemon:
                     pass
             return
         self.run_files_job(j, model)
+
+    # ------------------------------------------------------------------ the tablet's audiobook, copied here first
+
+    def copy_dir(self, j):
+        return os.path.dirname(store.path("audio", j["id"], "x"))
+
+    def run_copy_job(self, j, model):
+        """
+        Copies the tablet's audiobook here file by file while transcribing what has arrived, so the work goes on
+        when the tablet leaves. Copying continues (resuming part files) when it is back. Only the map is sent.
+        """
+        import shutil
+        if not j.get("ab"):
+            lib = {d["uuid"]: d for d in (store.read("library.json", {}) or {}).get("docs", [])}
+            doc = lib.get(j["uuid"]) or {"id": j["docId"]}
+            ab = self.tablet(3).audiobook(doc["id"])  # Unreachable here: the job waits for the tablet
+            if not ab.get("exists"):
+                return self.set_job(j, "error", msg="This book has no audiobook on the tablet.")
+            need = sum(f.get("size", 0) for f in ab["files"])
+            free = shutil.disk_usage(self.copy_dir(j)).free
+            if free < need * 1.1 + 500_000_000:
+                j["stream"] = True
+                self.set_job(j, msg=f"Not enough room to copy the audiobook ({need // 1_000_000} MB): streaming it from the tablet instead.")
+                return self.run_job(j)
+            j["docId"] = doc["id"]
+            j["ab"] = {"files": [{k: f.get(k) for k in ("index", "name", "size", "durationMs", "startMs")} for f in ab["files"]],
+                       "durationMs": ab.get("durationMs") or sum(f["durationMs"] for f in ab["files"])}
+            store.save_job(j)
+        files = j["ab"]["files"]
+        total = j["ab"]["durationMs"] or 1
+        d = self.copy_dir(j)
+        paths = [os.path.join(d, f"{i:03d}.{(f.get('name') or 'a.mp3').rsplit('.', 1)[-1]}") for i, f in enumerate(files)]
+        copy = {"msg": "", "done": [os.path.isfile(p) for p in paths], "over": False}
+
+        def copier():
+            t = self.tablet(1)
+            for i, (f, p) in enumerate(zip(files, paths)):
+                while not copy["done"][i]:
+                    if self.stop_job.is_set() or self.quit.is_set():
+                        copy["over"] = True
+                        return
+                    try:
+                        def prog(done, size, i=i):
+                            copy["msg"] = f"copying file {i + 1} of {len(files)}: {done // 1_000_000} of {size // 1_000_000} MB"
+                        if t.download_audio(j["docId"], f["index"], p, prog, self.stop_job):
+                            copy["done"][i] = True
+                    except core.Unreachable:
+                        self.reachable = False
+                        here = sum(copy["done"])
+                        copy["msg"] = f"tablet out of reach: copying paused, {here} of {len(files)} files here"
+                        self.publish()
+                        while not self.reachable and not self.stop_job.is_set() and not self.quit.is_set():
+                            self.wake_net.set()
+                            time.sleep(15)
+                        copy["msg"] = "tablet back: copying the rest"
+            copy["msg"] = ""
+            copy["over"] = True
+        threading.Thread(target=copier, daemon=True).start()
+
+        trp = os.path.join("transcripts", j["id"] + ".json")
+        tr = store.read(trp) or {"modelKey": model, "segments": [], "doneMs": 0}
+        speech = None
+        began, at_start = time.time(), tr.get("doneMs", 0)
+        for i, (f, p) in enumerate(zip(files, paths)):
+            g0, dur = int(f.get("startMs") or 0), int(f.get("durationMs") or 0)
+            if g0 + dur <= tr.get("doneMs", 0) + 500:
+                continue  # transcribed before a pause
+            while not copy["done"][i]:
+                if self.stop_job.is_set() or self.quit.is_set():
+                    return
+                waiting = "out of reach" in copy["msg"]
+                self.set_job(j, "transcribing", tr.get("doneMs", 0) / total,
+                             ("Waits for the tablet to copy the rest (" + copy["msg"] + ")") if waiting else ("Copying the audiobook to this computer: " + (copy["msg"] or "starting")))
+                time.sleep(2)
+            if speech is None:
+                self.set_job(j, "transcribing", tr.get("doneMs", 0) / total, MODEL_MSG)
+                speech = self.speech_for(model, j)
+                tr["engine"], tr["language"] = speech.engine, core.MODELS[model]["lang"] or "auto"
+            off = 0
+            for win in core.file_windows(p, self.stop_job):
+                if self.stop_job.is_set() or self.quit.is_set():
+                    return
+                g = g0 + off
+                n = int(len(win) * 1000 / 16000)
+                off += n
+                if g + n <= tr.get("doneMs", 0) + 500:
+                    continue
+                left = ""
+                if tr["doneMs"] > at_start:
+                    rate = (time.time() - began) / (tr["doneMs"] - at_start)
+                    left = f" · about {max(1, round(rate * (total - tr['doneMs']) / 60))} min left"
+                extra = f" · {copy['msg']}" if copy["msg"] else ""
+                self.set_job(j, "transcribing", g / total, f"{core.clock(g)} of {core.clock(total)}{left} · {self.where(speech)}{extra}")
+                tr["segments"].extend(speech.transcribe(win, g, self.stop_job))
+                if self.stop_job.is_set():
+                    return
+                tr["doneMs"] = g + n
+                store.write(trp, tr)
+        tr["doneMs"] = max(tr["doneMs"], total)
+        store.write(trp, tr)
+        self.set_job(j, "matching", 1.0, "Matching the sentences…")
+        cached = store.read(os.path.join("texts", j["uuid"] + ".json"))
+        text = cached.get("text") if cached else None
+        if not text and self.reachable:
+            text = self.tablet(3).text(j["docId"])
+        if not text:
+            j["needs"] = "text"
+            return self.set_job(j, "waiting", msg="Transcribed. The book's text comes from the tablet the next time it is on this Wi-Fi; then it is matched and sent.")
+        j.pop("needs", None)
+        from align import align
+        m = align(text, tr["segments"])
+        m["engine"] = tr.get("engine") or "faster-whisper on a computer"
+        m["language"] = core.MODELS.get(model, {}).get("lang") or "auto"
+        m["durationMs"] = total
+        store.write(os.path.join("maps", j["id"] + ".json"), m)
+        j["copied"] = True
+        self.set_job(j, "send", 1.0, f"Matched: {round(m['coverage'] * 100)}% of the sentences. Sent the next time the tablet is on this Wi-Fi.")
+        self.wake_net.set()
 
     def run_files_job(self, j, model):
         import av

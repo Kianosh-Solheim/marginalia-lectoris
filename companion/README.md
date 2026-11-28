@@ -20,8 +20,10 @@ working on; **Open the library** opens its window.
 2. **The library:** every book on the tablet, with its audiobook and sync map. The companion keeps a copy of the
    list and of each book's text, refreshed whenever the tablet is on the Wi‑Fi, so it also works away from it.
 3. **Make a sync map:**
-   - *From the tablet's audiobook:* **Make the sync map from the tablet's audiobook**. The audio comes from the
-     tablet five minutes at a time (it needs the tablet on the Wi‑Fi; a stopped job continues).
+   - *From the tablet's audiobook:* **Make the sync map from the tablet's audiobook**. The audiobook is copied to
+     this computer file by file while the arrived files are transcribed, so the work goes on when the tablet
+     sleeps or leaves; the copy resumes where it stopped when it is back, and is removed once the map is sent.
+     (Settings: turn copying off to stream from the tablet instead; without enough disk space it streams too.)
    - *From audio files on this computer:* **Add audiobook files from this computer…**, put them in reading order,
      pick the speech model. This works away from the tablet too.
 4. **Sending:** the next time the tablet is on the same Wi‑Fi, the map goes to the book's folder there, with the

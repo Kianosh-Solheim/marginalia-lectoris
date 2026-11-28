@@ -132,7 +132,7 @@ def gpu_probe(device):
     os._exit(3)
 
 APP = "Marginalia Companion"
-VERSION = "1.2.1"
+VERSION = "1.3"
 WINDOW_MS = 300_000  # transcribe in five-minute windows, as the web view does (and resume at a window)
 DEFAULT_ADDRESS = "http://marginalia.local:8080"
 
@@ -271,6 +271,47 @@ class Tablet:
                 raise TabletError(msg, e.code) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
                 raise Unreachable(f"The upload to the tablet broke off ({getattr(e, 'reason', e)}).") from None
+
+    def download_audio(self, doc_id, index, path, progress=lambda done, total: None, stop=None):
+        """
+        Copies one of the book's audiobook files to [path], continuing a part copy ([path].part) where it stopped
+        (the tablet serves byte ranges). Returns False when stopped.
+        """
+        part = path + ".part"
+        have = os.path.getsize(part) if os.path.isfile(part) else 0
+        headers = {"X-Marginalia": "1"}
+        if self.key:
+            headers["Authorization"] = "Bearer " + self.key
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        req = urllib.request.Request(f"{self.base}/api/doc/{doc_id}/audiobook/file/{index}", headers=headers)
+        try:
+            with self.opener.open(req, timeout=60) as r:
+                if have and r.status != 206:
+                    have = 0  # no range: from the start
+                total = have + int(r.headers.get("Content-Length") or 0)
+                with open(part, "ab" if have else "wb") as f:
+                    done = have
+                    while True:
+                        if stop is not None and stop.is_set():
+                            return False
+                        b = r.read(1 << 20)
+                        if not b:
+                            break
+                        f.write(b)
+                        done += len(b)
+                        progress(done, total)
+                if total and done < total:
+                    raise Unreachable("The copy from the tablet broke off.")
+        except urllib.error.HTTPError as e:
+            if e.code == 416 and have:  # already complete
+                pass
+            else:
+                raise TabletError(str(e), e.code) from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            raise Unreachable(f"The copy from the tablet broke off ({getattr(e, 'reason', e)}).") from None
+        os.replace(part, path)
+        return True
 
     def login(self, pin):
         self._req("POST", "login", {"pin": pin}, timeout=20)

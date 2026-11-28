@@ -41,8 +41,23 @@ def _log_to_file():
 _log_to_file()
 
 
+def _wait_for_update():
+    """While an update is being put in place, its files come and go: wait (up to 10 minutes) instead of starting."""
+    import time
+    flag = os.path.join(core._data_dir(), "updating.flag")
+    for _ in range(300):
+        try:
+            if time.time() - os.path.getmtime(flag) > 600:
+                return
+        except OSError:
+            return
+        time.sleep(2)
+
+
 def main():
     args = sys.argv[1:]
+    if not ({"--gpu-probe", "--self-test", "--version"} & set(args)):
+        _wait_for_update()
     if "--gpu-probe" in args:
         core.gpu_probe(args[args.index("--gpu-probe") + 1] if len(args) > args.index("--gpu-probe") + 1 else "cuda")
     if "--self-test" in args:
@@ -54,6 +69,12 @@ def main():
         b = updater.build_info(core.VERSION)
         print(core.APP, b.get("version", core.VERSION), b.get("variant", ""))
         return
+    if os.name == "nt":  # tells the installer that the app is running (installer.iss: AppMutex)
+        try:
+            import ctypes
+            ctypes.windll.kernel32.CreateMutexW(None, False, "MarginaliaCompanionRunning")
+        except Exception:
+            pass
     if "--window" in args:
         import window
         window.run()

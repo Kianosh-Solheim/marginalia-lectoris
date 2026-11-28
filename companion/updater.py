@@ -126,6 +126,8 @@ def swap_and_restart(new_path, wait_pids):
     """
     target = install_dir()
     pids = [int(p) for p in wait_pids if p]
+    import core
+    flag = os.path.join(core._data_dir(), "updating.flag")  # the app waits while this is there
     work = os.path.dirname(new_path) if new_path.endswith(".exe") else os.path.dirname(os.path.dirname(new_path))
     if os.name == "nt":
         old_exe = os.path.join(target, os.path.basename(sys.executable))
@@ -133,14 +135,14 @@ def swap_and_restart(new_path, wait_pids):
         lines = ["@echo off", "chcp 65001 >nul", ":wait", "set alive=0"]
         for p in pids:
             lines.append(f'tasklist /FI "PID eq {p}" 2>nul | find "{p}" >nul && set alive=1')
-        lines += ["if %alive%==1 (ping -n 2 127.0.0.1 >nul & goto wait)", "ping -n 3 127.0.0.1 >nul"]
+        lines += ["if %alive%==1 (ping -n 2 127.0.0.1 >nul & goto wait)", "ping -n 3 127.0.0.1 >nul", f'echo updating> "{flag}"']
         if new_path.endswith(".exe"):
             installed = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Marginalia Companion", "Marginalia Companion.exe")
             lines += [f'"{new_path}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS',
                       f'set "EXE={installed}"', f'if not exist "%EXE%" set "EXE={old_exe}"']
         else:
             lines += [f'robocopy "{new_path}" "{target}" /MIR /R:10 /W:1 /NFL /NDL /NJH /NJS >nul', f'set "EXE={old_exe}"']
-        lines += ['start "" "%EXE%"', f'rmdir /S /Q "{work}"', '(goto) 2>nul & del "%~f0"']
+        lines += [f'del "{flag}" 2>nul', 'start "" "%EXE%"', f'rmdir /S /Q "{work}"', '(goto) 2>nul & del "%~f0"']
         with open(script, "w", encoding="utf-8", newline="\r\n") as f:
             f.write("\n".join(lines) + "\n")
         subprocess.Popen(["cmd", "/c", script], creationflags=0x08000000 | 0x00000200, close_fds=True)  # no window, own group
@@ -152,9 +154,11 @@ def swap_and_restart(new_path, wait_pids):
         relaunch = f'nohup "{os.path.join(target, os.path.basename(sys.executable))}" >/dev/null 2>&1 &'
     wait = "".join(f"while kill -0 {p} 2>/dev/null; do sleep 1; done\n" for p in pids)
     with open(script, "w") as f:
-        f.write("#!/bin/sh\n" + wait + "sleep 1\n"
+        f.write("#!/bin/sh\n" + wait + f'sleep 1\ntouch "{flag}"\n'
+
                 f'rm -rf "{target}.old" && mv "{target}" "{target}.old" && mv "{new_path}" "{target}" && rm -rf "{target}.old" '
                 f'|| {{ [ -e "{target}" ] || mv "{target}.old" "{target}"; }}\n'
+                f'rm -f "{flag}"\n'
                 f"{relaunch}\n"
                 f'rm -rf "{work}" "$0"\n')
     os.chmod(script, 0o755)
