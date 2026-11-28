@@ -68,6 +68,8 @@ class Daemon:
         self._icon_key = None
         self._texts_busy = False
         self.gpu = None  # {"busy", "msg", "error"} while/after downloading NVIDIA's support
+        self._push = {"due": False, "last": 0.0, "key": None}
+        threading.Thread(target=self.push_loop, daemon=True).start()
 
     # ------------------------------------------------------------------ status, shared with the window and the tray
 
@@ -91,6 +93,35 @@ class Daemon:
             "at": time.time(),
         })
         self.refresh_icon()
+        self._push["due"] = True
+
+    def push_loop(self):
+        """Tells the tablet what this computer is doing (shown on the tablet, a paired phone and the web view)."""
+        while not self.quit.is_set():
+            time.sleep(1)
+            p = self._push
+            if not p["due"] or not self.reachable:
+                continue
+            now = time.time()
+            js = [j for j in store.jobs() if j.get("state") != "done" or now - j.get("updated", 0) < 600]
+            key = [(j["id"], j.get("state")) for j in js]
+            if key == p["key"] and now - p["last"] < 5:
+                continue  # progress only: every 5 s at most; a change of state goes at once
+            p["due"] = False
+            t = self.tablet()
+            if not t:
+                continue
+            body = {"computer": socket.gethostname(), "paused": self.paused, "jobs": [
+                {"uuid": j.get("uuid"), "title": j.get("title"), "state": j.get("state"), "frac": round(j.get("frac", 0.0), 4),
+                 "msg": j.get("msg", ""), "label": store.STATES.get(j.get("state"), j.get("state")), "model": j.get("model")} for j in js]}
+            try:
+                t._req("PUT", "companion/status", body, timeout=8)
+                p["last"], p["key"] = now, key
+            except core.TabletError as e:
+                if e.code == 404:
+                    p["last"], p["key"] = now + 600, key  # a tablet app without this yet: try again in ten minutes
+            except Exception:
+                pass
 
     def tablet_line(self):
         s = store.settings()

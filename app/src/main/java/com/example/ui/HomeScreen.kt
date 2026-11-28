@@ -659,7 +659,7 @@ fun HomeScreen(
             onMenu = { coroutineScope.launch { drawerState.open() } },
             onOpenDocument = onOpenDocument,
             onOpenSettings = onOpenSettings
-        ) else
+        ) else Box(Modifier.fillMaxSize()) {
         Scaffold(
             topBar = {
                 Column(
@@ -1227,6 +1227,9 @@ fun HomeScreen(
                     }
                 }
             }
+        }
+            // What Marginalia Companion on a computer is doing (when it is).
+            CompanionStrip(Modifier.align(Alignment.BottomCenter).padding(16.dp))
         }
     }
 

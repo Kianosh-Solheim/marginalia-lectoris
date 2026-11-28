@@ -100,6 +100,8 @@ fun PhoneLibrary(
     val remote by TabletLink.remoteBooks
     val audioChanges by Audiobooks.changes.collectAsState()
     LaunchedEffect(paired) { if (paired) runCatching { TabletLink.remoteLibrary(context) } }
+    // What a computer with Marginalia Companion is doing, through the tablet (while this screen is open).
+    LaunchedEffect(paired) { while (paired) { runCatching { TabletLink.companionStatus(context) }; kotlinx.coroutines.delay(15_000) } }
 
     val withAudio by produceState(emptySet<Long>(), documents, audioChanges) {
         value = withContext(Dispatchers.IO) { documents.filter { runCatching { Audiobooks.has(context, it.id) }.getOrDefault(false) }.map { it.id }.toSet() }
@@ -146,6 +148,7 @@ fun PhoneLibrary(
                 FilterChip("Audiobooks", items.count { it.hasAudio }, filter == "audio") { filter = "audio" }
             }
             Box(Modifier.fillMaxWidth().height(1.5.dp).background(PInk))
+            CompanionStrip(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
             if (away) Text(
                 "The tablet is out of reach. Your places and notes wait on this phone and go to the tablet when you are back on its Wi‑Fi. Books only on the tablet can be downloaded then.",
                 fontSize = 13.sp, lineHeight = 18.sp, color = PInk, modifier = Modifier.fillMaxWidth().background(PNotice).padding(horizontal = 16.dp, vertical = 10.dp)
@@ -345,6 +348,7 @@ private fun PhoneBookPage(item: ShelfItem, away: Boolean, onDismiss: () -> Unit,
                     else BigButton(if (away) "Download when home" else "Download", filled = true, Modifier.weight(1f), enabled = !away && busy.isBlank()) { download(withAudio = r?.audiobook == true) }
                 }
                 if (busy.isNotBlank()) Text(busy, fontSize = 13.sp, color = PInk, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp))
+                CompanionBookLine(item.key, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp))
                 Text("What is on this phone", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PInk,
                     modifier = Modifier.fillMaxWidth().drawBehind { drawRect(PInk, size = size.copy(height = 1.5.dp.toPx())) }.padding(horizontal = 16.dp, vertical = 10.dp))
                 StatusRow(

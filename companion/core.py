@@ -132,7 +132,7 @@ def gpu_probe(device):
     os._exit(3)
 
 APP = "Marginalia Companion"
-VERSION = "1.3"
+VERSION = "1.4"
 WINDOW_MS = 300_000  # transcribe in five-minute windows, as the web view does (and resume at a window)
 DEFAULT_ADDRESS = "http://marginalia.local:8080"
 

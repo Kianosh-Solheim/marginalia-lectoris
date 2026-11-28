@@ -118,6 +118,12 @@ class LibraryApi(private val context: Context, private val pinMatches: (String) 
                 return HttpResponse.json("{}").header("Set-Cookie", "$COOKIE=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
             }
             s == listOf("library") && m == "GET" -> return HttpResponse.json(library().toString())
+            // Marginalia Companion on a computer says what it is doing; shown on the tablet, a phone and the web view.
+            s == listOf("companion", "status") && (m == "PUT" || m == "POST") -> {
+                com.example.reader.CompanionStatus.update(context, JSONObject(req.bodyText(1024 * 1024)))
+                return HttpResponse.json(JSONObject().put("ok", true).toString())
+            }
+            s == listOf("companion", "status") && m == "GET" -> return HttpResponse.json(com.example.reader.CompanionStatus.json().toString())
             // A paired phone's notes: its changes (already on this tablet's clock) in, this tablet's changes since its last sync out.
             s == listOf("sync", "notes") && m == "POST" -> {
                 val b = JSONObject(req.bodyText(32 * 1024 * 1024))
