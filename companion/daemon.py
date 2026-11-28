@@ -301,7 +301,7 @@ class Daemon:
                 self.set_job(j, "waiting", msg="Continues when the tablet is back on this Wi-Fi. What is done is kept.")
             except Exception as e:
                 traceback.print_exc()
-                self.set_job(j, "error", msg=str(e) or e.__class__.__name__)
+                self.set_job(j, "error", msg=(str(e) or e.__class__.__name__) + " (Details: Settings → Open the log.)")
             if self.stop_job.is_set() and j.get("state") in ("transcribing", "matching"):
                 self.set_job(j, "queued", msg="Paused. What is done is kept.")
             self.current = None
@@ -441,6 +441,7 @@ class Daemon:
                 nvidia.download(prog)
                 self.gpu = {"busy": False, "done": True, "msg": "Graphics-card support is installed. The next transcription runs on the card."}
                 self.speech = None  # load the speech model again, now on the card
+                core._GPU.clear()
             except Exception as e:
                 traceback.print_exc()
                 self.gpu = {"busy": False, "error": True, "msg": f"The download of graphics-card support did not finish ({e}). Try again."}

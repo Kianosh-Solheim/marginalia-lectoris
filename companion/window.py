@@ -433,6 +433,17 @@ def run():
                 ttk.Button(fr, text="Download graphics-card support (about 1 GB, once)", command=lambda: (dlg.destroy(), download_gpu())).pack(anchor="w")
         tk.Frame(fr, height=1, bg=RULE).pack(fill="x", pady=10)
         ttk.Label(fr, text=f"Version {info_build.get('version', core.VERSION)} ({info_build.get('variant', 'source')})", style="Muted.TLabel").pack(anchor="w")
+
+        def open_log():
+            p = os.path.join(core._data_dir(), "companion.log")
+            if not os.path.isfile(p):
+                open(p, "a").close()
+            if os.name == "nt":
+                os.startfile(p)
+            else:
+                import subprocess
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", p])
+        ttk.Button(fr, text="Open the log", command=open_log).pack(anchor="w", pady=(6, 0))
         ttk.Button(fr, text="Close", command=dlg.destroy).pack(anchor="e", pady=(12, 0))
 
     def download_gpu():
