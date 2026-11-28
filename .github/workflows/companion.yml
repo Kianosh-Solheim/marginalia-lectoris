@@ -42,10 +42,6 @@ jobs:
             name: linux
           - os: windows-latest
             name: windows
-          # For computers with an NVIDIA graphics card: NVIDIA's cuBLAS and cuDNN go in the app (about 1 GB more).
-          - os: windows-latest
-            name: windows-nvidia
-            extra: nvidia-cublas-cu12 nvidia-cudnn-cu12==9.*
           - os: macos-latest
             name: macos
     runs-on: ${{ matrix.os }}
@@ -67,22 +63,23 @@ jobs:
           if [ -n "$EXTRA" ]; then python -m pip install $EXTRA; fi
       - name: Build
         run: |
-          extra_args=()
-          if [ "${{ matrix.name }}" = windows-nvidia ]; then
-            # NVIDIA's DLLs from the pip packages, into nvidia_dlls/ in the app (found at start by _nvidia_libraries).
-            while IFS= read -r dll; do dll="${dll%$'\r'}"; extra_args+=(--add-binary "$dll;nvidia_dlls"); done < <(python -c "import nvidia, glob, os; [print(p) for d in nvidia.__path__ for p in glob.glob(os.path.join(d, '*', 'bin', '*.dll'))]")
-            echo "NVIDIA libraries: $(( ${#extra_args[@]} / 2 )) files"
-            # Without them this build is the plain Windows one under another name: stop.
-            [ "${#extra_args[@]}" -gt 0 ] || { echo "No NVIDIA libraries found"; exit 1; }
-          fi
           # This build's version and variant, for the app's own update check.
           V="${{ inputs.version }}"; if [ -z "$V" ]; then case "$GITHUB_REF_NAME" in companion-v*) V="${GITHUB_REF_NAME#companion-v}";; *) V="0-dev-${GITHUB_SHA::7}";; esac; fi
           printf '{"version": "%s", "variant": "%s"}' "$V" "${{ matrix.name }}" > build_info.json
           cat build_info.json
           python -m PyInstaller --noconfirm --onedir --windowed --name "Marginalia Companion" \
-            --add-data "build_info.json:." --hidden-import updater \
-            --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all av \
-            --hidden-import align "${extra_args[@]}" marginalia_companion.py
+            --add-data "build_info.json:." \
+            --hidden-import core --hidden-import daemon --hidden-import window --hidden-import store --hidden-import autostart \
+            --hidden-import nvidia --hidden-import tray_icon --hidden-import updater --hidden-import align \
+            --collect-submodules pystray --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all av \
+            --osx-bundle-identifier no.marginalia.companion \
+            marginalia_companion.py
+          if [ "${{ matrix.name }}" = macos ]; then
+            # Lives in the menu bar, without a Dock icon; then signed again (ad hoc), as the change breaks the signature.
+            app="dist/Marginalia Companion.app"
+            plutil -insert LSUIElement -bool true "$app/Contents/Info.plist"
+            codesign --force --deep --sign - "$app"
+          fi
       - name: Self-test the build (matcher, audio decoder, speech engine)
         timeout-minutes: 15
         env:
@@ -92,20 +89,22 @@ jobs:
         run: |
           case "${{ matrix.name }}" in
             macos) exe="dist/Marginalia Companion.app/Contents/MacOS/Marginalia Companion" ;;
-            windows|windows-nvidia) exe="dist/Marginalia Companion/Marginalia Companion.exe" ;;
+            windows) exe="dist/Marginalia Companion/Marginalia Companion.exe" ;;
             *) exe="dist/Marginalia Companion/Marginalia Companion" ;;
           esac
           "$exe" --self-test
       - name: Pack
         run: |
           cd dist
-          if [ "${{ matrix.name }}" = windows ] || [ "${{ matrix.name }}" = windows-nvidia ]; then 7z a -tzip "../Marginalia-Companion-${{ matrix.name }}.zip" "Marginalia Companion" >/dev/null
+          if [ "${{ matrix.name }}" = windows ]; then 7z a -tzip "../Marginalia-Companion-windows.zip" "Marginalia Companion" >/dev/null
+            # Same app under the old NVIDIA name, so 1.0.1's NVIDIA build finds its update (graphics support is now a download in the app).
+            cp ../Marginalia-Companion-windows.zip ../Marginalia-Companion-windows-nvidia.zip
           elif [ "${{ matrix.name }}" = macos ]; then ditto -c -k --keepParent "Marginalia Companion.app" "../Marginalia-Companion-${{ matrix.name }}.zip"
           else tar czf "../Marginalia-Companion-${{ matrix.name }}.tar.gz" "Marginalia Companion"; fi
       - uses: actions/upload-artifact@v4
         with:
           name: Marginalia-Companion-${{ matrix.name }}
-          path: companion/Marginalia-Companion-${{ matrix.name }}.*
+          path: companion/Marginalia-Companion-*.*
 
   release:
     if: startsWith(github.ref, 'refs/tags/companion-v') || inputs.version != ''
