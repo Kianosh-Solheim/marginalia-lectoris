@@ -45,7 +45,7 @@ jobs:
           # For computers with an NVIDIA graphics card: NVIDIA's cuBLAS and cuDNN go in the app (about 1 GB more).
           - os: windows-latest
             name: windows-nvidia
-            extra: nvidia-cublas-cu12 "nvidia-cudnn-cu12>=9,<10"
+            extra: nvidia-cublas-cu12 nvidia-cudnn-cu12==9.*
           - os: macos-latest
             name: macos
     runs-on: ${{ matrix.os }}
@@ -59,17 +59,21 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
       - name: Install
+        env:
+          EXTRA: ${{ matrix.extra }}
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
-          if [ -n "${{ matrix.extra }}" ]; then python -m pip install ${{ matrix.extra }}; fi
+          if [ -n "$EXTRA" ]; then python -m pip install $EXTRA; fi
       - name: Build
         run: |
           extra_args=()
           if [ "${{ matrix.name }}" = windows-nvidia ]; then
             # NVIDIA's DLLs from the pip packages, into nvidia_dlls/ in the app (found at start by _nvidia_libraries).
-            while IFS= read -r dll; do extra_args+=(--add-binary "$dll;nvidia_dlls"); done < <(python -c "import nvidia, glob, os; [print(p) for d in nvidia.__path__ for p in glob.glob(os.path.join(d, '*', 'bin', '*.dll'))]")
-            echo "NVIDIA libraries: ${#extra_args[@]} arguments"
+            while IFS= read -r dll; do dll="${dll%$'\r'}"; extra_args+=(--add-binary "$dll;nvidia_dlls"); done < <(python -c "import nvidia, glob, os; [print(p) for d in nvidia.__path__ for p in glob.glob(os.path.join(d, '*', 'bin', '*.dll'))]")
+            echo "NVIDIA libraries: $(( ${#extra_args[@]} / 2 )) files"
+            # Without them this build is the plain Windows one under another name: stop.
+            [ "${#extra_args[@]}" -gt 0 ] || { echo "No NVIDIA libraries found"; exit 1; }
           fi
           python -m PyInstaller --noconfirm --onedir --windowed --name "Marginalia Companion" \
             --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all av \
