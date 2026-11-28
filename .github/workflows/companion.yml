@@ -67,12 +67,16 @@ jobs:
           V="${{ inputs.version }}"; if [ -z "$V" ]; then case "$GITHUB_REF_NAME" in companion-v*) V="${GITHUB_REF_NAME#companion-v}";; *) V="0-dev-${GITHUB_SHA::7}";; esac; fi
           printf '{"version": "%s", "variant": "%s"}' "$V" "${{ matrix.name }}" > build_info.json
           cat build_info.json
+          echo "COMPANION_VERSION=$V" >> "$GITHUB_ENV"
+          # The app's icon (the tray icon, large), for Windows (.ico) and the Mac (.png, converted by PyInstaller).
+          python -c "import tray_icon; im = tray_icon.image(None, size=256); im.save('icon.png'); im.save('icon.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+          if [ "${{ matrix.name }}" = windows ]; then icon=icon.ico; else icon=icon.png; fi
           python -m PyInstaller --noconfirm --onedir --windowed --name "Marginalia Companion" \
             --add-data "build_info.json:." \
             --hidden-import core --hidden-import daemon --hidden-import window --hidden-import store --hidden-import autostart \
             --hidden-import nvidia --hidden-import tray_icon --hidden-import updater --hidden-import align \
             --collect-submodules pystray --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all av \
-            --osx-bundle-identifier no.marginalia.companion \
+            --osx-bundle-identifier no.marginalia.companion --icon "$icon" \
             marginalia_companion.py
           if [ "${{ matrix.name }}" = macos ]; then
             # Lives in the menu bar, without a Dock icon; then signed again (ad hoc), as the change breaks the signature.
@@ -93,18 +97,34 @@ jobs:
             *) exe="dist/Marginalia Companion/Marginalia Companion" ;;
           esac
           "$exe" --self-test
+      - name: Windows installer (Inno Setup), and a quiet test install
+        if: matrix.name == 'windows'
+        run: |
+          iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          if [ ! -x "$iscc" ]; then choco install innosetup --no-progress -y >/dev/null; fi
+          "$iscc" //Q installer.iss
+          ls -la Marginalia-Companion-windows-setup.exe
+          ./Marginalia-Companion-windows-setup.exe //VERYSILENT //SUPPRESSMSGBOXES //NORESTART
+          sleep 5
+          installed="$LOCALAPPDATA/Programs/Marginalia Companion/Marginalia Companion.exe"
+          ls -la "$installed"
+          "$installed" --version
       - name: Pack
         run: |
           cd dist
           if [ "${{ matrix.name }}" = windows ]; then 7z a -tzip "../Marginalia-Companion-windows.zip" "Marginalia Companion" >/dev/null
             # Same app under the old NVIDIA name, so 1.0.1's NVIDIA build finds its update (graphics support is now a download in the app).
             cp ../Marginalia-Companion-windows.zip ../Marginalia-Companion-windows-nvidia.zip
-          elif [ "${{ matrix.name }}" = macos ]; then ditto -c -k --keepParent "Marginalia Companion.app" "../Marginalia-Companion-${{ matrix.name }}.zip"
+          elif [ "${{ matrix.name }}" = macos ]; then
+            ditto -c -k --keepParent "Marginalia Companion.app" "../Marginalia-Companion-${{ matrix.name }}.zip"
+            # A disk image to drag the app into Applications.
+            mkdir dmg && cp -R "Marginalia Companion.app" dmg/ && ln -s /Applications dmg/Applications
+            hdiutil create -volname "Marginalia Companion" -srcfolder dmg -ov -format UDZO "../Marginalia-Companion-macos.dmg"
           else tar czf "../Marginalia-Companion-${{ matrix.name }}.tar.gz" "Marginalia Companion"; fi
       - uses: actions/upload-artifact@v4
         with:
           name: Marginalia-Companion-${{ matrix.name }}
-          path: companion/Marginalia-Companion-*.*
+          path: companion/Marginalia-Companion-*
 
   release:
     if: startsWith(github.ref, 'refs/tags/companion-v') || inputs.version != ''
@@ -122,4 +142,4 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then TAG="companion-v${{ inputs.version }}"; fi
           gh release create "$TAG" out/* --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --prerelease --latest=false \
             --title "Marginalia Companion ${TAG#companion-v}" \
-            --notes "Syncs an audiobook with its book's text on a computer. Download the file for your computer, unpack it and open Marginalia Companion. See companion/README.md."
+            --notes "Syncs an audiobook with its book's text on a computer. Windows: run Marginalia-Companion-windows-setup.exe (no administrator needed). Mac (Apple Silicon): open the .dmg and drag the app into Applications. Linux: unpack the .tar.gz and open Marginalia Companion; it adds itself to the program menu. The .zip files are for the app's own updates. See companion/README.md."

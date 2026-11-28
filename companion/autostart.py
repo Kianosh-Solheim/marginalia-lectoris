@@ -67,3 +67,34 @@ def set_enabled(on):
             f.write(f"[Desktop Entry]\nType=Application\nName=Marginalia Companion\nExec={exe}\nX-GNOME-Autostart-enabled=true\nNoDisplay=false\n")
     elif os.path.isfile(p):
         os.remove(p)
+
+
+def refresh():
+    """Keeps "start with the computer" pointing at this copy of the app (it may have been installed elsewhere since)."""
+    try:
+        if enabled():
+            set_enabled(True)
+    except Exception:
+        pass
+
+
+def linux_menu_entry():
+    """Linux: puts Marginalia Companion in the program menu (no installer there), pointing at this copy."""
+    if os.name == "nt" or sys.platform == "darwin" or not getattr(sys, "frozen", False):
+        return
+    try:
+        import tray_icon
+        data = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+        icon = os.path.join(data, "icons", "hicolor", "256x256", "apps", "marginalia-companion.png")
+        os.makedirs(os.path.dirname(icon), exist_ok=True)
+        if not os.path.isfile(icon):
+            tray_icon.image(None, size=256).save(icon)
+        desk = os.path.join(data, "applications", "marginalia-companion.desktop")
+        os.makedirs(os.path.dirname(desk), exist_ok=True)
+        exe = sys.executable
+        with open(desk, "w") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Marginalia Companion\n"
+                    "Comment=Syncs audiobooks with their books' text for the Marginalia tablet\n"
+                    f'Exec="{exe}"\nIcon=marginalia-companion\nCategories=AudioVideo;Education;\nTerminal=false\n')
+    except Exception:
+        pass

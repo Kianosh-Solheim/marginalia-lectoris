@@ -46,15 +46,17 @@ Each model is downloaded once (75 MB to 1.6 GB) and kept on the computer.
 
 ## Install
 
-**Ready-made builds:** Releases → *Marginalia Companion* → the file for your computer. Unpack it and open
-*Marginalia Companion*.
-- Windows with an NVIDIA graphics card (e.g. RTX 3070): the companion notices the card and offers to download
-  its support from NVIDIA (about 1 GB, once; kept across updates). Then it does the listening on the card, many
-  times faster. It tries the card first on a second of silence; if that fails, it uses the processor instead.
-- Mac with Apple Silicon (M1 and later): the Mac's graphics are tried the same way (experimental in the speech
-  engine, often about twice as fast); otherwise every processor core is used. Intel Macs: not built yet.
-- Windows may warn about an unknown publisher: *More info* → *Run anyway*.
-- macOS: right-click the app → *Open* the first time.
+**Ready-made builds:** Releases → *Marginalia Companion* → the file for your computer.
+- **Windows:** `Marginalia-Companion-windows-setup.exe`. It installs for you alone (no administrator), adds
+  Marginalia Companion to the Start menu (so Windows search finds it) and can be removed in Settings → Apps.
+  Windows may warn about an unknown publisher: *More info* → *Run anyway*.
+- **Windows with an NVIDIA graphics card** (e.g. RTX 3070): the companion notices the card and offers to download
+  its support from NVIDIA (about 1 GB, once; kept across updates). Then it does the listening on the card.
+- **Mac (Apple Silicon):** open `Marginalia-Companion-macos.dmg` and drag the app into Applications. The first
+  time: right-click it → *Open* (or System Settings → Privacy & Security → *Open Anyway*). It may use the Mac's
+  graphics (tried first; otherwise every processor core).
+- **Linux (Mint and others):** unpack `Marginalia-Companion-linux.tar.gz` somewhere to keep and open
+  *Marginalia Companion*; it adds itself to the program menu.
 
 **From this folder (any computer with Python 3.9 or newer):**
 - Linux Mint / Ubuntu: `sudo apt install python3-tk python3-venv`, then `./run.sh`

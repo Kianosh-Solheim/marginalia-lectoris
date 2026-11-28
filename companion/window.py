@@ -38,6 +38,16 @@ def run():
     root.geometry("1120x720")
     root.minsize(860, 560)
     root.configure(bg="white")
+    try:  # the window's icon: the tray icon
+        import tray_icon
+        ip = os.path.join(core._data_dir(), "icon.png")
+        if not os.path.isfile(ip):
+            os.makedirs(os.path.dirname(ip), exist_ok=True)
+            tray_icon.image(None, size=128).save(ip)
+        root._icon = tk.PhotoImage(file=ip)
+        root.iconphoto(True, root._icon)
+    except Exception:
+        pass
     try:
         ttk.Style().theme_use("clam")
     except Exception:
@@ -467,14 +477,15 @@ def run():
             try:
                 new = updater.download_and_stage(found[0], found[1], lambda d, t: root.after(0, lambda: notice_text.configure(
                     text=f"Downloading version {rel['version']}… {d // 1_000_000} of {t // 1_000_000 or '?'} MB")))
-                daemon.tell("quit")  # the tray app holds the app's files: it closes first
-                for _ in range(40):
-                    if not daemon.tell("wake", timeout=0.3):
-                        break
-                    time.sleep(0.25)
-                time.sleep(1.5)
-                updater.swap_and_restart(new)
-                root.after(0, root.destroy)
+                # The helper starts first and waits for this window and the tray app (which holds the app's files)
+                # to close; then the tray app is asked to quit, which also closes this window.
+                updater.swap_and_restart(new, [os.getpid(), status().get("pid")])
+                root.after(0, lambda: notice_text.configure(text="Installing the update; the app opens again in a moment."))
+                time.sleep(0.5)
+                if not daemon.tell("quit"):
+                    root.after(0, root.destroy)
+                else:
+                    root.after(4000, root.destroy)
             except Exception as e:
                 err = str(e)
                 root.after(0, lambda: notice_text.configure(text=f"The update could not be installed ({err}). Download it from GitHub instead."))
