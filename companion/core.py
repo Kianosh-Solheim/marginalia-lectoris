@@ -80,7 +80,16 @@ def _apple_silicon():
     return platform.system() == "Darwin" and platform.machine() == "arm64"
 
 
+_GPU = {}  # this process's answer, so the card is tried once (cleared when its support is downloaded)
+
+
 def gpu_works(log=lambda m: None):
+    if "r" not in _GPU:
+        _GPU["r"] = _gpu_works(log)
+    return _GPU["r"]
+
+
+def _gpu_works(log=lambda m: None):
     """
     The graphics device speech recognition really runs on here, as (device, compute_type), or None for the
     processor: an NVIDIA card (cuda) or Apple Silicon graphics (mps, experimental). Tried in a separate process,
@@ -98,7 +107,7 @@ def gpu_works(log=lambda m: None):
         device = "cuda"
     log("Trying the graphics card…" if device == "cuda" else "Trying the Mac's graphics (Apple Silicon)…")
     try:
-        r = subprocess.run(_self_command("--gpu-probe") + [device], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=900,
+        r = subprocess.run(_self_command("--gpu-probe") + [device], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300,
                            creationflags=0x08000000 if os.name == "nt" else 0)  # no console window on Windows
     except Exception:
         return None
@@ -119,7 +128,7 @@ def gpu_probe(device):
     os._exit(3)
 
 APP = "Marginalia Companion"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 WINDOW_MS = 300_000  # transcribe in five-minute windows, as the web view does (and resume at a window)
 DEFAULT_ADDRESS = "http://marginalia.local:8080"
 
