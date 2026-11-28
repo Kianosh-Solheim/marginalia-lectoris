@@ -108,9 +108,9 @@ def run():
     tree.heading("#0", text="Book", anchor="w")
     tree.heading("audio", text="Audiobook", anchor="w")
     tree.heading("map", text="Sync map", anchor="w")
-    tree.column("#0", width=330, stretch=True)
-    tree.column("audio", width=170, stretch=False)
-    tree.column("map", width=210, stretch=False)
+    tree.column("#0", width=220, minwidth=160, stretch=True)
+    tree.column("audio", width=150, minwidth=110, stretch=False)
+    tree.column("map", width=200, minwidth=140, stretch=False)
     sb = ttk.Scrollbar(mid, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=sb.set)
     sb.pack(side="right", fill="y")
@@ -199,6 +199,13 @@ def run():
             msg, btn = "Pair this computer with your tablet to see its library: on the tablet, Settings → Library in the browser → Pair a phone; then type the code here.", ("Pair with the tablet", open_settings)
         elif s.get("known") is False:
             msg, btn = "The tablet no longer knows this computer (it was removed there). Pair it again.", ("Pair again", open_settings)
+        elif (s.get("gpu") or {}).get("busy") or ((s.get("gpu") or {}).get("msg") and not state.get("gpu_seen")):
+            g = s["gpu"]
+            msg = g.get("msg", "")
+            if g.get("error"):
+                btn = ("Try again", download_gpu)
+            elif not g.get("busy"):
+                btn = ("OK", lambda: (state.update(gpu_seen=True), render(True)))
         elif state["update"]:
             rel = state["update"]
             msg, btn = f"Version {rel['version']} is ready (you have {info_build.get('version', core.VERSION)}). It installs itself and starts again; your work is kept.", ("Update and restart", lambda: do_update(rel))
@@ -206,12 +213,12 @@ def run():
             when = time.strftime("%H:%M", time.localtime(s.get("lastSync"))) if s.get("lastSync") else "the last time"
             msg = (f"The tablet is out of reach, so this is the library as it was at {when}. You can still add audiobooks and transcribe them. "
                    "The maps, and any audio the tablet doesn't have, are sent the next time it is on the same Wi-Fi.")
-        elif state.get("gpu_offer"):
+        elif state.get("gpu_offer") and not (s.get("gpu") or {}).get("done") and not state.get("gpu_asked"):
             msg, btn = "This computer has an NVIDIA graphics card. Download its support (about 1 GB, once) to transcribe many times faster.", ("Download", download_gpu)
         if msg:
             notice_text.configure(text=msg)
             if btn:
-                notice_btn.configure(text=btn[0], command=btn[1])
+                notice_btn.configure(text=btn[0], command=btn[1], state="normal")
                 notice_btn.pack(side="right", padx=(12, 0))
             else:
                 notice_btn.pack_forget()
@@ -419,27 +426,22 @@ def run():
                         variable=auto, command=lambda: autostart.set_enabled(auto.get())).pack(anchor="w", pady=4)
         import nvidia
         if nvidia.card_present():
-            ttk.Label(fr, text="Graphics card: " + ("support installed" if nvidia.installed() else "NVIDIA card found, support not downloaded"),
+            gs = (status().get("gpu") or {})
+            ttk.Label(fr, text="Graphics card: " + ("downloading its support now…" if gs.get("busy") else "support installed" if nvidia.installed() else "NVIDIA card found, support not downloaded"),
                       style="Muted.TLabel").pack(anchor="w", pady=(8, 2))
-            if not nvidia.installed():
+            if not nvidia.installed() and not gs.get("busy"):
                 ttk.Button(fr, text="Download graphics-card support (about 1 GB, once)", command=lambda: (dlg.destroy(), download_gpu())).pack(anchor="w")
         tk.Frame(fr, height=1, bg=RULE).pack(fill="x", pady=10)
         ttk.Label(fr, text=f"Version {info_build.get('version', core.VERSION)} ({info_build.get('variant', 'source')})", style="Muted.TLabel").pack(anchor="w")
         ttk.Button(fr, text="Close", command=dlg.destroy).pack(anchor="e", pady=(12, 0))
 
     def download_gpu():
-        import nvidia
+        """The tray app downloads it (it goes on when this window is closed); its progress comes back in status.json."""
         state["gpu_offer"] = False
-        notice_btn.configure(state="disabled")
-
-        def work():
-            try:
-                nvidia.download(lambda m: root.after(0, lambda: notice_text.configure(text=m)))
-                root.after(0, lambda: notice_text.configure(text="Graphics-card support is installed. The next transcription runs on the card."))
-            except Exception as e:
-                err = str(e)
-                root.after(0, lambda: notice_text.configure(text=f"The download did not finish ({err}). Try again from Settings."))
-        threading.Thread(target=work, daemon=True).start()
+        state["gpu_asked"] = True
+        if not daemon.tell("gpu-download"):
+            notice_text.configure(text="The tray app is not running. Start Marginalia Companion again and retry.")
+        render(True)
 
     def do_update(rel):
         variant = info_build.get("variant", "source")

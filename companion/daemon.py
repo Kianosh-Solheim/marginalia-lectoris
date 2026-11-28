@@ -22,6 +22,8 @@ import store
 import autostart
 
 PORT = 47815
+MODEL_MSG = ("Loading the speech model. The first time, it is downloaded (75 MB to 1.6 GB, depending on the model), "
+             "which can take a few minutes; then it is kept on this computer.")
 TEXT_KINDS = ("EPUB", "PDF")
 
 
@@ -65,6 +67,7 @@ class Daemon:
         self.speech = None
         self._icon_key = None
         self._texts_busy = False
+        self.gpu = None  # {"busy", "msg", "error"} while/after downloading NVIDIA's support
 
     # ------------------------------------------------------------------ status, shared with the window and the tray
 
@@ -84,6 +87,7 @@ class Daemon:
             "lastSync": self.last_sync, "paused": self.paused, "pid": os.getpid(),
             "job": None if not self.current else {"id": self.current[0], "title": self.current[1], "frac": self.current[2], "msg": self.current[3]},
             "waiting": [j["title"] for j in js if j.get("state") in ("send", "waiting", "conflict")],
+            "gpu": self.gpu,
             "at": time.time(),
         })
         self.refresh_icon()
@@ -101,6 +105,8 @@ class Daemon:
         return "Looking for the tablet…"
 
     def job_line(self):
+        if self.gpu and self.gpu.get("busy"):
+            return self.gpu.get("msg", "Downloading graphics-card support…")
         if not self.current:
             return ""
         return f"{self.current[1]}: {int(self.current[2] * 100)}%"
@@ -327,7 +333,7 @@ class Daemon:
             t = self.tablet(3)
             lib = {d["uuid"]: d for d in (store.read("library.json", {}) or {}).get("docs", [])}
             doc = lib.get(j["uuid"]) or {"id": j["docId"]}
-            self.set_job(j, "transcribing", msg="Loading the speech model…")
+            self.set_job(j, "transcribing", msg=MODEL_MSG)
 
             def prog(frac, msg):
                 self.set_job(j, "transcribing" if frac < 1 else "matching", frac, msg)
@@ -354,7 +360,7 @@ class Daemon:
         total = sum(durations) or 1
         tr = store.read(trp) or {"modelKey": model, "segments": [], "doneMs": 0}
         if tr.get("doneMs", 0) < total - 1000:
-            self.set_job(j, "transcribing", tr.get("doneMs", 0) / total, "Loading the speech model…")
+            self.set_job(j, "transcribing", tr.get("doneMs", 0) / total, MODEL_MSG)
             speech = self.speech_for(model)
             tr["engine"], tr["language"] = speech.engine, core.MODELS[model]["lang"] or "auto"
             began, at_start = time.time(), tr.get("doneMs", 0)
@@ -415,6 +421,32 @@ class Daemon:
             return
         self.window = subprocess.Popen(core._self_command("--window"), close_fds=True)
 
+    def download_gpu(self):
+        """NVIDIA's support, downloaded here in the tray app so it goes on when the window is closed."""
+        if self.gpu and self.gpu.get("busy"):
+            return
+        import nvidia
+        self.gpu = {"busy": True, "msg": "Downloading graphics-card support…"}
+        self.publish()
+
+        def work():
+            last = [0.0]
+
+            def prog(msg):
+                self.gpu = {"busy": True, "msg": msg}
+                if time.time() - last[0] > 1:
+                    last[0] = time.time()
+                    self.publish()
+            try:
+                nvidia.download(prog)
+                self.gpu = {"busy": False, "done": True, "msg": "Graphics-card support is installed. The next transcription runs on the card."}
+                self.speech = None  # load the speech model again, now on the card
+            except Exception as e:
+                traceback.print_exc()
+                self.gpu = {"busy": False, "error": True, "msg": f"The download of graphics-card support did not finish ({e}). Try again."}
+            self.publish()
+        threading.Thread(target=work, daemon=True).start()
+
     def toggle_pause(self, *_):
         self.paused = not self.paused
         store.write("paused.json", {"paused": self.paused})
@@ -463,6 +495,8 @@ class Daemon:
                 elif cmd == "wake":
                     self.wake_net.set()
                     self.wake_jobs.set()
+                elif cmd == "gpu-download":
+                    self.download_gpu()
                 elif cmd == "stop-job":
                     self.stop_job.set()
                 elif cmd == "pause":
@@ -481,7 +515,7 @@ class Daemon:
         menu = pystray.Menu(
             pystray.MenuItem("Marginalia Companion", None, enabled=False),
             pystray.MenuItem(lambda i: self.tablet_line(), None, enabled=False),
-            pystray.MenuItem(lambda i: self.job_line(), None, enabled=False, visible=lambda i: bool(self.current)),
+            pystray.MenuItem(lambda i: self.job_line(), None, enabled=False, visible=lambda i: bool(self.job_line())),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open the library", self.open_window, default=True),
             pystray.MenuItem(lambda i: "Resume transcribing" if self.paused else "Pause transcribing", self.toggle_pause),
