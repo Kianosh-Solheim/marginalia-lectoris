@@ -30,6 +30,14 @@ working on; **Open the library** opens its window.
    audio files if the tablet doesn't have them yet (it checks: files of exactly the same size are not sent again).
    If the tablet has *other* audio for the book, the companion asks before replacing it.
 
+**The queue** (Queue… in the window): one book at a time, from the top. Move books up and down, and see each
+book's language (from the book, or guessed from its text) and speech model; the model can change until a book
+has started. When you add a book, the model is suggested from its language, with a warning if they don't fit.
+
+**On the tablet, a phone and the web view:** the companion tells the tablet what it is doing every few seconds.
+The tablet shows it on the book (in the audiobook bar), as a strip in the library, and as a notification; a
+paired phone and the web view show the same.
+
 Close the window whenever you like: the work goes on in the tray. **Pause transcribing** in the menu stops after
 the current five minutes; **Quit** closes it altogether (what is done is kept).
 

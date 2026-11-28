@@ -103,6 +103,10 @@ def run():
                       command=lambda k=key: (state.update(filter=k), render(force=True)))
         b.pack(fill="x")
         filter_buttons[key] = b
+    queue_btn = tk.Button(nav, text="Queue…", anchor="w", relief="flat", bd=0, padx=18, pady=9, width=22, cursor="hand2",
+                          bg="white", activebackground="#f4f4f5", command=lambda: open_queue())
+    tk.Frame(nav, height=1, bg=RULE).pack(fill="x", pady=8, padx=12)
+    queue_btn.pack(fill="x")
     tk.Frame(body, width=1, bg=RULE).pack(side="left", fill="y")
 
     # --- detail pane (right)
@@ -173,6 +177,8 @@ def run():
     def render(force=False):
         docs = library()
         js = jobs_by_book()
+        n = len([j for j in store.jobs() if j.get("state") not in ("done", "error")])
+        queue_btn.configure(text=f"Queue ({n})…" if n else "Queue…")
         for k, b in filter_buttons.items():
             on = state["filter"] == k
             b.configure(bg=INK if on else "white", fg="white" if on else INK, activebackground="#27272a" if on else "#f4f4f5",
@@ -305,7 +311,15 @@ def run():
 
     # ------------------------------------------------------------------ actions
 
-    def model_dialog(title, files=None):
+    def lang_warning(code, model):
+        """A line when the chosen model's language doesn't fit the book's."""
+        ml = core.MODELS[model]["lang"]
+        if not code or not ml:
+            return ""
+        same = (ml == "no" and code in ("no", "nb", "nn")) or ml == code
+        return "" if same else f"The book is in {store.LANGS.get(code, code)}, but this model listens for {store.LANGS.get(ml, ml)}: few sentences would be matched."
+
+    def model_dialog(title, files=None, book_uuid=None):
         """Asks for the speech model (and the files' order). Returns (model, files) or None."""
         dlg = tk.Toplevel(root)
         dlg.title(title)
@@ -340,11 +354,23 @@ def run():
             row.pack(anchor="w", pady=(0, 10))
             ttk.Button(row, text="Up", command=lambda: move(-1)).pack(side="left")
             ttk.Button(row, text="Down", command=lambda: move(1)).pack(side="left", padx=6)
+        code, lname, how = store.book_language(book_uuid) if book_uuid else (None, "Unknown", "")
+        ttk.Label(fr, text=f"Language: {lname}" + (f" ({how})" if how else " (not known yet: pick the model yourself)"), style="Muted.TLabel").pack(anchor="w", pady=(0, 6))
         ttk.Label(fr, text="Speech model", style="Muted.TLabel").pack(anchor="w")
         keys = list(core.MODELS)
         s = store.settings()
-        mv = tk.StringVar(value=core.MODELS[s.get("model", "pc_en_exact") if s.get("model") in core.MODELS else "pc_en_exact"]["label"])
-        ttk.Combobox(fr, textvariable=mv, values=[core.MODELS[k]["label"] for k in keys], state="readonly", width=52).pack(anchor="w", pady=(2, 14))
+        suggested = store.model_for(code) if code else (s.get("model") if s.get("model") in core.MODELS else "pc_en_exact")
+        mv = tk.StringVar(value=core.MODELS[suggested]["label"])
+        cb = ttk.Combobox(fr, textvariable=mv, values=[core.MODELS[k]["label"] for k in keys], state="readonly", width=52)
+        cb.pack(anchor="w", pady=(2, 4))
+        warn = ttk.Label(fr, text="", foreground="#b91c1c", wraplength=460, justify="left")
+        warn.pack(anchor="w", pady=(0, 10))
+
+        def check(*_):
+            key = next(k for k in keys if core.MODELS[k]["label"] == mv.get())
+            warn.configure(text=lang_warning(code, key))
+        mv.trace_add("write", check)
+        check()
         out = {}
 
         def ok():
@@ -361,7 +387,7 @@ def run():
         return out.get("r")
 
     def start_tablet_job(d):
-        r = model_dialog("Make the sync map")
+        r = model_dialog("Make the sync map", book_uuid=d["uuid"])
         if r:
             store.new_job(d, "tablet", model=r[0])
             daemon.tell("wake")
@@ -372,11 +398,111 @@ def run():
                                             filetypes=[("Audio", "*.mp3 *.m4a *.m4b *.aac *.ogg *.opus *.flac *.wav"), ("All files", "*.*")])
         if not paths:
             return
-        r = model_dialog("Add the audiobook", sorted(paths, key=_natural))
+        r = model_dialog("Add the audiobook", sorted(paths, key=_natural), book_uuid=d["uuid"])
         if r:
             store.new_job(d, "files", files=r[1], model=r[0])
             daemon.tell("wake")
             render(True)
+
+    def open_queue():
+        """The queue: order, language and model of each job; the order and (before it starts) the model can change."""
+        if state.get("queue_win") and state["queue_win"].winfo_exists():
+            state["queue_win"].lift()
+            return
+        q = tk.Toplevel(root)
+        state["queue_win"] = q
+        q.title("Queue")
+        q.configure(bg="white")
+        q.geometry("900x420")
+        fr = ttk.Frame(q, padding=16)
+        fr.pack(fill="both", expand=True)
+        ttk.Label(fr, text="Queue", font=(serif, 16, "bold")).pack(anchor="w")
+        ttk.Label(fr, text="One book at a time, from the top. Change the order with Up and Down; the model can change until a book has started.",
+                  style="Muted.TLabel", wraplength=820).pack(anchor="w", pady=(2, 10))
+        tv = ttk.Treeview(fr, columns=("lang", "model", "state"), show="tree headings", selectmode="browse", height=9)
+        tv.heading("#0", text="Book", anchor="w")
+        tv.heading("lang", text="Language", anchor="w")
+        tv.heading("model", text="Speech model", anchor="w")
+        tv.heading("state", text="Status", anchor="w")
+        tv.column("#0", width=300)
+        tv.column("lang", width=150, stretch=False)
+        tv.column("model", width=230, stretch=False)
+        tv.column("state", width=170, stretch=False)
+        tv.pack(fill="both", expand=True)
+        warn = ttk.Label(fr, text="", foreground="#b91c1c", wraplength=820, justify="left")
+        warn.pack(anchor="w", pady=(6, 0))
+        bar = ttk.Frame(fr)
+        bar.pack(fill="x", pady=(8, 0))
+        keys = list(core.MODELS)
+        mv = tk.StringVar()
+        cb = ttk.Combobox(bar, textvariable=mv, values=[core.MODELS[k]["label"] for k in keys], state="readonly", width=44)
+
+        def queue_jobs():
+            return [j for j in store.jobs() if j.get("state") != "done"]
+
+        def fill():
+            sel = tv.selection()
+            tv.delete(*tv.get_children())
+            for i, j in enumerate(queue_jobs(), 1):
+                code, lname, how = store.book_language(j.get("uuid") or "")
+                lang = lname + (" (guessed)" if how.startswith("guessed") else "")
+                label = store.STATES.get(j.get("state"), j.get("state"))
+                if j.get("state") in ("transcribing", "sending"):
+                    label += f", {int(j.get('frac', 0) * 100)}%"
+                tv.insert("", "end", iid=j["id"], text=f"{i}.  {j.get('title')}",
+                          values=(lang, core.MODELS.get(j.get("model"), {}).get("label", j.get("model")).split(" (")[0], label))
+            if sel and tv.exists(sel[0]):
+                tv.selection_set(sel[0])
+            selected()
+
+        def current():
+            sel = tv.selection()
+            return store.job(sel[0]) if sel else None
+
+        def selected(*_):
+            j = current()
+            if not j:
+                cb.configure(state="disabled")
+                warn.configure(text="")
+                return
+            locked = store.started(j)
+            cb.configure(state="disabled" if locked else "readonly")
+            mv.set(core.MODELS.get(j.get("model"), core.MODELS["pc_en_exact"])["label"])
+            code = store.book_language(j.get("uuid") or "")[0]
+            w = lang_warning(code, j.get("model") or "pc_en_exact")
+            warn.configure(text=("Started: the model stays as it is. " if locked else "") + w)
+
+        def set_model(*_):
+            j = current()
+            if not j or store.started(j):
+                return
+            key = next((k for k in keys if core.MODELS[k]["label"] == mv.get()), None)
+            if key and key != j.get("model"):
+                j["model"] = key
+                store.save_job(j)
+                fill()
+
+        def mv_job(step):
+            j = current()
+            if j:
+                store.move(j["id"], step)
+                daemon.tell("wake")
+                fill()
+        ttk.Button(bar, text="Up", command=lambda: mv_job(-1)).pack(side="left")
+        ttk.Button(bar, text="Down", command=lambda: mv_job(1)).pack(side="left", padx=(6, 18))
+        ttk.Label(bar, text="Model").pack(side="left", padx=(0, 6))
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>", set_model)
+        ttk.Button(bar, text="Remove", command=lambda: (current() and remove_job(current()), fill())).pack(side="right")
+        tv.bind("<<TreeviewSelect>>", selected)
+
+        def tick_q():
+            if q.winfo_exists():
+                if not cb.focus_get() == cb:
+                    fill()
+                q.after(3000, tick_q)
+        fill()
+        tick_q()
 
     def remove_job(j):
         if j.get("state") in ("transcribing", "matching", "sending") and not messagebox.askyesno("Remove the job", "Stop and remove this job? What is transcribed so far is lost.", parent=root):

@@ -118,6 +118,8 @@ fun AudiobookBar(document: DocumentEntity, onClose: () -> Unit, onUseTts: (() ->
             InkButton("Files", onClick = { showFiles = true })
             InkButton("×", onClick = onClose)
         }
+        // While a computer makes this book's sync map (Marginalia Companion), its progress.
+        CompanionBookLine(document.uuid)
     }
 
     noteAtMs?.let { ms ->

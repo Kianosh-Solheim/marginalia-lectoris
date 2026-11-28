@@ -226,6 +226,13 @@ object TabletLink {
         runCatching { JSONObject(call(ctx, "/api/doc/${r.id}/audiobook")) }.getOrNull()
     }
 
+    /** What Marginalia Companion on a computer is doing, as the tablet last heard it. */
+    suspend fun companionStatus(ctx: Context) = withContext(Dispatchers.IO) {
+        if (link(ctx) == null) return@withContext
+        val o = JSONObject(call(ctx, "/api/companion/status"))
+        CompanionStatus.update(ctx, o, o.optLong("age"))
+    }
+
     /** Only the audiobook leaves this phone; the book and its notes stay. */
     suspend fun removeAudioFromPhone(ctx: Context, docId: Long) = withContext(Dispatchers.IO) {
         val doc = AppDatabase.getInstance(ctx).documentDao().getDocumentById(docId) ?: return@withContext
