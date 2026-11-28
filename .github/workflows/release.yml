@@ -11,7 +11,8 @@ name: Build and release
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md']
+    # Not for the computer companion alone: it has its own workflow, and the tablet app would not change.
+    paths-ignore: ['**.md', 'companion/**', '.github/workflows/companion.yml']
   workflow_dispatch:
 
 permissions:

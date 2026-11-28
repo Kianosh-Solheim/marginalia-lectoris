@@ -23,6 +23,8 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
+; The app holds this while running: the installer closes it first instead of replacing files under it.
+AppMutex=MarginaliaCompanionRunning
 RestartApplications=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
