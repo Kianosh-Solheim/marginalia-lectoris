@@ -60,6 +60,13 @@ Each model is downloaded once (75 MB to 1.6 GB) and kept on the computer.
 
 The first start sets everything up in a `.venv` folder here (a few minutes, once).
 
+## Updates
+
+The ready-made builds check GitHub for a newer companion release each time they start. When there is one, a
+bar at the top says so: **Update and restart** downloads the file for this computer, puts it in place when the
+window closes and opens the new version (settings and downloaded speech models are kept). **Later** hides it
+until the next start. Run from this folder, it only links to the new release.
+
 ## For developers
 
 `align.py` is a line-by-line port of `abAlign()` in `app/src/main/assets/web/audiobook.js`, so a map made here is
