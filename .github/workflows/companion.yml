@@ -75,7 +75,12 @@ jobs:
             # Without them this build is the plain Windows one under another name: stop.
             [ "${#extra_args[@]}" -gt 0 ] || { echo "No NVIDIA libraries found"; exit 1; }
           fi
+          # This build's version and variant, for the app's own update check.
+          V="${{ inputs.version }}"; if [ -z "$V" ]; then case "$GITHUB_REF_NAME" in companion-v*) V="${GITHUB_REF_NAME#companion-v}";; *) V="0-dev-${GITHUB_SHA::7}";; esac; fi
+          printf '{"version": "%s", "variant": "%s"}' "$V" "${{ matrix.name }}" > build_info.json
+          cat build_info.json
           python -m PyInstaller --noconfirm --onedir --windowed --name "Marginalia Companion" \
+            --add-data "build_info.json:." --hidden-import updater \
             --collect-all faster_whisper --collect-all ctranslate2 --collect-all onnxruntime --collect-all av \
             --hidden-import align "${extra_args[@]}" marginalia_companion.py
       - name: Self-test the build (matcher, audio decoder, speech engine)

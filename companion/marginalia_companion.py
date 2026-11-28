@@ -385,7 +385,9 @@ def run_gui():
 
     st = load_settings()
     root = tk.Tk()
-    root.title(APP)
+    import updater
+    info_build = updater.build_info(VERSION)
+    root.title(f"{APP} {info_build.get('version', VERSION)}")
     root.geometry("760x640")
     root.minsize(640, 520)
     try:
@@ -402,6 +404,15 @@ def run_gui():
     ttk.Label(outer, text=APP, font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
     ttk.Label(outer, text="Syncs an audiobook with its book's text here, on this computer, instead of in the browser.",
               wraplength=700).pack(anchor="w", pady=(2, 10))
+
+    # --- A newer version (shown only when there is one)
+    upd = ttk.Frame(outer, padding=(10, 8), relief="solid", borderwidth=1)
+    upd_text = ttk.Label(upd, text="", wraplength=470)
+    upd_text.pack(side="left", fill="x", expand=True)
+    upd_later = ttk.Button(upd, text="Later", command=lambda: upd.pack_forget())
+    upd_later.pack(side="right", padx=(6, 0))
+    upd_go = ttk.Button(upd, text="Update and restart")
+    upd_go.pack(side="right")
 
     nb = ttk.Notebook(outer)
     nb.pack(fill="both", expand=True)
@@ -487,11 +498,59 @@ def run_gui():
     def progress(frac, msg):
         events.put(("progress", frac, msg))
 
+    def check_updates():
+        try:
+            rel = updater.newer(info_build.get("version", VERSION))
+            if rel:
+                events.put(("update", rel))
+        except Exception:
+            pass  # offline or GitHub unreachable: try again next start
+
+    def start_update(rel):
+        if state["running"]:
+            upd_text.config(text="Finish or stop the current job first, then update.")
+            return
+        variant = info_build.get("variant", "source")
+        found = updater.asset_for(variant, rel["assets"]) if variant != "source" else None
+        if not found:
+            import webbrowser
+            webbrowser.open(rel["url"])
+            return
+        upd_go.config(state="disabled"); upd_later.config(state="disabled")
+
+        def work():
+            try:
+                new = updater.download_and_stage(found[0], found[1], lambda d, t: events.put(
+                    ("upd_text", f"Downloading version {rel['version']}… {d // 1_000_000} of {t // 1_000_000 or '?'} MB")))
+                events.put(("upd_ready", new))
+            except Exception as e:
+                events.put(("upd_text", f"The update could not be downloaded ({e}). Try again later, or download it from GitHub."))
+                events.put(("upd_retry", rel))
+        threading.Thread(target=work, daemon=True).start()
+
     def pump():
         try:
             while True:
                 ev = events.get_nowait()
-                if ev[0] == "status":
+                if ev[0] == "update":
+                    rel = ev[1]
+                    source = info_build.get("variant", "source") == "source"
+                    upd_text.config(text=f"Version {rel['version']} is ready (you have {info_build.get('version', VERSION)})."
+                                    + (" Download it from GitHub." if source else " It installs itself and the app starts again; your settings are kept."))
+                    upd_go.config(text="Open GitHub" if source else "Update and restart", state="normal", command=lambda r=rel: start_update(r))
+                    upd.pack(fill="x", pady=(0, 10), before=nb)
+                elif ev[0] == "upd_text":
+                    upd_text.config(text=ev[1])
+                elif ev[0] == "upd_retry":
+                    upd_go.config(state="normal"); upd_later.config(state="normal")
+                elif ev[0] == "upd_ready":
+                    try:
+                        updater.swap_and_restart(ev[1])
+                        stop.set(); root.after(200, root.destroy)
+                    except Exception as e:
+                        upd_text.config(text=f"The update could not be put in place ({e}). Download it from GitHub instead.")
+                        updater.cleanup_failed(ev[1])
+                elif ev[0] == "status":
                     status.config(text=ev[1])
                 elif ev[0] == "progress":
                     pbar["value"] = int(ev[1] * 1000); status.config(text=ev[2])
@@ -592,6 +651,7 @@ def run_gui():
     stopb.config(command=lambda: (stop.set(), log("Stopping after this part…")))
     root.protocol("WM_DELETE_WINDOW", lambda: (stop.set(), root.after(300, root.destroy)))
     pump()
+    threading.Thread(target=check_updates, daemon=True).start()
     root.mainloop()
 
 
@@ -629,6 +689,8 @@ if __name__ == "__main__":
         sys.stdout.flush()
         os._exit(0)
     elif "--version" in sys.argv:
-        print(APP, VERSION)
+        import updater
+        b = updater.build_info(VERSION)
+        print(APP, b.get("version", VERSION), b.get("variant", ""))
     else:
         run_gui()
